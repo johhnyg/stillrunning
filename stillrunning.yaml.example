@@ -1,0 +1,70 @@
+# StillRunning Configuration
+# Copy this file to stillrunning.yaml and fill in your values
+
+# App name — appears in all Telegram alerts
+app_name: "MyApp"
+
+# Working directory — where your scripts live
+working_dir: "/home/user/myapp"
+
+# Telegram credentials (required for alerts)
+# Create a bot via @BotFather, get your chat ID via @userinfobot
+telegram_bot_token: "123456789:ABCdefGHIjklMNOpqrsTUVwxyz"
+telegram_chat_id: "987654321"
+
+# Processes to monitor
+# Each process runs in a screen session and is auto-restarted on crash
+processes:
+  - name: "api"           # Display name (used in alerts)
+    screen: "api"         # Screen session name
+    script: "api.py"      # Script to run (relative to working_dir)
+
+  - name: "worker"
+    screen: "worker"
+    script: "worker.py"
+
+  - name: "scheduler"
+    screen: "scheduler"
+    script: "scheduler.py"
+
+# Log files to auto-archive (optional)
+# Archives to .gz when size exceeds max_mb, keeps last N archives
+log_files:
+  - path: "app.log"
+    max_mb: 10
+    keep_archives: 5
+
+  - path: "error.log"
+    max_mb: 5
+    keep_archives: 3
+
+# Health file monitoring (optional)
+# Alert if this file is older than health_max_age_sec
+# Useful for apps that write a heartbeat file periodically
+health_file: "health.json"
+health_max_age_sec: 180
+
+# Alert thresholds
+thresholds:
+  cpu_percent: 85         # Alert when CPU exceeds this
+  mem_percent: 85         # Alert when memory exceeds this
+  disk_percent: 85        # Alert when disk exceeds this
+  process_mem_mb: 500     # Alert when any process exceeds this RSS
+
+  # Optional: latency monitoring to an external URL
+  # latency_url: "https://api.example.com/health"
+  # latency_warn_ms: 1500
+
+# Check intervals (seconds)
+intervals:
+  process_check_sec: 30   # How often to check if processes are alive
+  resource_check_sec: 60  # How often to check CPU/mem/disk
+  log_archive_sec: 300    # How often to check log sizes
+  health_check_sec: 60    # How often to check health file age
+  latency_check_sec: 120  # How often to check latency (if configured)
+  heartbeat_sec: 86400    # How often to send daily summary (24h)
+  telegram_poll_sec: 5    # How often to poll for Telegram commands
+
+# Restart behavior
+restart_cooldown_sec: 120      # Minimum seconds between restart attempts
+max_consecutive_failures: 3    # Disable process after this many failures
