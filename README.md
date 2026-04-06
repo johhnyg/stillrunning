@@ -1,10 +1,21 @@
 # StillRunning
 
-Lightweight process monitor with Telegram alerts. Watches your processes, restarts crashes, monitors system resources, and sends you alerts.
+Lightweight process monitor with auto-restart, Telegram alerts, and live dashboard. Watches your processes, restarts crashes, monitors system resources, and sends you alerts.
+
+## How It Works
+
+1. **Pay at [stillrunning.io](https://stillrunning.io)** — Basic ($29/mo) or AI tier ($49/mo)
+2. **Get your token via email** — arrives instantly after checkout
+3. **Run one command on your server**:
+   ```bash
+   curl -sSL https://stillrunning.io/install | python3 - --token YOUR_TOKEN
+   ```
+4. **Dashboard goes live** — yourname.stillrunning.io shows all your processes within 60 seconds
 
 ## Features
 
-- **Process Watchdog**: Auto-restarts crashed screen sessions
+- **Process Watchdog**: Auto-restarts crashed screen sessions, systemd services, PM2 processes
+- **Live Dashboard**: See all your processes at yourname.stillrunning.io
 - **Resource Monitoring**: CPU, memory, disk usage alerts
 - **Per-Process Memory**: Alerts when individual processes exceed thresholds
 - **Log Rotation**: Auto-archives logs when they exceed size limits
@@ -14,7 +25,28 @@ Lightweight process monitor with Telegram alerts. Watches your processes, restar
 - **Daily Heartbeat**: Receive a daily health summary
 - **Restart Limits**: Disables processes after 3 consecutive failures to prevent restart loops
 
+### AI Tier Adds
+
+- **AI Crash Diagnosis**: Claude analyzes crash logs and explains what went wrong
+- **Fix Suggestions**: Get code fix suggestions sent to Telegram with approve/reject buttons
+- **Daily Health Audit**: Automated code quality and infrastructure review every morning
+- **Pattern Detection**: Learns from your crash history to predict and prevent issues
+
 ## Quick Start
+
+```bash
+curl -sSL https://stillrunning.io/install | python3 - --token YOUR_TOKEN
+```
+
+The installer will:
+1. Validate your token with stillrunning.io
+2. Auto-detect running screen sessions, systemd services, and PM2 processes
+3. Generate `stillrunning.yaml` in your current directory
+4. Start pushing status to your dashboard every 30 seconds
+
+## Self-Hosted (Free)
+
+If you prefer to self-host without a dashboard:
 
 ```bash
 pip install stillrunning
@@ -28,11 +60,7 @@ The setup wizard will:
 4. Generate `stillrunning.yaml` automatically
 5. Start monitoring
 
-## Manual Installation
-
-```bash
-pip install stillrunning
-```
+## Manual Configuration
 
 Create `stillrunning.yaml`:
 
@@ -85,16 +113,6 @@ Text these to your bot:
 - `status` - Get live process and resource status
 - `help` - Show available commands
 - `enable all` - Re-enable disabled processes
-
-## How It Works
-
-StillRunning runs as a background process and:
-- Checks if your screen sessions are alive every 30 seconds
-- Restarts crashed processes automatically
-- Monitors CPU/memory/disk every 60 seconds
-- Sends Telegram alerts when thresholds are exceeded (with 1-hour cooldown to prevent spam)
-- Archives log files when they exceed size limits
-- Sends a daily heartbeat summary
 
 ## Configuration Reference
 
