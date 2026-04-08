@@ -50,6 +50,48 @@ Shield monitors SSH brute force attacks and automatically blocks malicious IPs.
 - Shared threat network: every customer protects every other customer
 - Pre-emptive blocking from shared blocklist
 
+## Multi-Server Support
+
+Monitor multiple servers from one account. Each server gets its own token and appears on your unified dashboard.
+
+**Basic tier**: Up to 3 servers
+**AI tier**: Unlimited servers
+
+Add a new server to your account:
+```bash
+stillrunning --add-server --token YOUR_CUSTOMER_TOKEN --name my-new-server
+```
+
+This generates a new server token. Run the install command with that token on your new server.
+
+## Telegram Two-Way Control (AI tier)
+
+AI tier customers can text their Telegram bot to control their servers:
+
+**Commands:**
+- `status` — full system status in plain English
+- `restart [process]` — restart a named process (must be in config)
+- `logs [process]` — view last 20 lines of process log (sanitized)
+- `shield` — Shield security summary
+- `help` — list available commands
+
+**AI Chat (AI tier only):**
+Any non-command message routes to Claude Haiku with full system context. Ask questions in plain English:
+- "Why did my API server crash?"
+- "Is my disk usage concerning?"
+- "What should I check first?"
+
+Rate limited to 20 messages per hour. All log content is sanitized before sending to AI.
+
+## Shield Security — Log Sanitization
+
+When AI crash diagnosis analyzes your logs, all potential secrets are automatically redacted:
+- API keys (Anthropic, Stripe, Bearer tokens)
+- Passwords and secrets in config format
+- Long hex strings (common secret format)
+
+This happens automatically — you don't need to configure anything.
+
 ## Quick Start
 
 ```bash
