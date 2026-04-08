@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-StillRunning v1.1 — Lightweight process monitor with Telegram alerts.
+StillRunning v1.2 — Lightweight process monitor with Telegram alerts and Shield security.
 
 Usage:
     Quick start:  python3 stillrunning.py --setup
@@ -13,6 +13,7 @@ Requires: PyYAML (pip install pyyaml)
 import gzip
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -725,7 +726,8 @@ def heartbeat_loop() -> None:
     while True:
         try:
             summary = get_status_summary()
-            send_telegram(f"Daily heartbeat\n\n{summary}")
+            shield_summary = get_shield_summary()
+            send_telegram(f"Daily heartbeat\n\n{summary}\n\n{shield_summary}")
         except Exception as exc:
             print(f"[stillrunning] Heartbeat error: {exc}", flush=True)
         time.sleep(interval)
@@ -1129,6 +1131,491 @@ def run_setup_wizard() -> None:
 
 
 # ---------------------------------------------------------------------------
+# Shield — SSH Attack Detection and Response
+# ---------------------------------------------------------------------------
+_SHIELD_CHECK_INTERVAL = 60  # Check every 60 seconds
+_SHIELD_ATTACKS_CAP = 10000  # Max entries in stillrunning_attacks.json
+_SHIELD_LEARNING_THRESHOLD = 50  # AI analysis every N attacks (AI tier)
+_SHIELD_API_URL = "https://stillrunning.io"
+
+# Shield runtime state
+_shield_tier: str = "basic"  # Set by validate_token response
+_shield_attack_counter: int = 0
+_shield_stats: dict = {
+    "attacks_today": 0,
+    "ips_banned": 0,
+    "grade": "A",
+    "last_attack_ts": None,
+}
+
+
+def _get_shield_attacks_file() -> Path:
+    return Path(__file__).parent / "stillrunning_attacks.json"
+
+
+def _get_shield_security_file() -> Path:
+    return Path(__file__).parent / "stillrunning_security.json"
+
+
+def _load_shield_attacks() -> dict:
+    """Load stillrunning_attacks.json or return empty structure."""
+    try:
+        attacks_file = _get_shield_attacks_file()
+        if attacks_file.exists():
+            with open(attacks_file) as f:
+                return json.load(f)
+    except Exception:
+        pass
+    return {"attacks": [], "stats": {"total_blocked": 0, "total_reported": 0}}
+
+
+def _save_shield_attacks(data: dict) -> None:
+    """Atomically save stillrunning_attacks.json, capping at 10000 entries."""
+    try:
+        if len(data.get("attacks", [])) > _SHIELD_ATTACKS_CAP:
+            data["attacks"] = data["attacks"][-_SHIELD_ATTACKS_CAP:]
+        attacks_file = _get_shield_attacks_file()
+        tmp = attacks_file.with_suffix(".tmp")
+        with open(tmp, "w") as f:
+            json.dump(data, f, indent=2)
+        os.replace(tmp, attacks_file)
+    except Exception as e:
+        print(f"[stillrunning] Shield: save_attacks failed: {e}", flush=True)
+
+
+def _save_shield_security(data: dict) -> None:
+    """Save stillrunning_security.json with grade and daily stats."""
+    try:
+        security_file = _get_shield_security_file()
+        tmp = security_file.with_suffix(".tmp")
+        with open(tmp, "w") as f:
+            json.dump(data, f, indent=2)
+        os.replace(tmp, security_file)
+    except Exception as e:
+        print(f"[stillrunning] Shield: save_security failed: {e}", flush=True)
+
+
+def _parse_auth_log_attacks(since_seconds: int = 60) -> dict:
+    """Parse /var/log/auth.log for failed SSH attempts in last N seconds."""
+    attacks: dict = {}  # {ip: {"count": N, "usernames": set(), "first_ts": str, "last_ts": str}}
+    cutoff = time.time() - since_seconds
+    auth_log = Path("/var/log/auth.log")
+
+    try:
+        if not auth_log.exists():
+            return attacks
+
+        with open(auth_log, "r", errors="ignore") as f:
+            for line in f:
+                if "Failed password" not in line and "Invalid user" not in line:
+                    continue
+
+                try:
+                    parts = line.split()
+                    if len(parts) < 4:
+                        continue
+                    month_day_time = " ".join(parts[0:3])
+                    year = datetime.now().year
+                    ts_str = f"{year} {month_day_time}"
+                    ts = datetime.strptime(ts_str, "%Y %b %d %H:%M:%S")
+                    ts = ts.replace(tzinfo=timezone.utc)
+                    ts_epoch = ts.timestamp()
+
+                    if ts_epoch < cutoff:
+                        continue
+                except Exception:
+                    continue
+
+                ip_match = re.search(r"from (\d+\.\d+\.\d+\.\d+)", line)
+                if not ip_match:
+                    continue
+                ip = ip_match.group(1)
+
+                user_match = re.search(r"for (?:invalid user )?(\S+) from", line)
+                username = user_match.group(1) if user_match else "unknown"
+
+                if ip not in attacks:
+                    attacks[ip] = {
+                        "count": 0,
+                        "usernames": set(),
+                        "first_ts": ts.isoformat(),
+                        "last_ts": ts.isoformat(),
+                    }
+                attacks[ip]["count"] += 1
+                attacks[ip]["usernames"].add(username)
+                attacks[ip]["last_ts"] = ts.isoformat()
+
+    except PermissionError:
+        print("[stillrunning] Shield: Cannot read auth.log - permission denied", flush=True)
+    except Exception as e:
+        print(f"[stillrunning] Shield: parse_auth_log failed: {e}", flush=True)
+
+    # Convert sets to lists for JSON
+    for ip in attacks:
+        attacks[ip]["usernames"] = list(attacks[ip]["usernames"])
+
+    return attacks
+
+
+def _get_threat_level(ip: str, count: int, known_attacks: dict) -> str:
+    """Determine threat level based on attempt count and history. AI tier only."""
+    for entry in known_attacks.get("attacks", []):
+        if entry.get("ip") == ip:
+            return "REPEAT"
+
+    if count >= 20:
+        return "HIGH"
+    elif count >= 5:
+        return "MEDIUM"
+    else:
+        return "LOW"
+
+
+def _apply_basic_punishment(ip: str) -> str:
+    """Basic tier: fail2ban only after 10 attempts."""
+    try:
+        subprocess.run(
+            ["fail2ban-client", "set", "sshd", "banip", ip],
+            capture_output=True, timeout=10
+        )
+        return "fail2ban_ban"
+    except Exception:
+        return "failed"
+
+
+def _apply_ai_punishment(ip: str, threat_level: str) -> str:
+    """AI tier: intelligent punishment based on threat level."""
+    try:
+        if threat_level == "LOW":
+            subprocess.run(
+                ["fail2ban-client", "set", "sshd", "banip", ip],
+                capture_output=True, timeout=10
+            )
+            return "fail2ban_ban"
+
+        elif threat_level == "MEDIUM":
+            subprocess.run(
+                ["iptables", "-A", "INPUT", "-s", ip, "-j", "DROP"],
+                capture_output=True, timeout=10
+            )
+            return "iptables_24h"
+
+        elif threat_level in ("HIGH", "REPEAT"):
+            subprocess.run(
+                ["iptables", "-A", "INPUT", "-s", ip, "-j", "DROP"],
+                capture_output=True, timeout=10
+            )
+            return "permanent_ban"
+
+        return "none"
+    except Exception as e:
+        print(f"[stillrunning] Shield: apply_punishment failed for {ip}: {e}", flush=True)
+        return "failed"
+
+
+def _report_to_abuseipdb(ip: str, comment: str, api_key: str) -> bool:
+    """Report an IP to AbuseIPDB. AI tier only."""
+    if not api_key:
+        return False
+
+    try:
+        url = "https://api.abuseipdb.com/api/v2/report"
+        headers = {
+            "Key": api_key,
+            "Accept": "application/json",
+            "Content-Type": "application/x-www-form-urlencoded",
+        }
+        data = f"ip={ip}&categories=18,22&comment={comment[:1024]}"
+
+        req = urllib.request.Request(url, data=data.encode(), headers=headers, method="POST")
+        resp = urllib.request.urlopen(req, timeout=10)
+        return resp.status == 200
+    except Exception as e:
+        print(f"[stillrunning] Shield: abuseipdb report failed for {ip}: {e}", flush=True)
+        return False
+
+
+def _get_ip_country(ip: str) -> str:
+    """Get country code for an IP using ip-api.com."""
+    try:
+        req = urllib.request.Request(
+            f"http://ip-api.com/json/{ip}?fields=countryCode",
+            headers={"User-Agent": "stillrunning-shield/1.0"}
+        )
+        resp = urllib.request.urlopen(req, timeout=5)
+        data = json.loads(resp.read().decode())
+        return data.get("countryCode", "??")
+    except Exception:
+        return "??"
+
+
+def _calculate_security_grade(attacks_today: int, high_threats: int) -> str:
+    """Calculate security grade A/B/C/D based on attack volume."""
+    if attacks_today == 0:
+        return "A"
+    elif attacks_today < 10 and high_threats == 0:
+        return "A"
+    elif attacks_today < 50 and high_threats < 3:
+        return "B"
+    elif attacks_today < 100 and high_threats < 10:
+        return "C"
+    else:
+        return "D"
+
+
+def _fetch_shared_blocklist(token: str) -> list:
+    """Fetch shared blocklist from server. AI tier only."""
+    try:
+        req = urllib.request.Request(
+            f"{_SHIELD_API_URL}/api/threats",
+            headers={"User-Agent": "stillrunning-shield/1.0", "X-API-Key": token}
+        )
+        resp = urllib.request.urlopen(req, timeout=10)
+        data = json.loads(resp.read().decode())
+        return data.get("blocked_ips", [])
+    except Exception:
+        return []
+
+
+def _report_threat_to_server(token: str, ip: str, threat_level: str) -> bool:
+    """Report a HIGH+ threat to shared blocklist. AI tier only."""
+    try:
+        payload = json.dumps({"token": token, "ip": ip, "threat_level": threat_level}).encode()
+        req = urllib.request.Request(
+            f"{_SHIELD_API_URL}/api/report-threat",
+            data=payload,
+            headers={"Content-Type": "application/json", "User-Agent": "stillrunning-shield/1.0"},
+            method="POST"
+        )
+        resp = urllib.request.urlopen(req, timeout=10)
+        return resp.status == 200
+    except Exception:
+        return False
+
+
+def _apply_shared_blocklist(ips: list) -> int:
+    """Apply shared blocklist via iptables. AI tier only."""
+    applied = 0
+    for ip in ips:
+        try:
+            # Check if already blocked
+            check = subprocess.run(
+                ["iptables", "-C", "INPUT", "-s", ip, "-j", "DROP"],
+                capture_output=True, timeout=5
+            )
+            if check.returncode != 0:  # Not already blocked
+                subprocess.run(
+                    ["iptables", "-A", "INPUT", "-s", ip, "-j", "DROP"],
+                    capture_output=True, timeout=5
+                )
+                applied += 1
+        except Exception:
+            pass
+    return applied
+
+
+def _run_shield_ai_analysis(attacks_data: dict, anthropic_key: str) -> None:
+    """Run AI analysis on recent attacks. AI tier only."""
+    if not anthropic_key:
+        return
+
+    try:
+        recent_attacks = attacks_data.get("attacks", [])[-50:]
+        if len(recent_attacks) < 10:
+            return
+
+        prompt = f"""Analyze these SSH brute force attack records and identify patterns.
+Look for: subnets using same methods, time clustering, common usernames, geographic patterns.
+Return JSON only: {{"patterns": ["pattern 1", ...], "risk_subnets": ["x.x.x.0/24", ...], "recommendations": ["rec 1", ...]}}
+
+Attack data:
+{json.dumps(recent_attacks[-30:], indent=2)[:2000]}"""
+
+        payload = json.dumps({
+            "model": "claude-haiku-4-5-20251001",
+            "max_tokens": 500,
+            "messages": [{"role": "user", "content": prompt}]
+        }).encode()
+
+        req = urllib.request.Request(
+            "https://api.anthropic.com/v1/messages",
+            data=payload,
+            headers={
+                "Content-Type": "application/json",
+                "x-api-key": anthropic_key,
+                "anthropic-version": "2023-06-01"
+            }
+        )
+        resp = urllib.request.urlopen(req, timeout=30)
+        result = json.loads(resp.read().decode())
+        text = result.get("content", [{}])[0].get("text", "")
+
+        if "```json" in text:
+            text = text.split("```json")[1].split("```")[0].strip()
+        elif "```" in text:
+            text = text.split("```")[1].split("```")[0].strip()
+
+        analysis = json.loads(text)
+        print(f"[stillrunning] Shield AI: {len(analysis.get('patterns', []))} patterns found", flush=True)
+
+    except Exception as e:
+        print(f"[stillrunning] Shield AI analysis failed: {e}", flush=True)
+
+
+def shield_monitor_loop() -> None:
+    """Monitor SSH attacks, apply punishments based on tier."""
+    global _shield_attack_counter, _shield_stats
+
+    # Get config values
+    tier = CONFIG.get("tier", "basic")
+    token = CONFIG.get("token", "")
+    anthropic_key = CONFIG.get("anthropic_api_key", "")
+    abuseipdb_key = CONFIG.get("abuseipdb_api_key", "")
+
+    print(f"[stillrunning] Shield starting ({tier} tier)", flush=True)
+
+    # AI tier: fetch shared blocklist on startup
+    if tier == "ai" and token:
+        shared_ips = _fetch_shared_blocklist(token)
+        if shared_ips:
+            applied = _apply_shared_blocklist(shared_ips)
+            print(f"[stillrunning] Shield: Applied {applied} IPs from shared blocklist", flush=True)
+
+    last_blocklist_fetch = time.time()
+
+    while True:
+        try:
+            new_attacks = _parse_auth_log_attacks(since_seconds=_SHIELD_CHECK_INTERVAL)
+
+            if not new_attacks:
+                time.sleep(_SHIELD_CHECK_INTERVAL)
+                continue
+
+            attacks_data = _load_shield_attacks()
+            known_ips = {a["ip"] for a in attacks_data.get("attacks", [])}
+
+            today_start = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
+            today_ts = today_start.timestamp()
+            attacks_today = 0
+            high_threats_today = 0
+
+            for ip, info in new_attacks.items():
+                is_new = ip not in known_ips
+
+                if tier == "ai":
+                    # AI tier: intelligent threat scoring
+                    threat_level = _get_threat_level(ip, info["count"], attacks_data)
+                    punishment = _apply_ai_punishment(ip, threat_level)
+
+                    # Report HIGH+ to AbuseIPDB
+                    reported = False
+                    if threat_level in ("HIGH", "REPEAT") and abuseipdb_key:
+                        comment = f"SSH brute force: {info['count']} attempts"
+                        reported = _report_to_abuseipdb(ip, comment, abuseipdb_key)
+                        if reported:
+                            attacks_data["stats"]["total_reported"] = attacks_data["stats"].get("total_reported", 0) + 1
+
+                    # Report to shared blocklist
+                    if threat_level in ("HIGH", "REPEAT") and token:
+                        _report_threat_to_server(token, ip, threat_level)
+
+                    country = _get_ip_country(ip)
+
+                    if threat_level in ("HIGH", "REPEAT"):
+                        high_threats_today += 1
+
+                else:
+                    # Basic tier: simple fail2ban after 10 attempts
+                    threat_level = "LOW"
+                    punishment = "none"
+                    reported = False
+                    country = "??"
+
+                    if info["count"] >= 10:
+                        punishment = _apply_basic_punishment(ip)
+
+                # Create attack entry
+                entry = {
+                    "ip": ip,
+                    "first_seen": info["first_ts"],
+                    "last_seen": info["last_ts"],
+                    "attempt_count": info["count"],
+                    "threat_level": threat_level,
+                    "punishment": punishment,
+                    "reported": reported,
+                    "country": country,
+                    "punished_at": datetime.now(timezone.utc).isoformat(),
+                }
+
+                if is_new:
+                    attacks_data["attacks"].append(entry)
+                    attacks_data["stats"]["total_blocked"] = attacks_data["stats"].get("total_blocked", 0) + 1
+                    _shield_attack_counter += 1
+                else:
+                    for existing in attacks_data["attacks"]:
+                        if existing["ip"] == ip:
+                            existing["last_seen"] = info["last_ts"]
+                            existing["attempt_count"] += info["count"]
+                            break
+
+                print(f"[stillrunning] Shield: {ip} ({country}) - {threat_level} - {punishment}", flush=True)
+
+            # Count attacks today
+            for attack in attacks_data.get("attacks", []):
+                try:
+                    attack_ts = datetime.fromisoformat(attack["first_seen"].replace("Z", "+00:00")).timestamp()
+                    if attack_ts >= today_ts:
+                        attacks_today += 1
+                except Exception:
+                    pass
+
+            # Calculate security grade
+            grade = _calculate_security_grade(attacks_today, high_threats_today)
+
+            # Update stats
+            _shield_stats["attacks_today"] = attacks_today
+            _shield_stats["ips_banned"] = attacks_data["stats"].get("total_blocked", 0)
+            _shield_stats["grade"] = grade
+            _shield_stats["last_attack_ts"] = datetime.now(timezone.utc).isoformat()
+
+            # Save attacks and security files
+            _save_shield_attacks(attacks_data)
+            _save_shield_security({
+                "grade": grade,
+                "attacks_today": attacks_today,
+                "ips_banned": attacks_data["stats"].get("total_blocked", 0),
+                "tier": tier,
+                "last_updated": datetime.now(timezone.utc).isoformat(),
+            })
+
+            # AI tier: run analysis every N attacks
+            if tier == "ai" and _shield_attack_counter >= _SHIELD_LEARNING_THRESHOLD:
+                _shield_attack_counter = 0
+                threading.Thread(
+                    target=_run_shield_ai_analysis,
+                    args=(attacks_data, anthropic_key),
+                    daemon=True
+                ).start()
+
+            # AI tier: refresh shared blocklist every hour
+            if tier == "ai" and token and time.time() - last_blocklist_fetch >= 3600:
+                shared_ips = _fetch_shared_blocklist(token)
+                if shared_ips:
+                    _apply_shared_blocklist(shared_ips)
+                last_blocklist_fetch = time.time()
+
+        except Exception as exc:
+            print(f"[stillrunning] Shield error: {exc}", flush=True)
+
+        time.sleep(_SHIELD_CHECK_INTERVAL)
+
+
+def get_shield_summary() -> str:
+    """Get Shield summary for heartbeat."""
+    return f"Shield: {_shield_stats['attacks_today']} attacks blocked, Grade {_shield_stats['grade']}"
+
+
+# ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------
 def main() -> None:
@@ -1152,6 +1639,7 @@ def main() -> None:
         threading.Thread(target=log_archiver_loop, daemon=True, name="log-archiver"),
         threading.Thread(target=heartbeat_loop, daemon=True, name="heartbeat"),
         threading.Thread(target=telegram_command_loop, daemon=True, name="telegram-commands"),
+        threading.Thread(target=shield_monitor_loop, daemon=True, name="shield-monitor"),
     ]
 
     for t in threads:

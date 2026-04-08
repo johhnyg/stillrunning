@@ -32,6 +32,24 @@ Lightweight process monitor with auto-restart, Telegram alerts, and live dashboa
 - **Daily Health Audit**: Automated code quality and infrastructure review every morning
 - **Pattern Detection**: Learns from your crash history to predict and prevent issues
 
+## Shield — Intelligent Attack Protection
+
+Shield monitors SSH brute force attacks and automatically blocks malicious IPs.
+
+### Basic Tier (included free)
+- SSH failed login counter (reads /var/log/auth.log)
+- Automatic fail2ban integration after 10 failed attempts
+- Security grade A/B/C/D based on attack volume
+- Daily security summary in Telegram heartbeat
+
+### AI Tier (intelligent protection)
+- Intelligent threat scoring: LOW, MEDIUM, HIGH, REPEAT offender detection
+- Tiered punishment: fail2ban for LOW, iptables 24h for MEDIUM, permanent ban for HIGH/REPEAT
+- AbuseIPDB reporting for HIGH+ threats (requires API key)
+- Claude Haiku pattern analysis every 50 attacks
+- Shared threat network: every customer protects every other customer
+- Pre-emptive blocking from shared blocklist
+
 ## Quick Start
 
 ```bash
