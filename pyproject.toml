@@ -1,13 +1,12 @@
 [build-system]
-requires = ["setuptools>=61.0", "wheel"]
+requires = ["setuptools>=61.0,<68.0", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "stillrunning"
-version = "1.1.0"
-description = "Lightweight process monitor with Telegram alerts. Auto-restarts crashed processes, monitors CPU/memory/disk, sends alerts."
+version = "1.2.0"
+description = "Lightweight process monitor with Telegram alerts and Shield security. Auto-restarts crashed processes, monitors CPU/memory/disk, blocks SSH attacks, sends alerts."
 readme = "README.md"
-license = {text = "MIT"}
 authors = [
     {name = "johhnyg"}
 ]
