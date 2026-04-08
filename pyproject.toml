@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "stillrunning"
-version = "1.2.0"
+version = "1.3.0"
 description = "Lightweight process monitor with Telegram alerts and Shield security. Auto-restarts crashed processes, monitors CPU/memory/disk, blocks SSH attacks, sends alerts."
 readme = "README.md"
 authors = [

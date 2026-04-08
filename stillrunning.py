@@ -175,6 +175,207 @@ def get_telegram_updates(offset: int = 0) -> list:
         return []
 
 
+def send_telegram_typing(chat_id: str) -> None:
+    """Send typing indicator to Telegram."""
+    token = get_telegram_token()
+    if not token:
+        return
+    try:
+        url = f"https://api.telegram.org/bot{token}/sendChatAction"
+        payload = json.dumps({"chat_id": chat_id, "action": "typing"}).encode()
+        req = urllib.request.Request(url, data=payload, headers={"Content-Type": "application/json"})
+        urllib.request.urlopen(req, timeout=5)
+    except Exception:
+        pass
+
+
+# ---------------------------------------------------------------------------
+# Telegram Two-Way Control (AI tier)
+# ---------------------------------------------------------------------------
+_telegram_rate_limit: dict = {}  # {chat_id: [(timestamp, ...), ...]}
+_telegram_conversation: dict = {}  # {chat_id: [{"role": "user/assistant", "content": "..."}, ...]}
+TELEGRAM_RATE_LIMIT = 20  # messages per hour
+TELEGRAM_CONV_MAX = 6  # keep last 6 messages
+
+
+def _sanitize_log_content(text: str) -> str:
+    """Remove potential secrets from log content before sending."""
+    patterns = [
+        r'sk-[a-zA-Z0-9-_]{20,}',              # Anthropic keys
+        r'sk_live_[a-zA-Z0-9]{20,}',           # Stripe live keys
+        r'sk_test_[a-zA-Z0-9]{20,}',           # Stripe test keys
+        r'[a-zA-Z0-9]{32,}:[a-zA-Z0-9-_]{32,}', # API key:secret pairs
+        r'password\s*[=:]\s*\S+',              # password=value
+        r'passwd\s*[=:]\s*\S+',                # passwd=value
+        r'secret\s*[=:]\s*\S+',                # secret=value
+        r'token\s*[=:]\s*[a-zA-Z0-9-_]{10,}',  # token=value
+        r'key\s*[=:]\s*[a-zA-Z0-9-_]{20,}',    # key=value (long)
+        r'Bearer\s+[a-zA-Z0-9-_.]{20,}',       # Bearer tokens
+        r'[0-9a-f]{64}',                       # 64-char hex (common secret format)
+    ]
+    sanitized = text
+    for pattern in patterns:
+        sanitized = re.sub(pattern, '[REDACTED]', sanitized, flags=re.IGNORECASE)
+    return sanitized
+
+
+def _check_telegram_rate_limit(chat_id: str) -> bool:
+    """Check if user is within rate limit. Returns True if allowed."""
+    now = time.time()
+    if chat_id not in _telegram_rate_limit:
+        _telegram_rate_limit[chat_id] = []
+    # Remove old entries (older than 1 hour)
+    _telegram_rate_limit[chat_id] = [ts for ts in _telegram_rate_limit[chat_id] if now - ts < 3600]
+    if len(_telegram_rate_limit[chat_id]) >= TELEGRAM_RATE_LIMIT:
+        return False
+    _telegram_rate_limit[chat_id].append(now)
+    return True
+
+
+def _get_process_logs(process_name: str, lines: int = 20) -> str | None:
+    """Get last N lines of a process log. Only for configured processes."""
+    processes = CONFIG.get("processes", [])
+    # Verify process is in config
+    if not any(p.get("name") == process_name or p.get("screen") == process_name for p in processes):
+        return None
+
+    # Try common log paths
+    log_paths = CONFIG.get("log_files", [])
+    working_dir = get_working_dir()
+
+    # Also check standard locations
+    check_paths = [
+        working_dir / f"{process_name}.log",
+        working_dir / "logs" / f"{process_name}.log",
+        Path(f"/var/log/{process_name}.log"),
+    ]
+    # Add configured log files
+    for lf in log_paths:
+        check_paths.append(working_dir / lf.get("path", ""))
+
+    for path in check_paths:
+        try:
+            if path.exists() and path.is_file():
+                with open(path, "r", errors="ignore") as f:
+                    all_lines = f.readlines()
+                    content = "".join(all_lines[-lines:])
+                    return _sanitize_log_content(content)
+        except Exception:
+            continue
+    return None
+
+
+def _restart_configured_process(process_name: str) -> tuple[bool, str]:
+    """Restart a process if it's in the config. Returns (success, message)."""
+    processes = CONFIG.get("processes", [])
+    for proc in processes:
+        if proc.get("name") == process_name or proc.get("screen") == process_name:
+            success = restart_session(proc)
+            if success:
+                return True, f"Restarted {process_name}"
+            else:
+                return False, f"Failed to restart {process_name} (may be on cooldown)"
+    return False, f"Process '{process_name}' not found in config"
+
+
+def _get_ai_context() -> str:
+    """Build context string for AI chat."""
+    processes = CONFIG.get("processes", [])
+    process_status = []
+    for proc in processes:
+        name = proc.get("name", "unknown")
+        screen = proc.get("screen", name)
+        running = is_session_running(screen)
+        status = "UP" if running else "DOWN"
+        process_status.append(f"  {name}: {status}")
+
+    cpu = get_cpu_percent()
+    mem = get_mem_percent()
+    disk = get_disk_percent("/")
+
+    # Get Shield status
+    shield_status = f"Grade {_shield_stats.get('grade', 'A')}, {_shield_stats.get('attacks_today', 0)} attacks today"
+
+    # Get last 5 crashes from process history
+    crashes = []
+    for name, history in list(_process_history.items())[-5:]:
+        for ts, status in history[-5:]:
+            if status == "DOWN":
+                crashes.append(f"{name} at {datetime.fromtimestamp(ts, tz=timezone.utc).strftime('%H:%M')}")
+
+    context = f"""System Status:
+Processes:
+{chr(10).join(process_status) if process_status else '  (none configured)'}
+
+Resources:
+  CPU: {cpu:.1f}% if cpu else 'n/a'
+  Memory: {mem:.1f}% if mem else 'n/a'
+  Disk: {disk:.1f}% if disk else 'n/a'
+
+Shield: {shield_status}
+
+Recent crashes: {', '.join(crashes[-5:]) if crashes else 'none'}
+
+Available commands: status, restart [process], logs [process], shield, help"""
+    return context
+
+
+def _ask_claude(question: str, chat_id: str) -> str | None:
+    """Ask Claude a question with system context. AI tier only."""
+    anthropic_key = CONFIG.get("anthropic_api_key", "")
+    if not anthropic_key:
+        return None
+
+    try:
+        # Get conversation history
+        history = _telegram_conversation.get(chat_id, [])
+
+        # Build context
+        context = _get_ai_context()
+
+        # Build messages
+        messages = [
+            {"role": "user", "content": f"[System context - do not repeat this to user]\n{context}\n\n[User question]\n{question}"}
+        ]
+        # Add conversation history (last 6)
+        for msg in history[-TELEGRAM_CONV_MAX:]:
+            messages.append(msg)
+        messages.append({"role": "user", "content": question})
+
+        payload = json.dumps({
+            "model": "claude-haiku-4-5-20251001",
+            "max_tokens": 500,
+            "system": "You are a helpful server monitoring assistant. Keep responses concise (under 200 words). You can explain process status, suggest fixes, and answer questions about the monitored system. Never execute commands yourself - only explain what the user can do.",
+            "messages": messages[-6:]  # Keep context small
+        }).encode()
+
+        req = urllib.request.Request(
+            "https://api.anthropic.com/v1/messages",
+            data=payload,
+            headers={
+                "Content-Type": "application/json",
+                "x-api-key": anthropic_key,
+                "anthropic-version": "2023-06-01"
+            }
+        )
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            result = json.loads(resp.read().decode())
+            response = result.get("content", [{}])[0].get("text", "")
+
+            # Update conversation history
+            if chat_id not in _telegram_conversation:
+                _telegram_conversation[chat_id] = []
+            _telegram_conversation[chat_id].append({"role": "user", "content": question})
+            _telegram_conversation[chat_id].append({"role": "assistant", "content": response})
+            # Trim history
+            _telegram_conversation[chat_id] = _telegram_conversation[chat_id][-TELEGRAM_CONV_MAX:]
+
+            return response
+    except Exception as e:
+        print(f"[stillrunning] Claude API error: {e}", flush=True)
+        return None
+
+
 # ---------------------------------------------------------------------------
 # Screen session management
 # ---------------------------------------------------------------------------
@@ -734,10 +935,12 @@ def heartbeat_loop() -> None:
 
 
 def telegram_command_loop() -> None:
-    """Listen for Telegram commands (status, help)."""
+    """Listen for Telegram commands and AI chat (AI tier)."""
     interval = CONFIG["intervals"]["telegram_poll_sec"]
     last_update_id = 0
     chat_id = get_telegram_chat_id()
+    tier = CONFIG.get("tier", "basic")
+    anthropic_key = CONFIG.get("anthropic_api_key", "")
 
     if not chat_id:
         return  # No chat ID configured, exit thread
@@ -749,23 +952,73 @@ def telegram_command_loop() -> None:
                 last_update_id = update.get("update_id", last_update_id)
                 message = update.get("message", {})
                 msg_chat_id = str(message.get("chat", {}).get("id", ""))
-                text = message.get("text", "").strip().lower()
+                text = message.get("text", "").strip()
+                text_lower = text.lower()
 
                 # Only respond to configured chat
                 if msg_chat_id != chat_id:
                     continue
 
-                if text == "status":
+                # Check rate limit
+                if not _check_telegram_rate_limit(msg_chat_id):
+                    send_telegram("Rate limit reached (20 messages/hour). Try again later.")
+                    continue
+
+                # Handle commands
+                if text_lower == "status":
                     summary = get_status_summary()
-                    send_telegram(summary)
-                elif text == "help":
-                    send_telegram(
+                    shield_summary = get_shield_summary()
+                    send_telegram(f"{summary}\n\n{shield_summary}")
+
+                elif text_lower == "help":
+                    help_text = (
                         "Commands:\n"
-                        "  status — live process & resource status\n"
+                        "  status — process & resource status\n"
+                        "  restart [name] — restart a process\n"
+                        "  logs [name] — view last 20 log lines\n"
+                        "  shield — security status\n"
+                        "  enable all — re-enable disabled processes\n"
                         "  help — show this message"
                     )
-                elif text == "enable all":
-                    # Re-enable all disabled processes
+                    if tier == "ai" and anthropic_key:
+                        help_text += "\n\nAI chat enabled — ask any question!"
+                    send_telegram(help_text)
+
+                elif text_lower.startswith("restart "):
+                    process_name = text[8:].strip()
+                    if not process_name:
+                        send_telegram("Usage: restart [process_name]")
+                    else:
+                        success, msg = _restart_configured_process(process_name)
+                        send_telegram(msg)
+
+                elif text_lower.startswith("logs "):
+                    process_name = text[5:].strip()
+                    if not process_name:
+                        send_telegram("Usage: logs [process_name]")
+                    else:
+                        logs = _get_process_logs(process_name)
+                        if logs:
+                            # Truncate if too long for Telegram
+                            if len(logs) > 3500:
+                                logs = logs[-3500:]
+                            send_telegram(f"Last 20 lines of {process_name}:\n\n{logs}")
+                        else:
+                            send_telegram(f"No logs found for '{process_name}' (must be in config)")
+
+                elif text_lower == "shield":
+                    shield_info = (
+                        f"Shield Security\n\n"
+                        f"Grade: {_shield_stats.get('grade', 'A')}\n"
+                        f"Attacks today: {_shield_stats.get('attacks_today', 0)}\n"
+                        f"IPs banned: {_shield_stats.get('ips_banned', 0)}\n"
+                    )
+                    last_attack = _shield_stats.get('last_attack_ts')
+                    if last_attack:
+                        shield_info += f"Last attack: {last_attack[:19]}"
+                    send_telegram(shield_info)
+
+                elif text_lower == "enable all":
                     if _state["disabled_processes"]:
                         names = list(_state["disabled_processes"])
                         _state["disabled_processes"].clear()
@@ -775,6 +1028,21 @@ def telegram_command_loop() -> None:
                         send_telegram(f"Re-enabled: {', '.join(names)}")
                     else:
                         send_telegram("No disabled processes")
+
+                else:
+                    # Free-text: route to AI if available (AI tier only)
+                    if tier == "ai" and anthropic_key:
+                        send_telegram_typing(msg_chat_id)
+                        response = _ask_claude(text, msg_chat_id)
+                        if response:
+                            send_telegram(response)
+                        else:
+                            send_telegram("Sorry, I couldn't process that. Try a command like 'status' or 'help'.")
+                    else:
+                        send_telegram(
+                            "Unknown command. Try 'help' for available commands.\n\n"
+                            "Upgrade to AI tier at stillrunning.io to enable Telegram conversations."
+                        )
 
         except Exception as exc:
             print(f"[stillrunning] Telegram command error: {exc}", flush=True)
@@ -1658,6 +1926,49 @@ def main() -> None:
             pass
 
 
+def _add_server_to_account(token: str, server_name: str) -> None:
+    """Add a new server to an existing account via API."""
+    import urllib.request
+    import urllib.error
+
+    print(f"\nAdding server '{server_name}' to your account...")
+
+    try:
+        url = "https://stillrunning.io/api/servers/add"
+        payload = json.dumps({"token": token, "server_name": server_name}).encode()
+        req = urllib.request.Request(
+            url,
+            data=payload,
+            headers={"Content-Type": "application/json"},
+            method="POST"
+        )
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            result = json.loads(resp.read().decode())
+
+        if "error" in result:
+            print(f"Error: {result['error']}")
+            return
+
+        server_token = result.get("server_token")
+        subdomain = result.get("subdomain")
+
+        print(f"\nServer added successfully!")
+        print(f"  Server name: {server_name}")
+        print(f"  Subdomain: {subdomain}")
+        print(f"  Token: {server_token}")
+        print(f"\nNow run on your new server:")
+        print(f"  curl -sSL https://stillrunning.io/install | python3 - --token {server_token}")
+
+    except urllib.error.HTTPError as e:
+        try:
+            error_data = json.loads(e.read().decode())
+            print(f"Error: {error_data.get('error', str(e))}")
+        except Exception:
+            print(f"Error: {e}")
+    except Exception as e:
+        print(f"Error: {e}")
+
+
 def main_cli() -> None:
     """Entry point for the stillrunning command."""
     import argparse
@@ -1668,9 +1979,31 @@ def main_cli() -> None:
         "--setup", action="store_true",
         help="Run interactive setup wizard to auto-generate config"
     )
+    parser.add_argument(
+        "--add-server", action="store_true",
+        help="Add a new server to your existing account"
+    )
+    parser.add_argument(
+        "--token",
+        help="Your customer API token (for --add-server)"
+    )
+    parser.add_argument(
+        "--name",
+        help="Name for the new server (for --add-server)"
+    )
     args = parser.parse_args()
 
-    if args.setup:
+    if args.add_server:
+        if not args.token:
+            print("Error: --token required with --add-server")
+            print("Usage: stillrunning --add-server --token YOUR_TOKEN --name my-server")
+            return
+        if not args.name:
+            print("Error: --name required with --add-server")
+            print("Usage: stillrunning --add-server --token YOUR_TOKEN --name my-server")
+            return
+        _add_server_to_account(args.token, args.name)
+    elif args.setup:
         run_setup_wizard()
     else:
         main()
