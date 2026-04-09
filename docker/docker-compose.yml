@@ -1,0 +1,8 @@
+version: '3'
+services:
+  stillrunning:
+    image: johhnyg/stillrunning:latest
+    environment:
+      - TOKEN=your_token_here
+      - ALERT_EMAIL=you@example.com
+    restart: always
