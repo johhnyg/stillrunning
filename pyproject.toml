@@ -4,13 +4,13 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "stillrunning"
-version = "1.6.0"
-description = "Security + monitoring for indie builders. Guard daemon, static scanner, npm/pip intercept."
+version = "1.7.0"
+description = "Enterprise security and monitoring for developers. Auto-restart, threat detection, pkl inspector, supply chain protection."
 readme = "README.md"
 authors = [
     {name = "johhnyg"}
 ]
-keywords = ["monitoring", "devops", "automation", "process-monitor", "self-healing", "raspberry-pi", "docker", "indie-hacker"]
+keywords = ["monitoring", "security", "devops", "process-monitor", "supply-chain", "threat-detection", "pickle-inspector", "malware-detection"]
 classifiers = [
     "Development Status :: 4 - Beta",
     "Environment :: Console",
@@ -28,6 +28,7 @@ classifiers = [
     "Programming Language :: Python :: 3.12",
     "Topic :: System :: Monitoring",
     "Topic :: System :: Systems Administration",
+    "Topic :: Security",
 ]
 requires-python = ">=3.8"
 dependencies = [
@@ -35,12 +36,45 @@ dependencies = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/johhnyg/stillrunning"
+Homepage = "https://stillrunning.io"
 Repository = "https://github.com/johhnyg/stillrunning"
 Issues = "https://github.com/johhnyg/stillrunning/issues"
+Documentation = "https://stillrunning.io/docs"
 
 [project.scripts]
-stillrunning = "stillrunning:main_cli"
+stillrunning = "stillrunning.cli:main_cli"
+stillrunning-scan = "stillrunning.scan:main"
+stillrunning-guard = "stillrunning.guard:main_loop"
+stillrunning-intercept = "stillrunning.intercept:main"
+pkl-inspector = "stillrunning.pkl_inspector:main"
+stillrunning-docker = "stillrunning.docker_agent:main"
 
-[tool.setuptools]
-py-modules = ["stillrunning"]
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["stillrunning*"]
+
+# Changelog (most recent first):
+#
+# v1.7.0 (April 12, 2026):
+# - stillrunning scan - AST analysis, entropy detection, pkl inspector
+# - stillrunning guard - always-on daemon, auto-learning whitelist
+# - npm/pip intercept - supply chain attack blocker (WAVESHAPER.V2)
+# - Docker agent - container security monitoring
+# - pkl-inspector - pickle file static analysis (Patent Pending)
+# - Live threat rules API - auto-sync from stillrunning.io
+# - Crowd-sourced threat reporting
+# - SOC2 audit log
+# - Multi-server central dashboard
+# - Slack/PagerDuty/Teams/Splunk integration
+#
+# v1.6.0 (April 8, 2026):
+# - Security + monitoring for indie builders
+# - Guard daemon, static scanner, npm/pip intercept
+#
+# v1.5.0 (April 4, 2026):
+# - Docker support, Shield security module
+# - Telegram command interface
+#
+# v1.2.0 (March 2026):
+# - Initial public release
+# - Process monitoring, auto-restart, Telegram alerts
