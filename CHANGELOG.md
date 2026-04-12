@@ -1,5 +1,17 @@
 # Changelog
 
+## v1.5.0 — April 2026
+
+**Security layer — supply chain protection**
+
+- `stillrunning guard` — always-on security daemon with auto-learning whitelist (214 processes)
+- `stillrunning scan` — static analysis: AST parser, entropy detection, pkl inspector
+- npm/pip intercept — blocks poisoned packages before install (hash check + static scan)
+- Advisor upgrade — Sonnet executor + Opus advisor pattern for AI operations
+- Chrome extension scaffold — green/red status dot in browser
+- `/scan` route — customer file upload threat scanner (free tier 5/month)
+- North Korea supply chain attack response — 1,700+ malicious packages blocked
+
 ## v1.4.0 — April 2026
 
 - Email alerts — no Telegram required
