@@ -1,85 +1,97 @@
 # stillrunning
 
-**Your automated systems, monitored and self-healing.**
+**Enterprise security and monitoring for developers who can't afford enterprise tools.**
 
-stillrunning is a lightweight agent that watches your automated systems, restarts crashes automatically, and tells you exactly what happened — in plain English.
+Patent Pending - US Provisional Application filed April 12, 2026
 
-Built for indie hackers, solo founders, and small teams who run automated systems and want to know the second something breaks.
-
-## What it does
-
-- Watches your processes every 30 seconds
-- Restarts crashes automatically — back online before you notice
-- Sends you an alert the moment something goes wrong
-- Answers your questions about what happened — in plain English
-- Sends a Monday morning summary of your whole week
-- Protects you from new security threats automatically
-
-## Who it's for
-
-- You run a scraper that sometimes crashes and find out the next morning
-- You have a cron job your business depends on and want to know the second it fails
-- You built something cool and want it to stay running while you sleep
-
-## Install in 30 seconds
-
-### Linux / Mac / Raspberry Pi
+## Install
 
 ```bash
 pip install stillrunning
-stillrunning --setup
 ```
 
-Follow the prompts. Takes about 2 minutes. You'll get a confirmation email when it's ready.
-
-### Windows
-
-```powershell
-iwr -useb https://stillrunning.io/install.ps1 | iex
-```
-
-### Docker
-
-```bash
-docker run -d --name stillrunning \
-  -e TOKEN=your_token \
-  -e ALERT_EMAIL=you@example.com \
-  johhnyg/stillrunning:latest
-```
-
-## What happens after install
-
-- Within 30 seconds you get a confirmation email or Telegram message
-- Your dashboard goes live at yourname.stillrunning.io
-- If anything crashes you get an alert within 30 seconds
-- Reply to any alert to ask questions — the AI answers from your live data
-- Every Monday morning you get a summary of the week
-
-## Commands
+## What's included
 
 | Command | What it does |
-|---------|--------------|
-| `stillrunning --setup` | First time setup wizard |
-| `stillrunning --diagnose` | Instant health check — emails you the report |
-| `stillrunning --reconfigure` | Change your alert method or email |
-| `stillrunning --status` | Show current status in terminal |
+|---|---|
+| `stillrunning --setup` | 3-minute setup wizard, auto-detects your processes |
+| `stillrunning-scan <file>` | Static analysis - AST, entropy, pkl inspector |
+| `stillrunning-guard` | Always-on security daemon, auto-learning whitelist |
+| `stillrunning-intercept` | npm/pip supply chain attack blocker |
+| `pkl-inspector <file>` | Pickle file analysis without execution (Patent Pending) |
+
+## The threat
+
+In 2026, North Korean state hackers published 1,700+ malicious packages to npm and PyPI. Traditional AV found nothing. stillrunning catches it before it runs.
 
 ## Pricing
 
-**Free** — pip install, open source, 5 security scans/month
+- **Free**: `pip install stillrunning` - open source core
+- **Personal $9/mo**: guard daemon + live threat rules
+- **Pro $29/mo**: guard + intercept + Telegram alerts
+- **Team $99/mo**: 10 machines, central dashboard
+- **Enterprise $499/mo**: SSO, SIEM, compliance reports
 
-**Basic** — $29/mo — hosted dashboard, weekly reports, threat protection
+[stillrunning.io](https://stillrunning.io)
 
-**AI** — $49/mo — AI crash diagnosis, reply to alerts, pattern detection
+## Open source siblings
 
-Full details at [stillrunning.io/pricing](https://stillrunning.io/pricing)
+- **pkl-inspector**: `pip install pkl-inspector` (Patent Pending)
+- **bitbot-primitives**: `pip install bitbot-primitives`
 
-## Questions?
+## Features
 
-Reply to any alert email — the AI will answer.
+### Security Scanner (`stillrunning-scan`)
+- AST-based Python code analysis
+- Shannon entropy detection for obfuscated payloads
+- Pickle file static analysis (no execution)
+- Threat scoring with CLEAN/REVIEW/DANGEROUS verdicts
 
-Or email bitbot9000@gmail.com directly.
+### Guard Daemon (`stillrunning-guard`)
+- Always-on process monitoring
+- Auto-learning whitelist (reduces false positives)
+- macOS keychain/LaunchAgent monitoring
+- Telegram alerts for threats
 
----
+### Supply Chain Protection (`stillrunning-intercept`)
+- Wraps npm/pip install commands
+- Blocks known malicious packages
+- Live threat feed from stillrunning.io
+- WAVESHAPER.V2 detection
 
-Built from an iPhone. Running on a $6 server. Available everywhere.
+### Docker Agent (`stillrunning-docker`)
+- Container security monitoring
+- Privileged container detection
+- Sensitive mount alerts
+- Malicious image blocking
+
+### Pickle Inspector (`pkl-inspector`)
+- Static analysis without execution
+- Opcode-level parsing
+- CRITICAL/DANGEROUS/SUSPICIOUS verdicts
+- Protocol 0-5 support
+
+## Quick Start
+
+```bash
+# Install
+pip install stillrunning
+
+# Setup wizard (detects your processes)
+stillrunning --setup
+
+# Scan a file
+stillrunning-scan suspicious.py
+
+# Analyze a pickle
+pkl-inspector model.pkl
+
+# Start guard daemon
+stillrunning-guard
+```
+
+## License
+
+MIT License
+
+Copyright 2026 stillrunning.io
