@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "stillrunning"
-version = "1.7.1"
+version = "1.8.0"
 description = "Enterprise security and monitoring for developers. Auto-restart, threat detection, pkl inspector, supply chain protection."
 readme = "README.md"
 authors = [
@@ -54,6 +54,14 @@ where = ["."]
 include = ["stillrunning*"]
 
 # Changelog (most recent first):
+#
+# v1.8.0 (April 13, 2026):
+# - OSV.dev integration - malware advisories from Google's open source vuln database
+# - /threats live dashboard - real-time intercept log and threat feed
+# - Customer dashboard Threats tab - see your protection status
+# - npm/pip intercept connected to live threat feed (auto-sync every 60min)
+# - 33+ verified malicious packages in blocklist
+# - 6 threat intelligence sources: CISA, OSV.dev, NVD, GitHub, npm, Snyk
 #
 # v1.7.0 (April 12, 2026):
 # - stillrunning scan - AST analysis, entropy detection, pkl inspector

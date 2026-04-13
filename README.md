@@ -1,97 +1,66 @@
 # stillrunning
 
-**Enterprise security and monitoring for developers who can't afford enterprise tools.**
-
-Patent Pending - US Provisional Application filed April 12, 2026
-
-## Install
+**Supply chain security for teams without security teams.**
 
 ```bash
 pip install stillrunning
 ```
 
-## What's included
+## What it does
 
-| Command | What it does |
-|---|---|
-| `stillrunning --setup` | 3-minute setup wizard, auto-detects your processes |
-| `stillrunning-scan <file>` | Static analysis - AST, entropy, pkl inspector |
-| `stillrunning-guard` | Always-on security daemon, auto-learning whitelist |
-| `stillrunning-intercept` | npm/pip supply chain attack blocker |
-| `pkl-inspector <file>` | Pickle file analysis without execution (Patent Pending) |
+- **Blocks malicious packages before they run** — intercepts npm/pip install, checks against live threat feed
+- **Catches what AV misses** — AST analysis, entropy detection, pickle inspection without execution
+- **Learns your environment** — auto-whitelists your processes, alerts on anomalies
+- **Updates itself** — syncs blocklist every 60 minutes from 6 threat intel sources
 
-## The threat
+## The attack it was built for
 
-In 2026, North Korean state hackers published 1,700+ malicious packages to npm and PyPI. Traditional AV found nothing. stillrunning catches it before it runs.
+In 2026, North Korean state hackers published WAVESHAPER.V2 — 1,700+ malicious packages across npm and PyPI. Credential stealers disguised as logging utilities. Traditional AV found nothing. Enterprise tools cost $50k/year.
+
+stillrunning catches it at install time, before it ever runs.
+
+## Live proof
+
+**[stillrunning.io/threats](https://stillrunning.io/threats)** — real-time intercept dashboard.
+
+Not a demo. Every package check, every block, every threat advisory — live.
+
+## Quick start
+
+```bash
+pip install stillrunning
+stillrunning --setup
+```
+
+The setup wizard detects your running processes, configures monitoring, and connects to the live threat feed. Takes 3 minutes.
+
+## Stats
+
+- **33+ malicious packages** in blocklist
+- **817,000+ alerts** suppressed by guard daemon
+- **0 incidents** on protected machines
+- **6 sources**: CISA, OSV.dev, NVD, GitHub Security, npm advisories, Snyk
+- Updated **hourly**
 
 ## Pricing
 
-- **Free**: `pip install stillrunning` - open source core
-- **Personal $9/mo**: guard daemon + live threat rules
-- **Pro $29/mo**: guard + intercept + Telegram alerts
-- **Team $99/mo**: 10 machines, central dashboard
-- **Enterprise $499/mo**: SSO, SIEM, compliance reports
+| Tier | Price | What you get |
+|------|-------|--------------|
+| Open Source | Free | Core tools, local scanning |
+| Personal | $9/mo | Live threat rules, guard daemon |
+| Basic | $29/mo | + intercept, Telegram alerts |
+| AI | $49/mo | + crash diagnosis, auto-fix suggestions |
+| Enterprise | $499/mo | SSO, SIEM, SOC2 compliance reports |
 
-[stillrunning.io](https://stillrunning.io)
+## Links
 
-## Open source siblings
-
-- **pkl-inspector**: `pip install pkl-inspector` (Patent Pending)
-- **bitbot-primitives**: `pip install bitbot-primitives`
-
-## Features
-
-### Security Scanner (`stillrunning-scan`)
-- AST-based Python code analysis
-- Shannon entropy detection for obfuscated payloads
-- Pickle file static analysis (no execution)
-- Threat scoring with CLEAN/REVIEW/DANGEROUS verdicts
-
-### Guard Daemon (`stillrunning-guard`)
-- Always-on process monitoring
-- Auto-learning whitelist (reduces false positives)
-- macOS keychain/LaunchAgent monitoring
-- Telegram alerts for threats
-
-### Supply Chain Protection (`stillrunning-intercept`)
-- Wraps npm/pip install commands
-- Blocks known malicious packages
-- Live threat feed from stillrunning.io
-- WAVESHAPER.V2 detection
-
-### Docker Agent (`stillrunning-docker`)
-- Container security monitoring
-- Privileged container detection
-- Sensitive mount alerts
-- Malicious image blocking
-
-### Pickle Inspector (`pkl-inspector`)
-- Static analysis without execution
-- Opcode-level parsing
-- CRITICAL/DANGEROUS/SUSPICIOUS verdicts
-- Protocol 0-5 support
-
-## Quick Start
-
-```bash
-# Install
-pip install stillrunning
-
-# Setup wizard (detects your processes)
-stillrunning --setup
-
-# Scan a file
-stillrunning-scan suspicious.py
-
-# Analyze a pickle
-pkl-inspector model.pkl
-
-# Start guard daemon
-stillrunning-guard
-```
+- [stillrunning.io](https://stillrunning.io) — homepage
+- [stillrunning.io/threats](https://stillrunning.io/threats) — live threat dashboard
+- [stillrunning.io/docs](https://stillrunning.io/docs) — API docs
+- [@bit_bot9000](https://x.com/bit_bot9000) — updates
 
 ## License
 
 MIT License
 
-Copyright 2026 stillrunning.io
+Patent Pending — US Provisional Application filed April 12, 2026
