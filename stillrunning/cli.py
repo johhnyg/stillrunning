@@ -99,6 +99,10 @@ _state: dict = {
     "disabled_processes": set(),   # processes that hit max failures
 }
 
+# Subscription features (populated on startup from token validation)
+# Default: free tier features only
+SUBSCRIPTION_FEATURES: list = ["process_monitor", "restart", "alerts"]
+
 
 def load_state() -> None:
     global _state
@@ -1894,6 +1898,20 @@ def main() -> None:
     print(f"[stillrunning] Starting {app_name}...", flush=True)
     print(f"[stillrunning] Working dir: {get_working_dir()}", flush=True)
     print(f"[stillrunning] Processes: {len(CONFIG.get('processes', []))}", flush=True)
+
+    # Validate subscription token (SESSION 88)
+    global SUBSCRIPTION_FEATURES
+    token = CONFIG.get("token", "")
+    if token:
+        print("[stillrunning] Validating subscription...", flush=True)
+        from .features import validate_token, print_tier_status
+        result = validate_token(token)
+        print_tier_status(result)
+        SUBSCRIPTION_FEATURES = result.get("features", ["process_monitor", "restart", "alerts"])
+    else:
+        print("[stillrunning] No token configured - running in free mode", flush=True)
+        print("   Get a token at https://stillrunning.io/pricing", flush=True)
+        SUBSCRIPTION_FEATURES = ["process_monitor", "restart", "alerts"]
 
     # Startup check
     startup_check()

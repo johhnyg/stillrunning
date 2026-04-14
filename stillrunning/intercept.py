@@ -200,6 +200,96 @@ def send_telegram_alert(package: str, reason: str):
         pass
 
 
+# ─── Server-side AI Scan (SESSION 88) ────────────────────────────────────────
+
+def _get_token() -> str:
+    """Get customer token from config or .env."""
+    # Try config file first
+    config_file = Path(__file__).parent / "stillrunning.yaml"
+    if config_file.exists():
+        try:
+            import yaml
+            with open(config_file) as f:
+                config = yaml.safe_load(f) or {}
+            token = config.get("token", "")
+            if token:
+                return token
+        except Exception:
+            pass
+
+    # Fall back to .env
+    env_file = Path.home() / "stillrunning.yaml"
+    if env_file.exists():
+        try:
+            import yaml
+            with open(env_file) as f:
+                config = yaml.safe_load(f) or {}
+            token = config.get("token", "")
+            if token:
+                return token
+        except Exception:
+            pass
+
+    return ""
+
+
+def call_ai_scan(package: str, ecosystem: str = "pip") -> tuple[str, str] | None:
+    """
+    Call stillrunning.io/api/scan for server-side AI review.
+    Requires AI tier or higher.
+
+    Returns: (status, reason) or None if scan unavailable/failed
+    - "BLOCKED", reason if DANGEROUS
+    - "WARN", reason if SUSPICIOUS
+    - None if CLEAN or scan failed
+    """
+    token = _get_token()
+    if not token:
+        return None
+
+    try:
+        url = "https://stillrunning.io/api/scan"
+        payload = json.dumps({
+            "token": token,
+            "package": package,
+            "ecosystem": ecosystem
+        }).encode()
+
+        req = urllib.request.Request(
+            url,
+            data=payload,
+            headers={
+                "Content-Type": "application/json",
+                "User-Agent": "stillrunning-intercept/1.9.0"
+            }
+        )
+
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            result = json.loads(resp.read().decode())
+
+        # Check for errors (tier/rate limit)
+        if "error" in result:
+            # Silently skip AI review if not available
+            return None
+
+        verdict = result.get("verdict", "CLEAN")
+        score = result.get("score", 0)
+        reasons = result.get("reasons", [])
+
+        if verdict == "DANGEROUS":
+            reason = reasons[0] if reasons else f"AI review: dangerous (score {score})"
+            return "BLOCKED", reason
+        elif verdict == "SUSPICIOUS":
+            reason = reasons[0] if reasons else f"AI review: suspicious (score {score})"
+            return "WARN", reason
+
+        return None  # CLEAN
+
+    except Exception:
+        # Silently fail - don't block installs if API is down
+        return None
+
+
 # ─── PyPI Check ──────────────────────────────────────────────────────────────
 
 def check_pypi_package(package: str, version: str = None) -> tuple[str, str]:
@@ -227,6 +317,11 @@ def check_pypi_package(package: str, version: str = None) -> tuple[str, str]:
 
         # Check download count (if available)
         # PyPI doesn't expose this easily, would need BigQuery
+
+        # Server-side AI review (SESSION 88)
+        ai_result = call_ai_scan(package, "pip")
+        if ai_result:
+            return ai_result
 
         return "CLEAN", "Package verified"
 
@@ -256,6 +351,11 @@ def check_npm_package(package: str, version: str = None) -> tuple[str, str]:
         req = urllib.request.Request(url, headers={"User-Agent": "stillrunning/1.5.0"})
         with urllib.request.urlopen(req, timeout=15) as resp:
             data = json.loads(resp.read().decode())
+
+        # Server-side AI review (SESSION 88)
+        ai_result = call_ai_scan(package, "npm")
+        if ai_result:
+            return ai_result
 
         return "CLEAN", "Package verified"
 

@@ -1,5 +1,17 @@
 # StillRunning Configuration
 # Copy this file to stillrunning.yaml and fill in your values
+#
+# Tiers:
+#   Personal ($9/mo)   - process monitor, restart, Telegram alerts
+#   Basic ($29/mo)     - + file integrity, tripwire, honeypot
+#   AI ($49/mo)        - + AI package review (server-side)
+#   Enterprise ($499)  - + unlimited scans, SIEM, SSO, compliance
+#
+# Get your token at https://stillrunning.io/pricing
+
+# Your subscription token (required for premium features)
+# Without a token, only free tier features are enabled
+token: ""
 
 # App name — appears in all Telegram alerts
 app_name: "MyApp"
@@ -68,3 +80,33 @@ intervals:
 # Restart behavior
 restart_cooldown_sec: 120      # Minimum seconds between restart attempts
 max_consecutive_failures: 3    # Disable process after this many failures
+
+# ─── Premium Features (require Basic tier or higher) ─────────────────────────
+
+# Tripwire: Alert when sensitive files are accessed/modified
+# tripwire:
+#   enabled: true
+#   watch_files:
+#     - "~/.ssh/id_rsa"
+#     - ".env"
+#     - "private_key.pem"
+#   whitelist_processes:
+#     - "python3"
+#     - "vim"
+#     - "nano"
+#   action: alert  # "alert" or "kill"
+
+# File Integrity: Track SHA256 hashes of critical files
+# file_integrity:
+#   enabled: true
+#   monitor:
+#     - path: "/etc/passwd"
+#     - path: "app.py"
+#     - path: "config.py"
+
+# Honeypot: Fake credentials that alert when accessed
+# honeypot:
+#   enabled: true
+#   files:
+#     - ".env.bak"           # Fake .env with canary credentials
+#     - ".aws/credentials"   # Fake AWS keys

@@ -762,6 +762,27 @@ def main_loop():
     load_telegram_credentials()
     load_learned_whitelist()
 
+    # Feature gating check (SESSION 88)
+    try:
+        from .cli import SUBSCRIPTION_FEATURES
+        features = SUBSCRIPTION_FEATURES
+    except ImportError:
+        features = ["process_monitor", "restart", "alerts"]
+
+    # Log available premium features
+    if "tripwire" in features:
+        log("INFO", "Tripwire file monitoring: ENABLED")
+    else:
+        log("INFO", "Tripwire file monitoring: DISABLED (requires Basic tier)")
+    if "file_integrity" in features:
+        log("INFO", "File integrity monitoring: ENABLED")
+    else:
+        log("INFO", "File integrity monitoring: DISABLED (requires Basic tier)")
+    if "honeypot" in features:
+        log("INFO", "Honeypot credentials: ENABLED")
+    else:
+        log("INFO", "Honeypot credentials: DISABLED (requires Basic tier)")
+
     # Initial process snapshot
     _known_pids = get_all_pids()
     log("INFO", f"Initial snapshot: {len(_known_pids)} processes")

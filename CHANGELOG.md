@@ -1,5 +1,24 @@
 # Changelog
 
+## v1.9.0 — April 14, 2026
+
+**Tiered feature gating**
+
+- **Tier system**: Personal ($9), Basic ($29), AI ($49), Enterprise ($499)
+- Token validation on startup — validates against stillrunning.io API
+- Server-side AI package review — Claude Haiku analysis (AI tier+)
+- 1-hour token cache with 24-hour offline grace period
+- Rate limits: 100 scans/day (AI), 500 (Team), unlimited (Enterprise)
+- Feature gates: tripwire, file_integrity, honeypot require Basic+
+- New `features.py` module — tier validation and feature checking
+- `stillrunning.yaml` now requires `token` field for premium features
+
+**Pricing tiers:**
+- Personal: process monitor, restart, Telegram alerts
+- Basic: + file integrity, tripwire, honeypot
+- AI: + AI package review (server-side)
+- Enterprise: + unlimited scans, SIEM, SSO, compliance
+
 ## v1.5.0 — April 2026
 
 **Security layer — supply chain protection**
