@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "stillrunning"
-version = "1.8.0"
+version = "1.9.0"
 description = "Enterprise security and monitoring for developers. Auto-restart, threat detection, pkl inspector, supply chain protection."
 readme = "README.md"
 authors = [
@@ -54,6 +54,15 @@ where = ["."]
 include = ["stillrunning*"]
 
 # Changelog (most recent first):
+#
+# v1.9.0 (April 14, 2026):
+# - Tiered feature gating: Personal, Basic, AI, Enterprise
+# - Token validation on startup - validates against stillrunning.io/api/validate-token
+# - Server-side AI package review - Claude Haiku analysis via /api/scan
+# - 1-hour token cache with 24-hour offline grace period
+# - Rate limits: 100 scans/day (AI), 500/day (Team), unlimited (Enterprise)
+# - Feature gates: tripwire, file_integrity, honeypot require Basic+
+# - stillrunning.yaml.example updated with token field and premium feature config
 #
 # v1.8.0 (April 13, 2026):
 # - OSV.dev integration - malware advisories from Google's open source vuln database
