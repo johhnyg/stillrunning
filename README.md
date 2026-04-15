@@ -1,6 +1,7 @@
 # stillrunning
 
-![Version](https://img.shields.io/badge/version-1.9.0-blue)
+![Version](https://img.shields.io/badge/version-1.9.1-blue)
+![Protected by stillrunning](https://stillrunning.io/badge/protected)
 ![Python](https://img.shields.io/badge/python-3.8+-green)
 ![License](https://img.shields.io/badge/license-MIT-blue)
 
@@ -44,6 +45,15 @@ stillrunning --setup
 
 The setup wizard detects your running processes, configures monitoring, and connects to the live threat feed. Takes 3 minutes.
 
+### Troubleshooting
+
+```bash
+# Run 12 diagnostic checks
+stillrunning --doctor
+```
+
+Checks: config validation, API connectivity, token validation, process monitor health, threat feed sync, disk space, and more.
+
 ### With subscription token
 
 For premium features (AI review, tripwire, file integrity):
@@ -60,12 +70,12 @@ Get your token at [stillrunning.io/pricing](https://stillrunning.io/pricing)
 
 ## Pricing
 
-| Tier | Price | Features |
-|------|-------|----------|
-| **Personal** | $9/mo | Process monitor, auto-restart, Telegram alerts |
-| **Basic** | $29/mo | + File integrity, tripwire, honeypot |
-| **AI** | $49/mo | + AI package review (100 scans/day), central dashboard |
-| **Enterprise** | $499/mo | + Unlimited scans, SIEM, SSO, SOC2 compliance |
+| Tier | Monthly | Annual (save 20%) | Features |
+|------|---------|-------------------|----------|
+| **Personal** | $9/mo | $90/year | Process monitor, auto-restart, Telegram alerts |
+| **Basic** | $29/mo | $290/year | + File integrity, tripwire, honeypot |
+| **AI** | $49/mo | $490/year | + AI package review (100 scans/day), central dashboard |
+| **Enterprise** | $499/mo | Custom | + Unlimited scans, SIEM, SSO, SOC2 compliance |
 
 ## Features by Tier
 
@@ -105,6 +115,36 @@ Everything in AI, plus:
 - **8 threat sources**: CISA, OSV.dev, NVD, GitHub, npm, Snyk, Socket, Gemini AI
 - **AI-powered discovery** — Gemini 2.5 Flash hunts new threats in security blogs
 - Updated **hourly**
+
+## Badge
+
+Show your project is protected:
+
+```markdown
+![Protected by stillrunning](https://stillrunning.io/badge/protected)
+```
+
+## Public API
+
+Check if a package is safe before installing:
+
+```bash
+curl https://stillrunning.io/api/check-package/pip/requests
+# Returns: {"package": "requests", "status": "CLEAN", ...}
+
+curl https://stillrunning.io/api/check-package/pip/logutilkit
+# Returns: {"package": "logutilkit", "status": "BLOCKED", "severity": "CRITICAL", ...}
+```
+
+Rate limit: 10 requests/hour (free), unlimited with subscription.
+
+## Referral Program
+
+Earn 20% recurring commission on customers you refer.
+
+1. Get your code from [stillrunning.io/dashboard](https://stillrunning.io/dashboard)
+2. Share: `stillrunning.io/ref/YOUR_CODE`
+3. Earn 20% of every payment
 
 ## Links
 
