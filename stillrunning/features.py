@@ -49,10 +49,13 @@ def _load_cache() -> dict | None:
 
 
 def _save_cache(data: dict):
-    """Save token validation result to cache."""
+    """Save token validation result to cache atomically."""
     try:
-        with open(CACHE_FILE, "w") as f:
+        import os
+        tmp_file = Path(str(CACHE_FILE) + ".tmp")
+        with open(tmp_file, "w") as f:
             json.dump(data, f, indent=2)
+        os.replace(tmp_file, CACHE_FILE)
     except Exception:
         pass
 
@@ -60,8 +63,14 @@ def _save_cache(data: dict):
 def _call_validate_api(token: str) -> dict:
     """Call stillrunning.io/api/validate-token."""
     try:
-        url = f"{API_URL}?token={token}"
-        req = urllib.request.Request(url, headers={"User-Agent": "stillrunning-agent/1.9.0"})
+        # SECURITY FIX: Send token in header instead of URL query string
+        req = urllib.request.Request(
+            API_URL,
+            headers={
+                "User-Agent": "stillrunning-agent/1.9.0",
+                "Authorization": f"Bearer {token}"
+            }
+        )
         with urllib.request.urlopen(req, timeout=10) as resp:
             return json.loads(resp.read().decode())
     except urllib.error.HTTPError as e:

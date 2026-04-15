@@ -119,13 +119,18 @@ def load_state() -> None:
 
 
 def save_state() -> None:
+    """Save state atomically (SESSION 90: temp file + rename)."""
     try:
-        with open(get_state_file(), "w") as f:
+        state_file = get_state_file()
+        tmp_file = state_file.with_suffix(".tmp")
+        with open(tmp_file, "w") as f:
             json.dump({
                 "restart_cooldowns": _state["restart_cooldowns"],
                 "consecutive_failures": _state["consecutive_failures"],
                 "disabled_processes": list(_state["disabled_processes"]),
             }, f, indent=2)
+        import os
+        os.replace(tmp_file, state_file)
     except Exception:
         pass
 
@@ -238,6 +243,13 @@ def _check_telegram_rate_limit(chat_id: str) -> bool:
 
 def _get_process_logs(process_name: str, lines: int = 20) -> str | None:
     """Get last N lines of a process log. Only for configured processes."""
+    # SECURITY FIX: Prevent path traversal attacks
+    if not process_name or "/" in process_name or "\\" in process_name or ".." in process_name:
+        return None
+    # Only allow alphanumeric, dash, underscore
+    if not all(c.isalnum() or c in "-_" for c in process_name):
+        return None
+
     processes = CONFIG.get("processes", [])
     # Verify process is in config
     if not any(p.get("name") == process_name or p.get("screen") == process_name for p in processes):
@@ -1372,10 +1384,13 @@ def run_setup_wizard() -> None:
         config["health_file"] = health_file
         config["health_max_age_sec"] = 180
 
-    # Write config
+    # Write config atomically (SESSION 90: temp file + rename)
     config_path = Path(__file__).parent / "stillrunning.yaml"
-    with open(config_path, "w") as f:
+    config_tmp = config_path.with_suffix(".yaml.tmp")
+    with open(config_tmp, "w") as f:
         yaml.dump(config, f, default_flow_style=False, sort_keys=False)
+    import os
+    os.replace(config_tmp, config_path)
 
     print(f"Config saved to: {config_path}")
     print()
