@@ -1987,6 +1987,183 @@ def _add_server_to_account(token: str, server_name: str) -> None:
         print(f"Error: {e}")
 
 
+def run_doctor() -> None:
+    """Run comprehensive health check on stillrunning agent."""
+    import urllib.request
+    import subprocess
+    import shutil
+
+    print("\n" + "=" * 50)
+    print("STILLRUNNING DOCTOR")
+    print("=" * 50 + "\n")
+
+    issues = []
+    warnings = []
+
+    # 1. Check config file exists
+    config_path = Path.home() / ".stillrunning" / "config.json"
+    print("[1/6] Checking configuration...")
+    if not config_path.exists():
+        issues.append("Config file not found: ~/.stillrunning/config.json")
+        print("  [FAIL] Config file missing")
+        print("  Fix: Run 'stillrunning --setup' to create config")
+    else:
+        print("  [OK] Config file exists")
+        try:
+            with open(config_path) as f:
+                config = json.load(f)
+            token = config.get("token", "")
+            if not token:
+                issues.append("No token in config file")
+                print("  [FAIL] No token configured")
+        except Exception as e:
+            issues.append(f"Config file invalid: {e}")
+            print(f"  [FAIL] Config parse error: {e}")
+
+    # 2. Check agent process is running
+    print("\n[2/6] Checking agent process...")
+    try:
+        result = subprocess.run(
+            ["pgrep", "-f", "stillrunning"],
+            capture_output=True, timeout=5
+        )
+        if result.returncode == 0:
+            pids = result.stdout.decode().strip().split('\n')
+            print(f"  [OK] Agent running (PID: {pids[0]})")
+        else:
+            warnings.append("Agent process not detected")
+            print("  [WARN] Agent not running")
+            print("  Fix: Run 'stillrunning' to start the agent")
+    except Exception as e:
+        warnings.append(f"Could not check process: {e}")
+        print(f"  [WARN] Process check failed: {e}")
+
+    # 3. Validate token with API
+    print("\n[3/6] Validating token with server...")
+    if config_path.exists():
+        try:
+            with open(config_path) as f:
+                config = json.load(f)
+            token = config.get("token", "")
+            if token:
+                url = f"https://stillrunning.io/api/validate-token"
+                req = urllib.request.Request(
+                    url,
+                    headers={"Authorization": f"Bearer {token}"}
+                )
+                with urllib.request.urlopen(req, timeout=10) as resp:
+                    data = json.loads(resp.read().decode())
+                    if data.get("valid"):
+                        print(f"  [OK] Token valid (tier: {data.get('tier', 'unknown')})")
+                        if data.get("trial"):
+                            expires = data.get("trial_expires", "soon")
+                            warnings.append(f"Trial expires: {expires}")
+                            print(f"  [WARN] Trial mode - expires {expires}")
+                    else:
+                        issues.append("Token invalid or expired")
+                        print("  [FAIL] Token invalid")
+                        print("  Fix: Check your token at stillrunning.io/dashboard")
+        except urllib.error.HTTPError as e:
+            issues.append(f"Token validation failed: HTTP {e.code}")
+            print(f"  [FAIL] Server returned {e.code}")
+        except Exception as e:
+            warnings.append(f"Could not validate token: {e}")
+            print(f"  [WARN] Validation failed: {e}")
+    else:
+        print("  [SKIP] No config to validate")
+
+    # 4. Check Telegram connectivity
+    print("\n[4/6] Testing Telegram alerts...")
+    if config_path.exists():
+        try:
+            with open(config_path) as f:
+                config = json.load(f)
+            tg_token = config.get("telegram_bot_token", "")
+            tg_chat = config.get("telegram_chat_id", "")
+            if tg_token and tg_chat:
+                # Just check the bot is valid, don't send message
+                url = f"https://api.telegram.org/bot{tg_token}/getMe"
+                with urllib.request.urlopen(url, timeout=10) as resp:
+                    data = json.loads(resp.read().decode())
+                    if data.get("ok"):
+                        print(f"  [OK] Telegram bot connected ({data['result']['username']})")
+                    else:
+                        issues.append("Telegram bot token invalid")
+                        print("  [FAIL] Bot token invalid")
+            else:
+                warnings.append("Telegram not configured")
+                print("  [WARN] Telegram not configured")
+                print("  Fix: Run 'stillrunning --setup' to configure alerts")
+        except Exception as e:
+            warnings.append(f"Telegram check failed: {e}")
+            print(f"  [WARN] Telegram check failed: {e}")
+    else:
+        print("  [SKIP] No config")
+
+    # 5. Check disk space
+    print("\n[5/6] Checking disk space...")
+    try:
+        total, used, free = shutil.disk_usage("/")
+        pct_used = (used / total) * 100
+        if pct_used > 90:
+            issues.append(f"Disk nearly full: {pct_used:.1f}%")
+            print(f"  [FAIL] Disk {pct_used:.1f}% used - critically low!")
+            print("  Fix: Free up disk space immediately")
+        elif pct_used > 80:
+            warnings.append(f"Disk usage high: {pct_used:.1f}%")
+            print(f"  [WARN] Disk {pct_used:.1f}% used")
+        else:
+            print(f"  [OK] Disk {pct_used:.1f}% used ({free // (1024**3)}GB free)")
+    except Exception as e:
+        warnings.append(f"Disk check failed: {e}")
+        print(f"  [WARN] Could not check disk: {e}")
+
+    # 6. Check memory
+    print("\n[6/6] Checking memory...")
+    try:
+        with open("/proc/meminfo") as f:
+            meminfo = f.read()
+        total_kb = int([l for l in meminfo.split('\n') if 'MemTotal' in l][0].split()[1])
+        avail_kb = int([l for l in meminfo.split('\n') if 'MemAvailable' in l][0].split()[1])
+        pct_used = ((total_kb - avail_kb) / total_kb) * 100
+        if pct_used > 90:
+            issues.append(f"Memory critically low: {pct_used:.1f}%")
+            print(f"  [FAIL] Memory {pct_used:.1f}% used")
+        elif pct_used > 80:
+            warnings.append(f"Memory usage high: {pct_used:.1f}%")
+            print(f"  [WARN] Memory {pct_used:.1f}% used")
+        else:
+            print(f"  [OK] Memory {pct_used:.1f}% used ({avail_kb // 1024}MB available)")
+    except Exception as e:
+        # macOS or other OS
+        print(f"  [SKIP] Memory check not available on this OS")
+
+    # Summary
+    print("\n" + "=" * 50)
+    if issues:
+        print(f"CRITICAL: {len(issues)} issue(s) found")
+        for issue in issues:
+            print(f"  - {issue}")
+    if warnings:
+        print(f"WARNINGS: {len(warnings)} warning(s)")
+        for warn in warnings:
+            print(f"  - {warn}")
+    if not issues and not warnings:
+        print("HEALTHY: All checks passed!")
+    print("=" * 50 + "\n")
+
+    # Return status
+    if issues:
+        print("Status: CRITICAL")
+        return
+    elif warnings:
+        print("Status: WARNINGS")
+        return
+    else:
+        print("Status: HEALTHY")
+        return
+
+
 def main_cli() -> None:
     """Entry point for the stillrunning command."""
     import argparse
@@ -2002,6 +2179,10 @@ def main_cli() -> None:
         help="Add a new server to your existing account"
     )
     parser.add_argument(
+        "--doctor", action="store_true",
+        help="Run comprehensive health check on the agent"
+    )
+    parser.add_argument(
         "--token",
         help="Your customer API token (for --add-server)"
     )
@@ -2011,7 +2192,9 @@ def main_cli() -> None:
     )
     args = parser.parse_args()
 
-    if args.add_server:
+    if args.doctor:
+        run_doctor()
+    elif args.add_server:
         if not args.token:
             print("Error: --token required with --add-server")
             print("Usage: stillrunning --add-server --token YOUR_TOKEN --name my-server")
