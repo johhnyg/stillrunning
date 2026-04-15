@@ -4,13 +4,13 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "stillrunning"
-version = "1.9.4"
-description = "Enterprise security and monitoring for developers. Auto-restart, threat detection, pkl inspector, supply chain protection."
+version = "2.0.0"
+description = "AI-powered supply chain security. Blocks malicious packages at install and import time."
 readme = "README.md"
 authors = [
     {name = "johhnyg"}
 ]
-keywords = ["monitoring", "security", "devops", "process-monitor", "supply-chain", "threat-detection", "pickle-inspector", "malware-detection"]
+keywords = ["security", "supply-chain", "import-hook", "mcp", "claude", "malware-detection", "threat-detection", "pickle-inspector"]
 classifiers = [
     "Development Status :: 4 - Beta",
     "Environment :: Console",
