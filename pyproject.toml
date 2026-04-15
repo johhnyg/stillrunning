@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "stillrunning"
-version = "1.9.1"
+version = "1.9.2"
 description = "Enterprise security and monitoring for developers. Auto-restart, threat detection, pkl inspector, supply chain protection."
 readme = "README.md"
 authors = [
