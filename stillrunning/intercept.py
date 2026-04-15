@@ -4,10 +4,10 @@ npm_pip_intercept.py — Supply chain attack protection.
 Intercepts npm/pip installs, checks against known-bad list, verifies hashes.
 
 Usage:
-  python3 npm_pip_intercept.py pip install <package>
-  python3 npm_pip_intercept.py npm install <package>
+  stillrunning-intercept pip install <package>
+  stillrunning-intercept npm install <package>
 
-Wrapper scripts in ~/my-app/intercept/ call this automatically.
+Called automatically when stillrunning wraps pip/npm.
 """
 
 import json
@@ -20,10 +20,15 @@ from pathlib import Path
 
 # ─── Constants ───────────────────────────────────────────────────────────────
 
-BOT_DIR = Path.home() / "my-app"
-SCAN_SCRIPT = BOT_DIR / "stillrunning_scan.py"
-ENV_FILE = BOT_DIR / ".env"
-KNOWN_BAD_JSON = BOT_DIR / "known_bad_packages.json"
+# Use ~/.stillrunning for customer installs (not ~/my-app which is server-only)
+STILLRUNNING_DIR = Path.home() / ".stillrunning"
+STILLRUNNING_DIR.mkdir(exist_ok=True)
+
+# For backwards compatibility with server install
+_server_env = Path.home() / "my-app" / ".env"
+_server_known_bad = Path.home() / "my-app" / "known_bad_packages.json"
+ENV_FILE = _server_env if _server_env.exists() else STILLRUNNING_DIR / ".env"
+KNOWN_BAD_JSON = _server_known_bad if _server_known_bad.exists() else STILLRUNNING_DIR / "known_bad_packages.json"
 
 # Known malicious packages — block all versions (hardcoded baseline)
 KNOWN_BAD_PIP = {
@@ -62,7 +67,9 @@ def _load_auto_synced_known_bad() -> tuple[dict, dict]:
     return pip_extra, npm_extra
 
 
-THREAT_CACHE_JSON = BOT_DIR / "threat_cache.json"
+# Threat cache location
+_server_cache = Path.home() / "my-app" / "threat_cache.json"
+THREAT_CACHE_JSON = _server_cache if _server_cache.exists() else STILLRUNNING_DIR / "threat_cache.json"
 THREAT_CACHE_TTL_SECONDS = 3600  # 60 minutes
 
 
@@ -104,11 +111,14 @@ def _fetch_threat_rules_from_api():
             if resp.status == 200:
                 data = json.loads(resp.read().decode())
                 packages = data.get("packages", {})
-                # Cache the result
+                # Cache the result atomically (SESSION 90)
                 cache_data = {"packages": packages, "cached_at": time.time(), "version": data.get("version")}
                 try:
-                    with open(THREAT_CACHE_JSON, "w") as f:
+                    import os
+                    tmp_path = str(THREAT_CACHE_JSON) + ".tmp"
+                    with open(tmp_path, "w") as f:
                         json.dump(cache_data, f, indent=2)
+                    os.replace(tmp_path, THREAT_CACHE_JSON)
                 except Exception:
                     pass
                 return packages
@@ -398,6 +408,8 @@ def extract_packages(args: list, manager: str) -> list:
 
 
 def main():
+    import shutil
+
     if len(sys.argv) < 3:
         print(f"Usage: {sys.argv[0]} <pip|npm> <command> [args...]")
         print("Example: python3 npm_pip_intercept.py pip install requests")
@@ -410,10 +422,16 @@ def main():
         print(f"{RED}[intercept]{RESET} Unknown manager: {manager}")
         sys.exit(1)
 
+    # SECURITY FIX: Resolve to absolute path to prevent PATH hijacking
+    manager_path = shutil.which(manager)
+    if not manager_path:
+        print(f"{RED}[intercept]{RESET} Package manager not found: {manager}")
+        sys.exit(1)
+
     # Only intercept install commands
     if not args or args[0] not in ("install", "i", "add"):
         # Pass through non-install commands
-        result = subprocess.run([manager] + args)
+        result = subprocess.run([manager_path] + args)
         sys.exit(result.returncode)
 
     # Extract packages to check
@@ -422,7 +440,7 @@ def main():
     if not packages:
         # No packages specified (maybe installing from requirements.txt)
         # Pass through
-        result = subprocess.run([manager] + args)
+        result = subprocess.run([manager_path] + args)
         sys.exit(result.returncode)
 
     # Check each package
@@ -471,7 +489,7 @@ def main():
     # All clear — run the actual install
     print()
     print(f"{GREEN}Proceeding with install...{RESET}")
-    result = subprocess.run([manager] + args)
+    result = subprocess.run([manager_path] + args)
     sys.exit(result.returncode)
 
 
