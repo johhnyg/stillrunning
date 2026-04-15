@@ -2313,6 +2313,23 @@ def main_cli() -> None:
         "--name",
         help="Name for the new server (for --add-server)"
     )
+    # SESSION 93: Import hook commands
+    parser.add_argument(
+        "--install-hook", action="store_true",
+        help="Install always-on import protection (.pth file)"
+    )
+    parser.add_argument(
+        "--uninstall-hook", action="store_true",
+        help="Remove always-on import protection"
+    )
+    parser.add_argument(
+        "--allow",
+        help="Allow a previously blocked package"
+    )
+    parser.add_argument(
+        "--block",
+        help="Manually block a package"
+    )
 
     # SESSION 91: Whitelist subcommand
     subparsers = parser.add_subparsers(dest="command")
@@ -2336,6 +2353,31 @@ def main_cli() -> None:
             _whitelist_list()
         else:
             whitelist_parser.print_help()
+        return
+
+    # SESSION 93: Handle import hook commands
+    if args.install_hook:
+        from . import hook
+        pth_path = hook.install_pth()
+        print(f"Always-on import protection installed.")
+        print(f"All Python imports will now be checked for malicious packages.")
+        return
+    elif args.uninstall_hook:
+        from . import hook
+        if hook.uninstall_pth():
+            print("Always-on import protection removed.")
+        else:
+            print("No .pth file found to remove.")
+        return
+    elif args.allow:
+        from . import hook
+        hook.allow_package(args.allow)
+        print(f"Package '{args.allow}' is now allowed.")
+        return
+    elif args.block:
+        from . import hook
+        hook.block_package(args.block, "Manually blocked via CLI")
+        print(f"Package '{args.block}' is now blocked.")
         return
 
     if args.doctor:

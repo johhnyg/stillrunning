@@ -21,8 +21,16 @@ from typing import Dict, List, Any, Optional
 
 DOCKER_SOCKET = "/var/run/docker.sock"
 POLL_INTERVAL = 10  # seconds
-STATUS_FILE = os.path.expanduser("~/my-app/docker_status.json")
-THREAT_CACHE = os.path.expanduser("~/my-app/threat_cache.json")
+
+# Use ~/.stillrunning for customer installs (not ~/my-app which is server-only)
+STILLRUNNING_DIR = os.path.expanduser("~/.stillrunning")
+os.makedirs(STILLRUNNING_DIR, exist_ok=True)
+
+# For backwards compatibility with server install
+_server_status = os.path.expanduser("~/my-app/docker_status.json")
+_server_cache = os.path.expanduser("~/my-app/threat_cache.json")
+STATUS_FILE = _server_status if os.path.exists(os.path.dirname(_server_status)) else os.path.join(STILLRUNNING_DIR, "docker_status.json")
+THREAT_CACHE = _server_cache if os.path.exists(_server_cache) else os.path.join(STILLRUNNING_DIR, "threat_cache.json")
 
 # Known bad images (from threat feed)
 KNOWN_BAD_IMAGES = {
@@ -204,11 +212,17 @@ class ContainerSecurityAnalyzer:
 
 def send_telegram_alert(message: str, severity: str = "INFO"):
     """Send alert via Telegram."""
-    env_path = os.path.expanduser("~/my-app/.env")
+    # Try server path first, fall back to customer install path
+    env_paths = [
+        os.path.expanduser("~/my-app/.env"),
+        os.path.expanduser("~/.stillrunning/.env"),
+    ]
     bot_token = None
     chat_id = None
 
-    if os.path.exists(env_path):
+    for env_path in env_paths:
+        if not os.path.exists(env_path):
+            continue
         with open(env_path, 'r') as f:
             for line in f:
                 line = line.strip()
@@ -216,6 +230,8 @@ def send_telegram_alert(message: str, severity: str = "INFO"):
                     bot_token = line.split("=", 1)[1].strip().strip('"').strip("'")
                 elif line.startswith("TELEGRAM_CHAT_ID="):
                     chat_id = line.split("=", 1)[1].strip().strip('"').strip("'")
+        if bot_token and chat_id:
+            break
 
     if not bot_token or not chat_id:
         return

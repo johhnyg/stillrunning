@@ -3,7 +3,7 @@
 stillrunning_guard.py - Always-on security daemon.
 Monitors processes, detects suspicious behavior, blocks threats.
 
-Start: screen -dmS guard python3 ~/my-app/stillrunning_guard.py
+Start: stillrunning-guard
 """
 
 import os
@@ -19,11 +19,16 @@ from collections import defaultdict
 
 # ─── Constants ───────────────────────────────────────────────────────────────
 
-BOT_DIR = Path.home() / "my-app"
-STATUS_FILE = BOT_DIR / "guard_status.json"
-LEARNED_FILE = BOT_DIR / "guard_learned.json"
-SCAN_SCRIPT = BOT_DIR / "stillrunning_scan.py"
-ENV_FILE = BOT_DIR / ".env"
+# Use ~/.stillrunning for customer installs (not ~/my-app which is server-only)
+STILLRUNNING_DIR = Path.home() / ".stillrunning"
+STILLRUNNING_DIR.mkdir(exist_ok=True)
+STATUS_FILE = STILLRUNNING_DIR / "guard_status.json"
+LEARNED_FILE = STILLRUNNING_DIR / "guard_learned.json"
+CONFIG_FILE = STILLRUNNING_DIR / "config.json"
+
+# For backwards compatibility with server install
+_server_env = Path.home() / "my-app" / ".env"
+ENV_FILE = _server_env if _server_env.exists() else STILLRUNNING_DIR / ".env"
 
 POLL_INTERVAL = 5        # seconds
 STATUS_WRITE_INTERVAL = 30
@@ -88,7 +93,7 @@ PRIVATE_IP_PREFIXES = ("10.", "172.16.", "172.17.", "172.18.", "172.19.",
 SENSITIVE_PATHS = {
     str(Path.home() / ".ssh"),
     str(Path.home() / ".aws" / "credentials"),
-    str(BOT_DIR / ".env"),
+    str(STILLRUNNING_DIR / ".env"),
     "/etc/passwd",
     "/etc/shadow",
 }
@@ -498,7 +503,7 @@ def analyze_process_threat(pid: int, info: dict) -> tuple[int, list, bool]:
             reasons.append(f"Accessing ~/.ssh: {fd}")
 
         # Check .env access
-        if ".env" in fd and "my-app" in fd:
+        if ".env" in fd and (".stillrunning" in fd or "my-app" in fd):
             score += SCORE_READS_ENV
             reasons.append(f"Reading .env: {fd}")
 

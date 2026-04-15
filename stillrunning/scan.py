@@ -283,12 +283,17 @@ def calculate_threat_score(analysis: dict, is_pickle: bool = False) -> tuple[int
 
 def send_telegram_alert(filepath: str, score: int, reasons: list):
     """Send Telegram alert if score >= 20."""
-    # Load credentials from .env
-    env_path = os.path.expanduser("~/my-app/.env")
+    # Load credentials from .env - try server path first, fall back to customer install
+    env_paths = [
+        os.path.expanduser("~/my-app/.env"),
+        os.path.expanduser("~/.stillrunning/.env"),
+    ]
     bot_token = None
     chat_id = None
 
-    if os.path.exists(env_path):
+    for env_path in env_paths:
+        if not os.path.exists(env_path):
+            continue
         with open(env_path, 'r') as f:
             for line in f:
                 line = line.strip()
@@ -296,6 +301,8 @@ def send_telegram_alert(filepath: str, score: int, reasons: list):
                     bot_token = line.split("=", 1)[1].strip().strip('"').strip("'")
                 elif line.startswith("TELEGRAM_CHAT_ID="):
                     chat_id = line.split("=", 1)[1].strip().strip('"').strip("'")
+        if bot_token and chat_id:
+            break
 
     if not bot_token or not chat_id:
         print(f"{YELLOW}[WARN]{RESET} Telegram credentials not found - skipping alert")

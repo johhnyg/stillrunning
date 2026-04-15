@@ -1,5 +1,30 @@
 # Changelog
 
+## v2.0.0 — April 15, 2026
+
+**Import hook + MCP integration**
+
+- **Python import hook** — blocks malicious imports before execution
+  - `import stillrunning.hook` to activate
+  - `stillrunning --install-hook` for always-on protection
+  - Async design: cache check is instant, background scanning for unknown packages
+  - Flag on next import if background scan finds issues
+- **MCP server** — Claude Code integration
+  - `check_package` tool for pre-install verification
+  - Add to Claude Code config for automatic package checking
+  - Rate limited by tier (100/day AI, unlimited Enterprise)
+- **Interactive approvals** — Telegram allow/deny with one tap
+  - UNKNOWN packages: blocked pending 60s approval
+  - SUSPICIOUS packages: blocked with research link
+  - DANGEROUS packages: hard block, no override
+  - `/allow_{token}` and `/deny_{token}` commands
+- **Coverage page** — honest documentation of what is/isn't blocked
+- **Developer docs** — terminal-style integration guide at /developers
+- **GitHub Action v2** — import scanning + hash verification
+
+**Breaking changes:**
+- Version bump to 2.0.0 — new major version for import hook feature
+
 ## v1.9.0 — April 14, 2026
 
 **Tiered feature gating**
