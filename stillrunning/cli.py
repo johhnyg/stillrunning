@@ -2179,6 +2179,114 @@ def run_doctor() -> None:
         return
 
 
+# ---------------------------------------------------------------------------
+# SESSION 91: Package Whitelist Commands
+# ---------------------------------------------------------------------------
+def _get_customer_token() -> str | None:
+    """Get customer token from config file."""
+    config_path = Path.home() / ".stillrunning" / "config.json"
+    if config_path.exists():
+        try:
+            with open(config_path) as f:
+                config = json.load(f)
+            return config.get("token", "")
+        except Exception:
+            pass
+    return None
+
+
+def _whitelist_add(package: str) -> None:
+    """Add package to customer whitelist."""
+    token = _get_customer_token()
+    if not token:
+        print("Error: No token configured. Run 'stillrunning --setup' first.")
+        return
+
+    try:
+        url = "https://stillrunning.io/api/whitelist/add"
+        payload = json.dumps({"token": token, "package": package.lower()}).encode()
+        req = urllib.request.Request(
+            url, data=payload,
+            headers={"Content-Type": "application/json"},
+            method="POST"
+        )
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            result = json.loads(resp.read().decode())
+
+        if result.get("success"):
+            print(f"Added '{package}' to your whitelist")
+        else:
+            print(f"Error: {result.get('error', 'Unknown error')}")
+    except urllib.error.HTTPError as e:
+        print(f"Error: Server returned {e.code}")
+    except Exception as e:
+        print(f"Error: {e}")
+
+
+def _whitelist_remove(package: str) -> None:
+    """Remove package from customer whitelist."""
+    token = _get_customer_token()
+    if not token:
+        print("Error: No token configured. Run 'stillrunning --setup' first.")
+        return
+
+    try:
+        url = "https://stillrunning.io/api/whitelist/remove"
+        payload = json.dumps({"token": token, "package": package.lower()}).encode()
+        req = urllib.request.Request(
+            url, data=payload,
+            headers={"Content-Type": "application/json"},
+            method="POST"
+        )
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            result = json.loads(resp.read().decode())
+
+        if result.get("success"):
+            print(f"Removed '{package}' from your whitelist")
+        else:
+            print(f"Error: {result.get('error', 'Unknown error')}")
+    except urllib.error.HTTPError as e:
+        print(f"Error: Server returned {e.code}")
+    except Exception as e:
+        print(f"Error: {e}")
+
+
+def _whitelist_list() -> None:
+    """List all whitelisted packages."""
+    token = _get_customer_token()
+    if not token:
+        print("Error: No token configured. Run 'stillrunning --setup' first.")
+        return
+
+    try:
+        url = f"https://stillrunning.io/api/whitelist/list"
+        req = urllib.request.Request(
+            url,
+            headers={"Authorization": f"Bearer {token}"}
+        )
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            result = json.loads(resp.read().decode())
+
+        packages = result.get("packages", [])
+        if not packages:
+            print("No whitelisted packages.")
+            print("\nTo add a package: stillrunning whitelist add <package>")
+            return
+
+        print(f"Whitelisted packages ({len(packages)}):\n")
+        for pkg in packages:
+            name = pkg.get("package_name", "?")
+            auto = " (auto)" if pkg.get("auto_whitelisted") else ""
+            version = pkg.get("last_clean_version", "")
+            version_str = f" v{version}" if version else ""
+            print(f"  {name}{version_str}{auto}")
+
+    except urllib.error.HTTPError as e:
+        print(f"Error: Server returned {e.code}")
+    except Exception as e:
+        print(f"Error: {e}")
+
+
 def main_cli() -> None:
     """Entry point for the stillrunning command."""
     import argparse
@@ -2205,7 +2313,30 @@ def main_cli() -> None:
         "--name",
         help="Name for the new server (for --add-server)"
     )
+
+    # SESSION 91: Whitelist subcommand
+    subparsers = parser.add_subparsers(dest="command")
+    whitelist_parser = subparsers.add_parser("whitelist", help="Manage package whitelist")
+    whitelist_sub = whitelist_parser.add_subparsers(dest="whitelist_action")
+    whitelist_add = whitelist_sub.add_parser("add", help="Add package to whitelist")
+    whitelist_add.add_argument("package", help="Package name to whitelist")
+    whitelist_remove = whitelist_sub.add_parser("remove", help="Remove package from whitelist")
+    whitelist_remove.add_argument("package", help="Package name to remove")
+    whitelist_sub.add_parser("list", help="List all whitelisted packages")
+
     args = parser.parse_args()
+
+    # Handle whitelist commands
+    if args.command == "whitelist":
+        if args.whitelist_action == "add":
+            _whitelist_add(args.package)
+        elif args.whitelist_action == "remove":
+            _whitelist_remove(args.package)
+        elif args.whitelist_action == "list":
+            _whitelist_list()
+        else:
+            whitelist_parser.print_help()
+        return
 
     if args.doctor:
         run_doctor()
