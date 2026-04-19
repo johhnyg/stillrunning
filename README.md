@@ -109,12 +109,14 @@ stillrunning whitelist list         # Show whitelist
 
 ## Pricing
 
-| Tier | Price | Features |
-|------|-------|----------|
-| **Personal** | $9/mo | Process monitor, auto-restart, Telegram alerts |
-| **Basic** | $29/mo | + File integrity, tripwire, honeypot |
-| **AI** | $49/mo | + AI package review, import hook, MCP integration |
-| **Enterprise** | $499/mo | + Unlimited scans, SIEM, SSO, compliance |
+| Tier | Price | Scans/day | Features |
+|------|-------|-----------|----------|
+| **Free** | $0 | 10 | Blocklist checks only |
+| **Personal** | $9/mo | — | Guard daemon, 1 machine |
+| **Basic** | $29/mo | — | Dashboard, 3 machines, Telegram |
+| **AI** | $49/mo | 100 | AI package review, unlimited machines |
+| **Enterprise** | $499/mo | 10,000 | SIEM, SSO, compliance |
+| **Enterprise+** | $2,499/mo | Unlimited | Dedicated support, on-prem |
 
 ## Badge
 

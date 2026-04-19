@@ -53,7 +53,7 @@
 - npm/pip intercept — blocks poisoned packages before install (hash check + static scan)
 - Advisor upgrade — Sonnet executor + Opus advisor pattern for AI operations
 - Chrome extension scaffold — green/red status dot in browser
-- `/scan` route — customer file upload threat scanner (free tier 5/month)
+- `/scan` route — customer file upload threat scanner (free tier 10/day)
 - North Korea supply chain attack response — 1,700+ malicious packages blocked
 
 ## v1.4.0 — April 2026
