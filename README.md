@@ -109,13 +109,13 @@ stillrunning whitelist list         # Show whitelist
 
 ## Pricing
 
-| Tier | Price | Scans/day | Features |
-|------|-------|-----------|----------|
-| **Free** | $0 | 10 | Blocklist checks only |
-| **Personal** | $9/mo | — | Guard daemon, 1 machine |
-| **Basic** | $29/mo | — | Dashboard, 3 machines, Telegram |
-| **AI** | $49/mo | 100 | AI package review, unlimited machines |
-| **Enterprise** | $499/mo | 10,000 | SIEM, SSO, compliance |
+| Tier | Price | AI Scans | Features |
+|------|-------|----------|----------|
+| **Free** | $0 | 0 | Blocklist checks (10/day) |
+| **Personal** | $9/mo | 0 | Guard daemon, 1 machine, blocklist |
+| **Basic** | $29/mo | 0 | Dashboard, 3 machines, Telegram, blocklist |
+| **AI** | $49/mo | 100/day | AI package review, unlimited machines |
+| **Enterprise** | $499/mo | 10,000/day | SIEM, SSO, compliance |
 | **Enterprise+** | $2,499/mo | Unlimited | Dedicated support, on-prem |
 
 ## Badge
