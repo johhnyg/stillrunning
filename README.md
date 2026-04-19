@@ -3,7 +3,7 @@
 > Supply chain security for developers and AI coding agents.
 > Blocks malicious packages at install AND import time.
 
-![Version](https://img.shields.io/badge/version-2.0.1-blue)
+![Version](https://img.shields.io/badge/version-2.0.2-blue)
 ![Protected by stillrunning](https://stillrunning.io/badge/protected)
 ![Python](https://img.shields.io/badge/python-3.8+-green)
 ![License](https://img.shields.io/badge/license-MIT-blue)
