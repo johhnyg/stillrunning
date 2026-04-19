@@ -1,5 +1,20 @@
 # Changelog
 
+## v2.1.0 — April 19, 2026
+
+**Anonymous telemetry (opt-in)**
+
+- **Heartbeat** — sends anonymous ping to stillrunning.io every 6 hours
+- **Setup prompt** — Y/n question after Telegram config
+- **Privacy-first** — no email, IP, or log content; just random UUID
+- **Disable anytime** — set `telemetry: false` in stillrunning.yaml
+
+**Payload:** machine_id, agent_version, os_type, uptime_hours, process_count
+
+This helps us understand how many agents are actually running. Previously we had 1,500 PyPI downloads but zero visibility into active usage.
+
+---
+
 ## v2.0.0 — April 15, 2026
 
 **Import hook + MCP integration**
