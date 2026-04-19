@@ -29,6 +29,9 @@ except ImportError:
     print("ERROR: PyYAML required. Install with: pip install pyyaml")
     sys.exit(1)
 
+# Version constant for telemetry
+VERSION = "2.1.0"
+
 # ---------------------------------------------------------------------------
 # Config
 # ---------------------------------------------------------------------------
@@ -1410,6 +1413,21 @@ def run_setup_wizard(autonomous: bool = False) -> None:
         else:
             print("WARNING: Telegram test failed. Check your token and chat ID.\n")
 
+    # --- Telemetry opt-in ---
+    print("5. Send anonymous heartbeat to stillrunning.io every 6h so we can see")
+    print("   how many agents are running? No email, IP, or log data — just a")
+    print("   random ID. [Y/n]: ", end="")
+    telemetry_input = input().strip().lower()
+    telemetry_enabled = telemetry_input != "n"
+
+    if telemetry_enabled:
+        import secrets
+        machine_id = f"sr_{secrets.token_urlsafe(16)}"
+        print("   Anonymous telemetry enabled. Disable anytime in stillrunning.yaml.\n")
+    else:
+        machine_id = ""
+        print("   Telemetry disabled. You can enable later by editing stillrunning.yaml.\n")
+
     # --- Generate config ---
     print("Generating stillrunning.yaml...\n")
 
@@ -1419,6 +1437,8 @@ def run_setup_wizard(autonomous: bool = False) -> None:
         "email": user_email,
         "telegram_bot_token": telegram_token,
         "telegram_chat_id": telegram_chat_id,
+        "telemetry": telemetry_enabled,
+        "machine_id": machine_id,
         "processes": [],
         "log_files": [],
         "thresholds": {
@@ -2030,6 +2050,12 @@ def main() -> None:
 
     for t in threads:
         t.start()
+
+    # Start telemetry heartbeat if opted in (SESSION 98)
+    if CONFIG.get("telemetry", False) and CONFIG.get("machine_id"):
+        from .heartbeat import start_heartbeat_thread
+        start_heartbeat_thread(CONFIG, VERSION)
+        threads.append(None)  # Count it
 
     print(f"[stillrunning] All monitors started ({len(threads)} threads)", flush=True)
 
