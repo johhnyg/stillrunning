@@ -1,26 +1,26 @@
 # stillrunning
 
-> AI-powered supply chain security.
+> Supply chain security for developers and AI coding agents.
 > Blocks malicious packages at install AND import time.
 
-![Version](https://img.shields.io/badge/version-2.0.0-blue)
+![Version](https://img.shields.io/badge/version-2.0.1-blue)
 ![Protected by stillrunning](https://stillrunning.io/badge/protected)
 ![Python](https://img.shields.io/badge/python-3.8+-green)
 ![License](https://img.shields.io/badge/license-MIT-blue)
 
-## What it does
+## What's new in v2.0
 
-- **Intercepts pip/npm installs** before download
-- **Blocks malicious imports** before execution
+- **Python import hook** — blocks at execution, not just install
+- **MCP server** — Claude Code checks packages before installing
+- **Interactive Telegram approvals** — default deny, one tap to allow
+- **Works with every AI coding agent** — Claude Code, Cursor, Devin, Replit, Windsurf, Aider
+- **Autonomous mode** for CI/CD pipelines
 - **Hash verification** against PyPI registry
-- **AI scanning** for unknown packages
-- **Real-time Telegram/email alerts**
-- **One-tap allow/deny** from your phone
 
 ## What it blocks
 
-| Attack Vector | Blocked? |
-|--------------|----------|
+| Attack Vector | Status |
+|--------------|--------|
 | `pip install malicious-pkg` | Blocked |
 | `pip3 install malicious-pkg` | Blocked |
 | `python3 -m pip install malicious-pkg` | Blocked |
@@ -31,14 +31,11 @@
 
 ## Known limitations
 
-| Gap | Coverage |
-|----|----------|
-| `/usr/bin/pip` direct binary | Import hook catches at runtime |
-| Virtual env pip | Activate intercept manually, or use import hook |
+| Gap | Workaround |
+|----|------------|
+| `/usr/bin/pip` direct binary | Use import hook for coverage |
+| Virtual env pip | Activate intercept or use import hook |
 | Conda/poetry/pipx | Manual activation required |
-| Already installed packages | Import hook catches on use |
-
-The import hook provides defense in depth: even if a package sneaks past install-time checks, it can't execute.
 
 ## Quick start (30 seconds)
 
@@ -49,13 +46,9 @@ stillrunning --setup
 
 ## Import protection (one line)
 
-Add to the top of your main script:
-
 ```python
 import stillrunning.hook
 ```
-
-Any malicious import will be blocked with a clear error message.
 
 ## Always-on import protection
 
@@ -63,11 +56,15 @@ Any malicious import will be blocked with a clear error message.
 stillrunning --install-hook
 ```
 
-This creates a `.pth` file in site-packages so all Python processes are protected automatically.
+## Autonomous mode (CI/CD + AI agents)
+
+```bash
+stillrunning --autonomous
+```
 
 ## MCP / Claude Code integration
 
-Add to your Claude Code MCP config:
+Add to `~/.claude/settings.json`:
 
 ```json
 {
@@ -81,23 +78,17 @@ Add to your Claude Code MCP config:
 }
 ```
 
-Now when you ask Claude to install a package, it checks stillrunning first.
+## Claude Skill
 
-## Interactive approvals
+Install the stillrunning skill for automatic package checking in every Claude Code session:
 
-Unknown packages trigger a Telegram alert:
+[github.com/johhnyg/stillrunning-skill](https://github.com/johhnyg/stillrunning-skill)
 
-```
-UNKNOWN PACKAGE — sketchy-logger==1.0.0
-Score: 65/100 — Unusual network calls in __init__.py
+## Works with every AI coding agent
 
-Allow this install?
-[Allow] [Deny]
+Claude Code, Cursor, Devin, Replit, GitHub Copilot, Windsurf, Aider
 
-Auto-denying in 60 seconds.
-```
-
-One tap to approve or deny from your phone.
+Setup: [stillrunning.io/agent-setup](https://stillrunning.io/agent-setup)
 
 ## Commands
 
@@ -105,6 +96,7 @@ One tap to approve or deny from your phone.
 stillrunning --setup          # 3-minute setup wizard
 stillrunning --doctor         # Health check
 stillrunning --install-hook   # Enable always-on import protection
+stillrunning --autonomous     # CI/CD mode (no prompts)
 stillrunning --allow <pkg>    # Allow a blocked package
 stillrunning --block <pkg>    # Manually block a package
 stillrunning whitelist add <pkg>    # Add to whitelist
@@ -123,32 +115,15 @@ stillrunning whitelist list         # Show whitelist
 
 ## Badge
 
-Show your project is protected:
-
 ```markdown
 ![Protected by stillrunning](https://stillrunning.io/badge/protected)
 ```
 
-## API
-
-```bash
-# Check a package
-curl https://stillrunning.io/api/check-package?name=requests
-
-# MCP endpoint
-curl -X POST https://stillrunning.io/mcp \
-  -H "Authorization: Bearer YOUR_TOKEN" \
-  -H "Content-Type: application/json" \
-  -d '{"method": "tools/call", "params": {"name": "check_package", "arguments": {"package_name": "requests"}}}'
-```
-
 ## Links
 
-- [stillrunning.io](https://stillrunning.io) — homepage
-- [stillrunning.io/threats](https://stillrunning.io/threats) — live threat dashboard
-- [stillrunning.io/developers](https://stillrunning.io/developers) — integration docs
-- [stillrunning.io/coverage](https://stillrunning.io/coverage) — what is/isn't blocked
-- [@bit_bot9000](https://x.com/bit_bot9000) — updates
+- [stillrunning.io](https://stillrunning.io)
+- [stillrunning.io/agent-setup](https://stillrunning.io/agent-setup)
+- [@bit_bot9000](https://x.com/bit_bot9000)
 
 ## License
 

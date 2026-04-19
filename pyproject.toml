@@ -5,12 +5,12 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "stillrunning"
 version = "2.0.1"
-description = "AI-powered supply chain security. Blocks malicious packages at install and import time."
+description = "AI-powered supply chain security. Blocks malicious packages at install and import time. Works with Claude Code, Cursor, Devin, and every AI coding agent."
 readme = "README.md"
 authors = [
     {name = "johhnyg"}
 ]
-keywords = ["security", "supply-chain", "import-hook", "mcp", "claude", "malware-detection", "threat-detection", "pickle-inspector"]
+keywords = ["security", "supply-chain", "import-hook", "mcp", "claude", "cursor", "devin", "pip", "npm", "ai-agents"]
 classifiers = [
     "Development Status :: 4 - Beta",
     "Environment :: Console",
