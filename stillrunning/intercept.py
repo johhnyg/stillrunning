@@ -72,6 +72,49 @@ _server_cache = Path.home() / "my-app" / "threat_cache.json"
 THREAT_CACHE_JSON = _server_cache if _server_cache.exists() else STILLRUNNING_DIR / "threat_cache.json"
 THREAT_CACHE_TTL_SECONDS = 3600  # 60 minutes
 
+# ─── Scan Usage Tracking ─────────────────────────────────────────────────────
+
+SCAN_USAGE_FILE = STILLRUNNING_DIR / "scan_usage.json"
+FREE_DAILY_LIMIT = 10
+
+
+def _get_scan_usage() -> dict:
+    """Get today's scan count."""
+    from datetime import date
+    today = str(date.today())
+    try:
+        if SCAN_USAGE_FILE.exists():
+            with open(SCAN_USAGE_FILE) as f:
+                data = json.load(f)
+            if data.get("date") == today:
+                return {"date": today, "count": data.get("count", 0)}
+    except Exception:
+        pass
+    return {"date": today, "count": 0}
+
+
+def _increment_scan_usage(pkg_count: int = 1) -> int:
+    """Increment scan count, return new total."""
+    usage = _get_scan_usage()
+    usage["count"] += pkg_count
+    tmp = SCAN_USAGE_FILE.with_suffix(".tmp")
+    with open(tmp, "w") as f:
+        json.dump(usage, f)
+    os.replace(tmp, SCAN_USAGE_FILE)
+    return usage["count"]
+
+
+def _show_upgrade_prompt(scans_used: int) -> None:
+    """Show upgrade prompt based on scan usage."""
+    remaining = FREE_DAILY_LIMIT - scans_used
+    if remaining <= 3 and remaining > 0:
+        print(f"\n{YELLOW}Scans remaining today: {remaining}/{FREE_DAILY_LIMIT}{RESET}")
+        print(f"   Upgrade for unlimited: https://stillrunning.io/pricing")
+    elif remaining <= 0:
+        print(f"\n{RED}Free scan limit reached ({FREE_DAILY_LIMIT}/day){RESET}")
+        print(f"   Packages checked against blocklist only (no AI review)")
+        print(f"   Upgrade for unlimited: https://stillrunning.io/pricing")
+
 
 def _load_threat_cache():
     """Load cached threat rules from API."""
@@ -467,6 +510,10 @@ def main():
 
         else:
             print(f"{GREEN}\u2705 CLEAN{RESET} — {pkg}")
+
+    # Track scan usage and show upgrade prompt for free tier
+    scans_used = _increment_scan_usage(len(packages))
+    _show_upgrade_prompt(scans_used)
 
     # If any blocked, exit without installing
     if blocked:

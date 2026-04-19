@@ -429,6 +429,7 @@ class StillRunningFinder(importlib.abc.MetaPathFinder):
                     f"Reason: {reason}\n\n"
                     f"This package was flagged as malicious during background scanning.\n"
                     f"No override available for DANGEROUS packages.\n"
+                    f"Report false positive: security@stillrunning.io\n"
                 )
             elif status == "SUSPICIOUS":
                 # Block with warning — can be cleared
@@ -441,6 +442,7 @@ class StillRunningFinder(importlib.abc.MetaPathFinder):
                     f"This package behaves unusually.\n"
                     f"Review at: https://pypi.org/project/{top_level}\n"
                     f"To allow: stillrunning --allow {top_level}\n"
+                    f"Upgrade for AI analysis: https://stillrunning.io/pricing\n"
                 )
 
         # Check cache/database (instant lookup)
@@ -458,6 +460,7 @@ class StillRunningFinder(importlib.abc.MetaPathFinder):
                     f"Score: {score}/100 — DANGEROUS\n"
                     f"Reason: {reason}\n\n"
                     f"No override available for DANGEROUS packages.\n"
+                    f"Report false positive: security@stillrunning.io\n"
                 )
             elif status == "SUSPICIOUS" or score >= 50:
                 raise ImportError(
@@ -467,6 +470,7 @@ class StillRunningFinder(importlib.abc.MetaPathFinder):
                     f"Score: {score}/100 — SUSPICIOUS\n"
                     f"Reason: {reason}\n\n"
                     f"To allow: stillrunning --allow {top_level}\n"
+                    f"Upgrade for AI analysis: https://stillrunning.io/pricing\n"
                 )
             # CLEAN — allow (return None to continue normal import)
             return None
