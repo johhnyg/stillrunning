@@ -3,7 +3,7 @@
 > Supply chain security for developers and AI coding agents.
 > Blocks malicious packages at install AND import time.
 
-![Version](https://img.shields.io/badge/version-2.0.2-blue)
+![Version](https://img.shields.io/badge/version-2.0.3-blue)
 ![Protected by stillrunning](https://stillrunning.io/badge/protected)
 ![Python](https://img.shields.io/badge/python-3.8+-green)
 ![License](https://img.shields.io/badge/license-MIT-blue)
@@ -59,6 +59,9 @@ stillrunning --install-hook
 ## Autonomous mode (CI/CD + AI agents)
 
 ```bash
+export STILLRUNNING_APP_NAME="my-app"
+export STILLRUNNING_TELEGRAM_TOKEN="..."
+export STILLRUNNING_CHAT_ID="..."
 stillrunning --autonomous
 ```
 
