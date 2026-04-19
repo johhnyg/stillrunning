@@ -3,7 +3,7 @@
 > Supply chain security for developers and AI coding agents.
 > Blocks malicious packages at install AND import time.
 
-![Version](https://img.shields.io/badge/version-2.0.4-blue)
+![Version](https://img.shields.io/badge/version-2.1.0-blue)
 ![Protected by stillrunning](https://stillrunning.io/badge/protected)
 ![Python](https://img.shields.io/badge/python-3.8+-green)
 ![License](https://img.shields.io/badge/license-MIT-blue)
@@ -55,6 +55,12 @@ import stillrunning.hook
 ```bash
 stillrunning --install-hook
 ```
+
+## Telemetry
+
+stillrunning sends an anonymous heartbeat every 6 hours if you opt in during setup. No email, IP, or log content — just a random ID so we know how many agents are running.
+
+Disable by setting `telemetry: false` in `stillrunning.yaml`.
 
 ## Autonomous mode (CI/CD + AI agents)
 
