@@ -1216,11 +1216,79 @@ def test_telegram_credentials(token: str, chat_id: str) -> bool:
         return False
 
 
-def run_setup_wizard() -> None:
-    """Interactive setup wizard."""
+def _test_api_connection() -> tuple:
+    """Test connection to stillrunning.io API. Returns (success, version, scans_remaining)."""
+    try:
+        req = urllib.request.Request(
+            "https://stillrunning.io/api/version",
+            headers={"User-Agent": "stillrunning-cli"}
+        )
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            data = json.loads(resp.read().decode())
+            return True, data.get("version", "unknown"), data.get("free_scans_remaining", 10)
+    except Exception:
+        return False, None, None
+
+
+def run_setup_wizard(autonomous: bool = False) -> None:
+    """Interactive setup wizard. If autonomous=True, reads config from env vars."""
     print("\n" + "=" * 60)
     print("  StillRunning Setup Wizard")
     print("=" * 60 + "\n")
+
+    # --- Free tier explanation ---
+    print("  FREE TIER INCLUDES:")
+    print("  - Process monitoring with auto-restart")
+    print("  - Telegram alerts for crashes/high CPU/disk")
+    print("  - 10 package security scans per day")
+    print("  - Access to live threat blocklist")
+    print()
+    print("  UPGRADE OPTIONS:")
+    print("  - AI tier ($49/mo): Unlimited scans, AI package review")
+    print("  - Enterprise ($499/mo): SIEM integration, compliance reports")
+    print("  - Pricing: https://stillrunning.io/pricing")
+    print()
+
+    # --- Test API connection ---
+    print("Testing API connection...")
+    api_ok, api_version, scans_remaining = _test_api_connection()
+    if api_ok:
+        print(f"  API: Connected (server v{api_version})")
+        print(f"  Free scans remaining today: {scans_remaining}/10")
+    else:
+        print("  API: Could not connect (offline mode available)")
+    print()
+
+    # --- Autonomous mode (CI/CD) ---
+    if autonomous:
+        print("Running in autonomous mode (CI/CD)...\n")
+        app_name = os.environ.get("STILLRUNNING_APP_NAME", Path.cwd().name)
+        telegram_token = os.environ.get("STILLRUNNING_TELEGRAM_TOKEN", "")
+        telegram_chat_id = os.environ.get("STILLRUNNING_CHAT_ID", "")
+        api_token = os.environ.get("STILLRUNNING_API_TOKEN", "")
+
+        config = {
+            "app_name": app_name,
+            "working_dir": str(Path.cwd()),
+            "telegram_bot_token": telegram_token,
+            "telegram_chat_id": telegram_chat_id,
+            "api_token": api_token,
+            "processes": [],
+            "log_files": [],
+            "thresholds": {"cpu_percent": 85, "mem_percent": 85, "disk_percent": 85},
+            "intervals": {"process_check_sec": 30, "resource_check_sec": 60},
+        }
+
+        config_path = Path(__file__).parent / "stillrunning.yaml"
+        config_tmp = config_path.with_suffix(".yaml.tmp")
+        with open(config_tmp, "w") as f:
+            yaml.dump(config, f, default_flow_style=False, sort_keys=False)
+        os.replace(config_tmp, config_path)
+
+        print(f"Config saved to: {config_path}")
+        print("Autonomous setup complete. Starting monitor...\n")
+        main()
+        return
 
     # Determine working directory
     cwd = Path.cwd()
@@ -1305,9 +1373,9 @@ def run_setup_wizard() -> None:
             health_file = None
         print()
 
-    # --- Ask 3 questions ---
+    # --- Ask 4 questions ---
     print("-" * 40)
-    print("Configuration Questions (3 total)")
+    print("Configuration Questions (4 total)")
     print("-" * 40 + "\n")
 
     # 1. App name
@@ -1316,14 +1384,20 @@ def run_setup_wizard() -> None:
     app_name = input("> ").strip() or default_app_name
     print()
 
-    # 2. Telegram bot token
-    print("2. Telegram bot token (from @BotFather):")
+    # 2. Email (optional)
+    print("2. Email (optional, for upgrade notifications and weekly digest):")
+    print("   Leave blank to skip")
+    user_email = input("> ").strip()
+    print()
+
+    # 3. Telegram bot token
+    print("3. Telegram bot token (from @BotFather):")
     print("   Create a bot: https://t.me/BotFather -> /newbot")
     telegram_token = input("> ").strip()
     print()
 
-    # 3. Telegram chat ID
-    print("3. Telegram chat ID (your user ID):")
+    # 4. Telegram chat ID
+    print("4. Telegram chat ID (your user ID):")
     print("   Get yours: https://t.me/userinfobot -> /start")
     telegram_chat_id = input("> ").strip()
     print()
@@ -1342,6 +1416,7 @@ def run_setup_wizard() -> None:
     config = {
         "app_name": app_name,
         "working_dir": str(cwd),
+        "email": user_email,
         "telegram_bot_token": telegram_token,
         "telegram_chat_id": telegram_chat_id,
         "processes": [],
@@ -1400,10 +1475,20 @@ def run_setup_wizard() -> None:
     print("  Setup Complete!")
     print("=" * 60)
     print(f"\n  App name:    {app_name}")
+    print(f"  Email:       {user_email or 'not provided'}")
     print(f"  Processes:   {len(config['processes'])}")
     print(f"  Log files:   {len(config['log_files'])}")
     print(f"  Health file: {health_file or 'none'}")
     print(f"  Telegram:    {'configured' if telegram_token else 'not configured'}")
+    print()
+    print("  YOUR FREE TIER:")
+    print(f"  - Scans remaining today: {scans_remaining if api_ok else '10'}/10")
+    print("  - Process monitoring: unlimited")
+    print("  - Telegram alerts: unlimited")
+    print()
+    print("  NEED MORE SCANS?")
+    print("  - AI tier ($49/mo): 500 scans/day + AI review")
+    print("  - Upgrade: https://stillrunning.io/pricing")
     print()
 
     # --- Start monitoring ---
@@ -2298,6 +2383,10 @@ def main_cli() -> None:
         help="Run interactive setup wizard to auto-generate config"
     )
     parser.add_argument(
+        "--autonomous", action="store_true",
+        help="Non-interactive setup for CI/CD (reads STILLRUNNING_* env vars)"
+    )
+    parser.add_argument(
         "--add-server", action="store_true",
         help="Add a new server to your existing account"
     )
@@ -2392,8 +2481,8 @@ def main_cli() -> None:
             print("Usage: stillrunning --add-server --token YOUR_TOKEN --name my-server")
             return
         _add_server_to_account(args.token, args.name)
-    elif args.setup:
-        run_setup_wizard()
+    elif args.setup or args.autonomous:
+        run_setup_wizard(autonomous=args.autonomous)
     else:
         main()
 
