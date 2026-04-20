@@ -30,7 +30,7 @@ except ImportError:
     sys.exit(1)
 
 # Version constant for telemetry
-VERSION = "2.1.0"
+VERSION = "2.2.0"
 
 # ---------------------------------------------------------------------------
 # Config
@@ -1233,34 +1233,64 @@ def _test_api_connection() -> tuple:
         return False, None, None
 
 
+def _post_early_signup(email: str, channel: str, machine_id_hash: str) -> bool:
+    """POST to /api/early-signup. Returns True on success, fails silently."""
+    import hashlib
+    import socket
+    try:
+        payload = {
+            "channel": channel,
+            "machine_id_hash": machine_id_hash,
+            "agent_version": VERSION,
+            "os_type": sys.platform,
+            "source": "setup",
+        }
+        if email:
+            payload["email"] = email
+
+        data = json.dumps(payload).encode("utf-8")
+        req = urllib.request.Request(
+            "https://stillrunning.io/api/early-signup",
+            data=data,
+            headers={"Content-Type": "application/json", "User-Agent": f"stillrunning/{VERSION}"},
+            method="POST",
+        )
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            return resp.status == 200
+    except Exception:
+        return False  # Fail silently, don't block setup
+
+
+def _get_setup_machine_id() -> str:
+    """Generate a privacy-preserving machine ID hash for setup tracking."""
+    import hashlib
+    import socket
+    import getpass
+    try:
+        raw = f"{socket.gethostname()}:{getpass.getuser()}"
+    except Exception:
+        raw = f"unknown:{time.time()}"
+    return hashlib.sha256(f"setup:{raw}".encode()).hexdigest()[:16]
+
+
+def _validate_email(email: str) -> bool:
+    """Basic email validation."""
+    import re
+    pattern = r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$'
+    return bool(re.match(pattern, email))
+
+
 def run_setup_wizard(autonomous: bool = False) -> None:
     """Interactive setup wizard. If autonomous=True, reads config from env vars."""
+    # Import funnel telemetry (opt-out, anonymous aggregate stats)
+    from . import funnel
+    funnel.track_setup_start()
+
+    machine_id_hash = _get_setup_machine_id()
+
     print("\n" + "=" * 60)
     print("  StillRunning Setup Wizard")
     print("=" * 60 + "\n")
-
-    # --- Free tier explanation ---
-    print("  FREE TIER INCLUDES:")
-    print("  - Process monitoring with auto-restart")
-    print("  - Telegram alerts for crashes/high CPU/disk")
-    print("  - 10 package security scans per day")
-    print("  - Access to live threat blocklist")
-    print()
-    print("  UPGRADE OPTIONS:")
-    print("  - AI tier ($49/mo): Unlimited scans, AI package review")
-    print("  - Enterprise ($499/mo): SIEM integration, compliance reports")
-    print("  - Pricing: https://stillrunning.io/pricing")
-    print()
-
-    # --- Test API connection ---
-    print("Testing API connection...")
-    api_ok, api_version, scans_remaining = _test_api_connection()
-    if api_ok:
-        print(f"  API: Connected (server v{api_version})")
-        print(f"  Free scans remaining today: {scans_remaining}/10")
-    else:
-        print("  API: Could not connect (offline mode available)")
-    print()
 
     # --- Autonomous mode (CI/CD) ---
     if autonomous:
@@ -1273,6 +1303,7 @@ def run_setup_wizard(autonomous: bool = False) -> None:
         config = {
             "app_name": app_name,
             "working_dir": str(Path.cwd()),
+            "alert_channel": "telegram" if telegram_token else "silent",
             "telegram_bot_token": telegram_token,
             "telegram_chat_id": telegram_chat_id,
             "api_token": api_token,
@@ -1288,237 +1319,195 @@ def run_setup_wizard(autonomous: bool = False) -> None:
             yaml.dump(config, f, default_flow_style=False, sort_keys=False)
         os.replace(config_tmp, config_path)
 
+        _post_early_signup("", "autonomous", machine_id_hash)
         print(f"Config saved to: {config_path}")
         print("Autonomous setup complete. Starting monitor...\n")
         main()
         return
 
-    # Determine working directory
+    # === FIRST QUESTION: How to receive alerts? ===
+    print("  How would you like to receive alerts?\n")
+    print("    1) email        - weekly digest of what I caught")
+    print("    2) telegram     - real-time alerts (needs Telegram app)")
+    print("    3) silent mode  - just scan and log, no alerts")
+    print("    4) skip for now")
+    print()
+    alert_choice = input("  Choose [1]: ").strip() or "1"
+    print()
+
+    # Track the choice
+    channel_map = {"1": "email", "2": "telegram", "3": "silent", "4": "skipped"}
+    channel = channel_map.get(alert_choice, "email")
+    funnel.track_step(f"alert_channel_{channel}")
+
+    config_path = Path(__file__).parent / "stillrunning.yaml"
     cwd = Path.cwd()
-    print(f"Working directory: {cwd}\n")
 
-    # --- Scan for processes ---
-    print("Scanning for running processes...\n")
+    # === SKIP PATH ===
+    if alert_choice == "4":
+        config = {"setup_skipped": True, "alert_channel": "skipped"}
+        config_tmp = config_path.with_suffix(".yaml.tmp")
+        with open(config_tmp, "w") as f:
+            yaml.dump(config, f, default_flow_style=False, sort_keys=False)
+        os.replace(config_tmp, config_path)
+        _post_early_signup("", "skipped", machine_id_hash)
+        funnel.track_step("setup_skipped")
+        print("  Skipped. Run `stillrunning --setup` anytime to enable.\n")
+        return
 
-    screen_sessions = scan_screen_sessions()
-    systemd_services = scan_systemd_services()
-
-    all_processes = []
-
-    if screen_sessions:
-        print(f"Found {len(screen_sessions)} screen session(s):")
-        for i, s in enumerate(screen_sessions, 1):
-            print(f"  [{i}] {s['name']} (script: {s['script']})")
-            all_processes.append(s)
+    # === SILENT PATH ===
+    if alert_choice == "3":
+        config = {
+            "alert_channel": "silent",
+            "working_dir": str(cwd),
+            "processes": [],
+            "log_files": [],
+            "thresholds": {"cpu_percent": 85, "mem_percent": 85, "disk_percent": 85},
+        }
+        config_tmp = config_path.with_suffix(".yaml.tmp")
+        with open(config_tmp, "w") as f:
+            yaml.dump(config, f, default_flow_style=False, sort_keys=False)
+        os.replace(config_tmp, config_path)
+        _post_early_signup("", "silent", machine_id_hash)
+        funnel.track_step("setup_completed")
+        print("  Silent mode. Scans will log to ~/.stillrunning/scan.log")
+        print("  You can change this later with `stillrunning --setup`")
         print()
-
-    if systemd_services:
-        print(f"Found {len(systemd_services)} systemd service(s):")
-        offset = len(screen_sessions)
-        for i, s in enumerate(systemd_services, 1):
-            print(f"  [{offset + i}] {s['name']} (systemd)")
-            all_processes.append(s)
+        print("  Try a scan now:")
+        print("    stillrunning scan <package_name>")
         print()
+        return
 
-    if not all_processes:
-        print("No screen sessions or systemd services found.")
-        print("You can add processes manually to stillrunning.yaml later.\n")
+    # === EMAIL PATH ===
+    if alert_choice == "1":
+        print("  Enter your email for weekly digest:")
+        user_email = input("  > ").strip()
 
-    # Select processes to monitor
-    selected_processes = []
-    if all_processes:
-        print("Which processes should StillRunning monitor?")
-        print("Enter numbers separated by commas, or 'all' for all, or 'none' to skip")
-        choice = input("> ").strip().lower()
+        while user_email and not _validate_email(user_email):
+            print("  Invalid email format. Try again (or press Enter to skip):")
+            user_email = input("  > ").strip()
 
-        if choice == "all":
-            selected_processes = all_processes
-        elif choice != "none" and choice:
-            try:
-                indices = [int(x.strip()) - 1 for x in choice.split(",")]
-                selected_processes = [all_processes[i] for i in indices if 0 <= i < len(all_processes)]
-            except (ValueError, IndexError):
-                print("Invalid selection, skipping processes.")
-        print()
-
-    # --- Scan for log files ---
-    print("Scanning for log files...\n")
-    log_files = scan_log_files(cwd)
-
-    selected_logs = []
-    if log_files:
-        print(f"Found {len(log_files)} log file(s):")
-        for i, lf in enumerate(log_files, 1):
-            print(f"  [{i}] {lf['path']} ({lf['current_size_mb']} MB)")
-        print()
-        print("Which logs should StillRunning auto-rotate?")
-        print("Enter numbers separated by commas, or 'all' for all, or 'none' to skip")
-        choice = input("> ").strip().lower()
-
-        if choice == "all":
-            selected_logs = log_files
-        elif choice != "none" and choice:
-            try:
-                indices = [int(x.strip()) - 1 for x in choice.split(",")]
-                selected_logs = [log_files[i] for i in indices if 0 <= i < len(log_files)]
-            except (ValueError, IndexError):
-                print("Invalid selection, skipping logs.")
-        print()
-
-    # --- Detect health file ---
-    health_file = detect_health_file(cwd)
-    if health_file:
-        print(f"Detected health file: {health_file}")
-        print("Monitor this file for freshness? [Y/n]")
-        if input("> ").strip().lower() != "n":
-            pass  # Keep it
+        if user_email:
+            config = {
+                "alert_channel": "email",
+                "email": user_email,
+                "working_dir": str(cwd),
+                "processes": [],
+                "log_files": [],
+                "thresholds": {"cpu_percent": 85, "mem_percent": 85, "disk_percent": 85},
+            }
+            config_tmp = config_path.with_suffix(".yaml.tmp")
+            with open(config_tmp, "w") as f:
+                yaml.dump(config, f, default_flow_style=False, sort_keys=False)
+            os.replace(config_tmp, config_path)
+            _post_early_signup(user_email, "email", machine_id_hash)
+            funnel.track_step("email_captured")
+            funnel.track_step("setup_completed")
+            print()
+            print(f"  Got it. I'll email you a weekly digest at {user_email}")
+            print("  Run `stillrunning scan <package>` to try a scan now.")
+            print()
+            return
         else:
-            health_file = None
+            # No email provided, fall through to silent
+            print("  No email provided. Defaulting to silent mode.\n")
+            config = {
+                "alert_channel": "silent",
+                "working_dir": str(cwd),
+                "processes": [],
+                "log_files": [],
+                "thresholds": {"cpu_percent": 85, "mem_percent": 85, "disk_percent": 85},
+            }
+            config_tmp = config_path.with_suffix(".yaml.tmp")
+            with open(config_tmp, "w") as f:
+                yaml.dump(config, f, default_flow_style=False, sort_keys=False)
+            os.replace(config_tmp, config_path)
+            _post_early_signup("", "silent", machine_id_hash)
+            funnel.track_step("setup_completed")
+            print("  Silent mode enabled. Run `stillrunning scan <package>` to try a scan.\n")
+            return
+
+    # === TELEGRAM PATH (existing flow, slightly simplified) ===
+    if alert_choice == "2":
+        _post_early_signup("", "telegram", machine_id_hash)
+
+        print("  Telegram requires a bot token and chat ID.\n")
+        print("  1. Create a bot: https://t.me/BotFather -> /newbot")
+        print("  2. Get your chat ID: https://t.me/userinfobot -> /start")
         print()
 
-    # --- Ask 4 questions ---
-    print("-" * 40)
-    print("Configuration Questions (4 total)")
-    print("-" * 40 + "\n")
+        print("  Telegram bot token (from @BotFather):")
+        telegram_token = input("  > ").strip()
+        print()
 
-    # 1. App name
-    default_app_name = cwd.name.replace("-", " ").replace("_", " ").title()
-    print(f"1. App name (appears in alerts) [{default_app_name}]:")
-    app_name = input("> ").strip() or default_app_name
-    print()
+        print("  Telegram chat ID (your user ID):")
+        telegram_chat_id = input("  > ").strip()
+        print()
 
-    # 2. Email (optional)
-    print("2. Email (optional, for upgrade notifications and weekly digest):")
-    print("   Leave blank to skip")
-    user_email = input("> ").strip()
-    print()
-
-    # 3. Telegram bot token
-    print("3. Telegram bot token (from @BotFather):")
-    print("   Create a bot: https://t.me/BotFather -> /newbot")
-    telegram_token = input("> ").strip()
-    print()
-
-    # 4. Telegram chat ID
-    print("4. Telegram chat ID (your user ID):")
-    print("   Get yours: https://t.me/userinfobot -> /start")
-    telegram_chat_id = input("> ").strip()
-    print()
-
-    # --- Test Telegram ---
-    if telegram_token and telegram_chat_id:
-        print("Testing Telegram credentials...")
-        if test_telegram_credentials(telegram_token, telegram_chat_id):
-            print("Telegram test passed! Check your Telegram for the test message.\n")
+        # Test Telegram
+        telegram_ok = False
+        if telegram_token and telegram_chat_id:
+            print("  Testing Telegram credentials...")
+            telegram_ok = test_telegram_credentials(telegram_token, telegram_chat_id)
+            funnel.track_telegram_config(configured=True, test_result=telegram_ok)
+            if telegram_ok:
+                print("  Telegram test passed! Check your Telegram for the test message.\n")
+            else:
+                print("  WARNING: Telegram test failed. Check your token and chat ID.")
+                print("  Continuing anyway — you can fix this in stillrunning.yaml\n")
         else:
-            print("WARNING: Telegram test failed. Check your token and chat ID.\n")
+            funnel.track_telegram_config(configured=False)
+            print("  No Telegram credentials provided. Alerts disabled.\n")
 
-    # --- Telemetry opt-in ---
-    print("5. Send anonymous heartbeat to stillrunning.io every 6h so we can see")
-    print("   how many agents are running? No email, IP, or log data — just a")
-    print("   random ID. [Y/n]: ", end="")
-    telemetry_input = input().strip().lower()
-    telemetry_enabled = telemetry_input != "n"
-
-    if telemetry_enabled:
+        # Generate machine_id for telemetry
         import secrets
         machine_id = f"sr_{secrets.token_urlsafe(16)}"
-        print("   Anonymous telemetry enabled. Disable anytime in stillrunning.yaml.\n")
-    else:
-        machine_id = ""
-        print("   Telemetry disabled. You can enable later by editing stillrunning.yaml.\n")
 
-    # --- Generate config ---
-    print("Generating stillrunning.yaml...\n")
+        config = {
+            "alert_channel": "telegram",
+            "working_dir": str(cwd),
+            "telegram_bot_token": telegram_token,
+            "telegram_chat_id": telegram_chat_id,
+            "telemetry": True,
+            "machine_id": machine_id,
+            "processes": [],
+            "log_files": [],
+            "thresholds": {
+                "cpu_percent": 85,
+                "mem_percent": 85,
+                "disk_percent": 85,
+                "process_mem_mb": 500,
+            },
+            "intervals": {
+                "process_check_sec": 30,
+                "resource_check_sec": 60,
+                "heartbeat_sec": 86400,
+                "telegram_poll_sec": 5,
+            },
+            "restart_cooldown_sec": 120,
+            "max_consecutive_failures": 3,
+        }
 
-    config = {
-        "app_name": app_name,
-        "working_dir": str(cwd),
-        "email": user_email,
-        "telegram_bot_token": telegram_token,
-        "telegram_chat_id": telegram_chat_id,
-        "telemetry": telemetry_enabled,
-        "machine_id": machine_id,
-        "processes": [],
-        "log_files": [],
-        "thresholds": {
-            "cpu_percent": 85,
-            "mem_percent": 85,
-            "disk_percent": 85,
-            "process_mem_mb": 500,
-        },
-        "intervals": {
-            "process_check_sec": 30,
-            "resource_check_sec": 60,
-            "heartbeat_sec": 86400,
-            "telegram_poll_sec": 5,
-        },
-        "restart_cooldown_sec": 120,
-        "max_consecutive_failures": 3,
-    }
+        config_tmp = config_path.with_suffix(".yaml.tmp")
+        with open(config_tmp, "w") as f:
+            yaml.dump(config, f, default_flow_style=False, sort_keys=False)
+        os.replace(config_tmp, config_path)
+        funnel.track_step("config_saved")
+        funnel.track_step("setup_completed")
 
-    # Add selected processes (screen only for now)
-    for proc in selected_processes:
-        if proc["type"] == "screen":
-            config["processes"].append({
-                "name": proc["name"],
-                "screen": proc["screen"],
-                "script": proc["script"],
-            })
-
-    # Add selected logs
-    for lf in selected_logs:
-        config["log_files"].append({
-            "path": lf["path"],
-            "max_mb": lf["max_mb"],
-            "keep_archives": lf["keep_archives"],
-        })
-
-    # Add health file
-    if health_file:
-        config["health_file"] = health_file
-        config["health_max_age_sec"] = 180
-
-    # Write config atomically (SESSION 90: temp file + rename)
-    config_path = Path(__file__).parent / "stillrunning.yaml"
-    config_tmp = config_path.with_suffix(".yaml.tmp")
-    with open(config_tmp, "w") as f:
-        yaml.dump(config, f, default_flow_style=False, sort_keys=False)
-    import os
-    os.replace(config_tmp, config_path)
-
-    print(f"Config saved to: {config_path}")
-    print()
-
-    # --- Summary ---
-    print("=" * 60)
-    print("  Setup Complete!")
-    print("=" * 60)
-    print(f"\n  App name:    {app_name}")
-    print(f"  Email:       {user_email or 'not provided'}")
-    print(f"  Processes:   {len(config['processes'])}")
-    print(f"  Log files:   {len(config['log_files'])}")
-    print(f"  Health file: {health_file or 'none'}")
-    print(f"  Telegram:    {'configured' if telegram_token else 'not configured'}")
-    print()
-    print("  YOUR FREE TIER:")
-    print(f"  - Scans remaining today: {scans_remaining if api_ok else '10'}/10")
-    print("  - Process monitoring: unlimited")
-    print("  - Telegram alerts: unlimited")
-    print()
-    print("  NEED MORE SCANS?")
-    print("  - AI tier ($49/mo): 500 scans/day + AI review")
-    print("  - Upgrade: https://stillrunning.io/pricing")
-    print()
-
-    # --- Start monitoring ---
-    print("Start monitoring now? [Y/n]")
-    if input("> ").strip().lower() != "n":
-        print("\nStarting StillRunning...\n")
-        main()
-    else:
-        print("\nTo start later, run:")
-        print(f"  screen -dmS stillrunning python3 {__file__}")
+        print(f"  Config saved to: {config_path}")
+        print()
+        print("  =" * 30)
+        print("  Setup Complete!")
+        print("  =" * 30)
+        print()
+        print(f"  Telegram: {'configured' if telegram_token else 'not configured'}")
+        print()
+        print("  Try a scan:")
+        print("    stillrunning scan <package_name>")
+        print()
+        print("  Or start monitoring:")
+        print(f"    screen -dmS stillrunning python3 -m stillrunning")
         print()
 
 
