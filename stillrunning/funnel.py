@@ -17,7 +17,7 @@ import urllib.request
 import urllib.error
 from datetime import datetime, timezone
 
-__version__ = "2.2.1"
+__version__ = "2.2.2"
 
 FUNNEL_URL = "https://stillrunning.io/api/setup-funnel"
 _funnel_enabled = True
