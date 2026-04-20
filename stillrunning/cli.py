@@ -2387,6 +2387,175 @@ def _whitelist_list() -> None:
         print(f"Error: {e}")
 
 
+# ---------------------------------------------------------------------------
+# SESSION 97: Claude Code PreToolUse Hook
+# ---------------------------------------------------------------------------
+def _run_claude_code_hook() -> None:
+    """Run as Claude Code PreToolUse hook. Reads stdin, checks packages, exits 0/1."""
+    import re
+    try:
+        stdin_data = sys.stdin.read()
+        if not stdin_data.strip():
+            sys.exit(0)
+
+        data = json.loads(stdin_data)
+        tool_name = data.get("tool_name", "")
+        tool_input = data.get("tool_input", {})
+
+        # Only intercept Bash commands
+        if tool_name != "Bash":
+            sys.exit(0)
+
+        command = tool_input.get("command", "")
+        if not command:
+            sys.exit(0)
+
+        # Extract package names from pip/npm install commands
+        packages = []
+
+        # pip install patterns
+        pip_match = re.search(r'pip3?\s+install\s+([^\s|&;]+(?:\s+[^\s|&;-][^\s|&;]*)*)', command)
+        if pip_match:
+            pkg_str = pip_match.group(1)
+            for pkg in pkg_str.split():
+                if pkg.startswith('-'):
+                    continue
+                pkg_name = re.split(r'[=<>!\[]', pkg)[0]
+                if pkg_name:
+                    packages.append(("pip", pkg_name.lower()))
+
+        # npm install patterns
+        npm_match = re.search(r'npm\s+(?:install|i|add)\s+([^\s|&;]+(?:\s+[^\s|&;-][^\s|&;]*)*)', command)
+        if npm_match:
+            pkg_str = npm_match.group(1)
+            for pkg in pkg_str.split():
+                if pkg.startswith('-'):
+                    continue
+                pkg_name = re.split(r'[@]', pkg)[0] if not pkg.startswith('@') else pkg.split('@')[0] + '@' + pkg.split('@')[1].split('/')[0] if '@' in pkg and '/' in pkg else pkg
+                if pkg_name:
+                    packages.append(("npm", pkg_name.lower()))
+
+        if not packages:
+            sys.exit(0)
+
+        # Check each package against stillrunning.io
+        token = _get_customer_token()
+        for pkg_type, pkg_name in packages:
+            try:
+                url = f"https://stillrunning.io/api/check-package?name={pkg_name}"
+                headers = {}
+                if token:
+                    headers["Authorization"] = f"Bearer {token}"
+                req = urllib.request.Request(url, headers=headers)
+                with urllib.request.urlopen(req, timeout=10) as resp:
+                    result = json.loads(resp.read().decode())
+
+                status = result.get("status", "UNKNOWN")
+                if status == "DANGEROUS":
+                    reason = result.get("reason", "Malicious package detected")
+                    sys.stderr.write(f"BLOCKED: {pkg_name} is DANGEROUS — {reason}\n")
+                    sys.stderr.write(f"See: https://stillrunning.io/threats\n")
+                    sys.exit(1)
+                elif status == "SUSPICIOUS":
+                    reason = result.get("reason", "Package flagged as suspicious")
+                    sys.stderr.write(f"WARNING: {pkg_name} is SUSPICIOUS — {reason}\n")
+                    sys.stderr.write(f"To proceed anyway, add to allow list:\n")
+                    sys.stderr.write(f"  stillrunning whitelist add {pkg_name}\n")
+                    sys.exit(1)
+
+            except urllib.error.HTTPError as e:
+                if e.code == 429:
+                    sys.stderr.write("LIMIT: Daily scan limit reached.\n")
+                    sys.stderr.write("Upgrade at https://stillrunning.io/pricing\n")
+                    sys.exit(1)
+            except Exception:
+                pass
+
+        sys.exit(0)
+
+    except json.JSONDecodeError:
+        sys.exit(0)
+    except Exception:
+        sys.exit(0)
+
+
+def _install_claude_code_hook() -> None:
+    """Install Claude Code PreToolUse hook to ~/.claude/hooks.json."""
+    hooks_dir = Path.home() / ".claude"
+    hooks_file = hooks_dir / "hooks.json"
+
+    hooks_dir.mkdir(parents=True, exist_ok=True)
+
+    existing_hooks = {"hooks": []}
+    if hooks_file.exists():
+        try:
+            with open(hooks_file) as f:
+                existing_hooks = json.load(f)
+        except Exception:
+            pass
+
+    hooks_list = existing_hooks.get("hooks", [])
+    sr_hook = {
+        "matcher": {
+            "tool_name": "Bash",
+            "command_pattern": "(pip3?|npm)\\s+(install|i|add)"
+        },
+        "hooks": [{
+            "type": "preToolUse",
+            "command": "stillrunning hook"
+        }]
+    }
+
+    # Remove any existing stillrunning hook
+    hooks_list = [h for h in hooks_list if "stillrunning" not in str(h.get("hooks", []))]
+    hooks_list.append(sr_hook)
+
+    existing_hooks["hooks"] = hooks_list
+
+    tmp_file = hooks_file.with_suffix(".tmp")
+    with open(tmp_file, "w") as f:
+        json.dump(existing_hooks, f, indent=2)
+    tmp_file.replace(hooks_file)
+
+    print("Claude Code hook installed!")
+    print(f"  File: {hooks_file}")
+    print("\nAll pip/npm install commands will now be checked.")
+    print("DANGEROUS packages will be blocked. SUSPICIOUS packages will warn.")
+
+
+def _uninstall_claude_code_hook() -> None:
+    """Remove Claude Code PreToolUse hook."""
+    hooks_file = Path.home() / ".claude" / "hooks.json"
+
+    if not hooks_file.exists():
+        print("No hooks.json found.")
+        return
+
+    try:
+        with open(hooks_file) as f:
+            existing_hooks = json.load(f)
+    except Exception:
+        print("Could not read hooks.json")
+        return
+
+    hooks_list = existing_hooks.get("hooks", [])
+    original_len = len(hooks_list)
+    hooks_list = [h for h in hooks_list if "stillrunning" not in str(h.get("hooks", []))]
+
+    if len(hooks_list) == original_len:
+        print("No stillrunning hook found to remove.")
+        return
+
+    existing_hooks["hooks"] = hooks_list
+
+    tmp_file = hooks_file.with_suffix(".tmp")
+    with open(tmp_file, "w") as f:
+        json.dump(existing_hooks, f, indent=2)
+    tmp_file.replace(hooks_file)
+
+    print("Claude Code hook removed.")
+
+
 def main_cli() -> None:
     """Entry point for the stillrunning command."""
     import argparse
@@ -2434,6 +2603,15 @@ def main_cli() -> None:
         "--block",
         help="Manually block a package"
     )
+    # SESSION 97: Claude Code PreToolUse hook
+    parser.add_argument(
+        "--hook-claude-code", action="store_true",
+        help="Install Claude Code PreToolUse hook"
+    )
+    parser.add_argument(
+        "--uninstall-hook-claude-code", action="store_true",
+        help="Remove Claude Code PreToolUse hook"
+    )
 
     # SESSION 91: Whitelist subcommand
     subparsers = parser.add_subparsers(dest="command")
@@ -2444,6 +2622,9 @@ def main_cli() -> None:
     whitelist_remove = whitelist_sub.add_parser("remove", help="Remove package from whitelist")
     whitelist_remove.add_argument("package", help="Package name to remove")
     whitelist_sub.add_parser("list", help="List all whitelisted packages")
+
+    # SESSION 97: Hook subcommand for Claude Code PreToolUse
+    subparsers.add_parser("hook", help="Run as Claude Code PreToolUse hook (reads stdin)")
 
     args = parser.parse_args()
 
@@ -2457,6 +2638,19 @@ def main_cli() -> None:
             _whitelist_list()
         else:
             whitelist_parser.print_help()
+        return
+
+    # SESSION 97: Handle hook command (Claude Code PreToolUse)
+    if args.command == "hook":
+        _run_claude_code_hook()
+        return
+
+    # SESSION 97: Handle Claude Code hook install/uninstall
+    if args.hook_claude_code:
+        _install_claude_code_hook()
+        return
+    elif args.uninstall_hook_claude_code:
+        _uninstall_claude_code_hook()
         return
 
     # SESSION 93: Handle import hook commands
