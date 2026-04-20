@@ -23,7 +23,7 @@ Tiers (SESSION 93):
     Enterprise ($499)  - + unlimited scans, SIEM, SSO, compliance
 """
 
-__version__ = "2.2.0"
+__version__ = "2.2.1"
 __author__ = "johhnyg"
 __license__ = "MIT"
 
