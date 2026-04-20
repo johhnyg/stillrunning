@@ -30,7 +30,7 @@ except ImportError:
     sys.exit(1)
 
 # Version constant for telemetry
-VERSION = "2.2.0"
+VERSION = "2.2.1"
 
 # ---------------------------------------------------------------------------
 # Config
