@@ -30,7 +30,7 @@ except ImportError:
     sys.exit(1)
 
 # Version constant for telemetry
-VERSION = "2.2.1"
+VERSION = "2.2.2"
 
 # ---------------------------------------------------------------------------
 # Config
@@ -2388,32 +2388,118 @@ def _whitelist_list() -> None:
 
 
 # ---------------------------------------------------------------------------
-# SESSION 97: Claude Code PreToolUse Hook
+# SESSION 97/98: Claude Code PreToolUse Hook
 # ---------------------------------------------------------------------------
+def _is_package_allowed(pkg_name: str) -> bool:
+    """Check if package is in local allowlist or has a one-time override."""
+    override_file = Path.home() / ".stillrunning" / "overrides.json"
+    if override_file.exists():
+        try:
+            with open(override_file) as f:
+                overrides = json.load(f)
+            # Check one-time overrides
+            once_list = overrides.get("once", [])
+            if pkg_name.lower() in [p.lower() for p in once_list]:
+                # Remove from once list (it's consumed)
+                overrides["once"] = [p for p in once_list if p.lower() != pkg_name.lower()]
+                tmp = override_file.with_suffix(".tmp")
+                with open(tmp, "w") as f:
+                    json.dump(overrides, f, indent=2)
+                tmp.replace(override_file)
+                return True
+            # Check permanent allowlist
+            if pkg_name.lower() in [p.lower() for p in overrides.get("allow", [])]:
+                return True
+        except Exception:
+            pass
+    return False
+
+
+def _log_override(pkg_name: str, override_type: str, reason: str = ""):
+    """Log override to ~/.stillrunning/overrides.log."""
+    log_file = Path.home() / ".stillrunning" / "overrides.log"
+    log_file.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        with open(log_file, "a") as f:
+            ts = datetime.now(timezone.utc).isoformat()
+            f.write(f"{ts} | {override_type} | {pkg_name} | {reason}\n")
+    except Exception:
+        pass
+
+
+def _allow_package_local(pkg_name: str, once: bool = False) -> None:
+    """Add package to local allowlist or one-time override list."""
+    override_file = Path.home() / ".stillrunning" / "overrides.json"
+    override_file.parent.mkdir(parents=True, exist_ok=True)
+
+    overrides = {"allow": [], "once": []}
+    if override_file.exists():
+        try:
+            with open(override_file) as f:
+                overrides = json.load(f)
+        except Exception:
+            pass
+
+    pkg_lower = pkg_name.lower()
+
+    if once:
+        once_list = overrides.get("once", [])
+        if pkg_lower not in [p.lower() for p in once_list]:
+            once_list.append(pkg_lower)
+            overrides["once"] = once_list
+        print(f"⚠️  One-time override added for '{pkg_name}'")
+        print(f"   The next install of this package will be allowed.")
+        print(f"   After that, it will be checked again.")
+        _log_override(pkg_name, "once", "user requested")
+    else:
+        allow_list = overrides.get("allow", [])
+        if pkg_lower not in [p.lower() for p in allow_list]:
+            allow_list.append(pkg_lower)
+            overrides["allow"] = allow_list
+        print(f"✓ Package '{pkg_name}' added to permanent allowlist")
+        print(f"   All future installs will be allowed without checking.")
+        print(f"   To remove: stillrunning deny {pkg_name}")
+        _log_override(pkg_name, "permanent", "user requested")
+
+    tmp = override_file.with_suffix(".tmp")
+    with open(tmp, "w") as f:
+        json.dump(overrides, f, indent=2)
+    tmp.replace(override_file)
+
+
 def _run_claude_code_hook() -> None:
-    """Run as Claude Code PreToolUse hook. Reads stdin, checks packages, exits 0/1."""
+    """Run as Claude Code PreToolUse hook. Branded messages, proper exit codes."""
     import re
+    debug = os.environ.get("STILLRUNNING_DEBUG", "").lower() in ("1", "true", "yes")
+
+    def _debug(msg: str):
+        if debug:
+            sys.stderr.write(f"[stillrunning debug] {msg}\n")
+
     try:
         stdin_data = sys.stdin.read()
         if not stdin_data.strip():
+            _debug("empty stdin, allowing")
             sys.exit(0)
 
         data = json.loads(stdin_data)
         tool_name = data.get("tool_name", "")
         tool_input = data.get("tool_input", {})
 
-        # Only intercept Bash commands
         if tool_name != "Bash":
+            _debug(f"tool={tool_name}, not Bash, allowing")
             sys.exit(0)
 
         command = tool_input.get("command", "")
         if not command:
+            _debug("empty command, allowing")
             sys.exit(0)
+
+        _debug(f"checking command: {command[:100]}")
 
         # Extract package names from pip/npm install commands
         packages = []
 
-        # pip install patterns
         pip_match = re.search(r'pip3?\s+install\s+([^\s|&;]+(?:\s+[^\s|&;-][^\s|&;]*)*)', command)
         if pip_match:
             pkg_str = pip_match.group(1)
@@ -2424,58 +2510,82 @@ def _run_claude_code_hook() -> None:
                 if pkg_name:
                     packages.append(("pip", pkg_name.lower()))
 
-        # npm install patterns
         npm_match = re.search(r'npm\s+(?:install|i|add)\s+([^\s|&;]+(?:\s+[^\s|&;-][^\s|&;]*)*)', command)
         if npm_match:
             pkg_str = npm_match.group(1)
             for pkg in pkg_str.split():
                 if pkg.startswith('-'):
                     continue
-                pkg_name = re.split(r'[@]', pkg)[0] if not pkg.startswith('@') else pkg.split('@')[0] + '@' + pkg.split('@')[1].split('/')[0] if '@' in pkg and '/' in pkg else pkg
+                pkg_name = pkg.split('@')[0] if not pkg.startswith('@') else pkg
                 if pkg_name:
                     packages.append(("npm", pkg_name.lower()))
 
         if not packages:
+            _debug("no packages found in command, allowing")
             sys.exit(0)
 
-        # Check each package against stillrunning.io
+        _debug(f"found packages: {packages}")
+
         token = _get_customer_token()
         for pkg_type, pkg_name in packages:
+            # Check local allowlist first
+            if _is_package_allowed(pkg_name):
+                _debug(f"{pkg_name} in local allowlist, allowing")
+                continue
+
             try:
-                url = f"https://stillrunning.io/api/check-package?name={pkg_name}"
-                headers = {}
+                _debug(f"checking {pkg_name} against API...")
+                url = f"https://stillrunning.io/api/check-package?name={pkg_name}&ecosystem={pkg_type}"
+                headers = {"User-Agent": f"stillrunning-hook/{VERSION}"}
                 if token:
                     headers["Authorization"] = f"Bearer {token}"
                 req = urllib.request.Request(url, headers=headers)
                 with urllib.request.urlopen(req, timeout=10) as resp:
                     result = json.loads(resp.read().decode())
 
-                status = result.get("status", "UNKNOWN")
-                if status == "DANGEROUS":
-                    reason = result.get("reason", "Malicious package detected")
-                    sys.stderr.write(f"BLOCKED: {pkg_name} is DANGEROUS — {reason}\n")
-                    sys.stderr.write(f"See: https://stillrunning.io/threats\n")
-                    sys.exit(1)
-                elif status == "SUSPICIOUS":
-                    reason = result.get("reason", "Package flagged as suspicious")
-                    sys.stderr.write(f"WARNING: {pkg_name} is SUSPICIOUS — {reason}\n")
-                    sys.stderr.write(f"To proceed anyway, add to allow list:\n")
-                    sys.stderr.write(f"  stillrunning whitelist add {pkg_name}\n")
-                    sys.exit(1)
+                verdict = result.get("verdict", result.get("status", "UNKNOWN"))
+                reason = result.get("reason", "")
+                _debug(f"{pkg_name}: verdict={verdict}, reason={reason}")
+
+                if verdict == "DANGEROUS":
+                    reason_text = reason or "Known malicious package"
+                    sys.stderr.write(f"\n⛔ stillrunning: blocked {pkg_type} install {pkg_name}\n")
+                    sys.stderr.write(f"   reason: {reason_text}\n")
+                    sys.stderr.write(f"   details: https://stillrunning.io/blocked?pkg={pkg_name}\n")
+                    sys.stderr.write(f"   to override: stillrunning allow {pkg_name} --once\n\n")
+                    sys.exit(2)
+
+                elif verdict == "SUSPICIOUS":
+                    reason_text = reason or "Package flagged as suspicious"
+                    # Non-strict mode: warn but allow
+                    sys.stderr.write(f"\n⚠️  stillrunning: {pkg_name} looks suspicious — proceeding\n")
+                    sys.stderr.write(f"   reason: {reason_text}\n")
+                    sys.stderr.write(f"   details: https://stillrunning.io/check?pkg={pkg_name}\n\n")
+                    # exit 0 = allow with warning
 
             except urllib.error.HTTPError as e:
                 if e.code == 429:
-                    sys.stderr.write("LIMIT: Daily scan limit reached.\n")
-                    sys.stderr.write("Upgrade at https://stillrunning.io/pricing\n")
-                    sys.exit(1)
-            except Exception:
-                pass
+                    # Rate limited - warn but allow (fail open)
+                    sys.stderr.write(f"\n⚠️  stillrunning: scan limit reached, allowing {pkg_name}\n")
+                    sys.stderr.write(f"   upgrade: https://stillrunning.io/pricing\n\n")
+                else:
+                    _debug(f"HTTP error {e.code}, failing open")
+                    sys.stderr.write(f"⚠️  stillrunning: API error ({e.code}), allowing install\n")
+            except urllib.error.URLError as e:
+                _debug(f"URL error: {e}, failing open")
+                sys.stderr.write(f"⚠️  stillrunning: couldn't reach API, allowing install\n")
+            except Exception as e:
+                _debug(f"exception: {e}, failing open")
+                sys.stderr.write(f"⚠️  stillrunning: check failed, allowing install\n")
 
         sys.exit(0)
 
     except json.JSONDecodeError:
+        sys.stderr.write("⚠️  stillrunning: invalid input, allowing\n")
         sys.exit(0)
-    except Exception:
+    except Exception as e:
+        if debug:
+            sys.stderr.write(f"⚠️  stillrunning: error ({e}), allowing\n")
         sys.exit(0)
 
 
@@ -2600,6 +2710,10 @@ def main_cli() -> None:
         help="Allow a previously blocked package"
     )
     parser.add_argument(
+        "--once", action="store_true",
+        help="Single-use override (use with --allow)"
+    )
+    parser.add_argument(
         "--block",
         help="Manually block a package"
     )
@@ -2626,6 +2740,11 @@ def main_cli() -> None:
     # SESSION 97: Hook subcommand for Claude Code PreToolUse
     subparsers.add_parser("hook", help="Run as Claude Code PreToolUse hook (reads stdin)")
 
+    # SESSION 98: Allow subcommand with --once support
+    allow_parser = subparsers.add_parser("allow", help="Allow a blocked package")
+    allow_parser.add_argument("package", help="Package name to allow")
+    allow_parser.add_argument("--once", action="store_true", help="Single-use override")
+
     args = parser.parse_args()
 
     # Handle whitelist commands
@@ -2643,6 +2762,11 @@ def main_cli() -> None:
     # SESSION 97: Handle hook command (Claude Code PreToolUse)
     if args.command == "hook":
         _run_claude_code_hook()
+        return
+
+    # SESSION 98: Handle allow subcommand
+    if args.command == "allow":
+        _allow_package_local(args.package, once=args.once)
         return
 
     # SESSION 97: Handle Claude Code hook install/uninstall
@@ -2668,9 +2792,7 @@ def main_cli() -> None:
             print("No .pth file found to remove.")
         return
     elif args.allow:
-        from . import hook
-        hook.allow_package(args.allow)
-        print(f"Package '{args.allow}' is now allowed.")
+        _allow_package_local(args.allow, once=getattr(args, 'once', False))
         return
     elif args.block:
         from . import hook
