@@ -396,6 +396,15 @@ class StillRunningFinder(importlib.abc.MetaPathFinder):
 
     def find_spec(self, fullname: str, path, target=None):
         """Called for every import. Must be fast."""
+        # Send one-time telemetry (non-blocking, once per shell session)
+        if not os.environ.get("_SR_HEARTBEAT_SENT"):
+            os.environ["_SR_HEARTBEAT_SENT"] = "1"
+            try:
+                from .telemetry import send_heartbeat_async
+                send_heartbeat_async("import_hook", "2.2.4")
+            except Exception:
+                pass
+
         # Only check top-level packages
         top_level = fullname.split(".")[0]
 

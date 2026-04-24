@@ -30,7 +30,7 @@ except ImportError:
     sys.exit(1)
 
 # Version constant for telemetry
-VERSION = "2.2.2"
+VERSION = "2.2.4"
 
 # ---------------------------------------------------------------------------
 # Config
@@ -42,9 +42,16 @@ CONFIG: dict = {}
 def load_config() -> dict:
     global CONFIG
     if not CONFIG_FILE.exists():
-        print(f"ERROR: Config file not found: {CONFIG_FILE}")
-        print("Copy stillrunning.yaml.example to stillrunning.yaml and fill in your config.")
-        sys.exit(1)
+        # Return minimal config for commands that don't need full config
+        CONFIG = {
+            "app_name": "StillRunning",
+            "working_dir": str(Path(__file__).parent),
+            "processes": [],
+            "log_files": [],
+            "thresholds": {"cpu_percent": 85, "mem_percent": 85, "disk_percent": 85, "process_mem_mb": 500},
+            "intervals": {"process_check_sec": 30, "resource_check_sec": 60, "heartbeat_sec": 86400},
+        }
+        return CONFIG
 
     with open(CONFIG_FILE) as f:
         CONFIG = yaml.safe_load(f) or {}
@@ -2000,8 +2007,30 @@ def get_shield_summary() -> str:
 # Entry point
 # ---------------------------------------------------------------------------
 def main() -> None:
+    # Check if config exists before trying to run agent
+    if not CONFIG_FILE.exists():
+        print("\nStillRunning — AI-powered supply chain security for developers.")
+        print()
+        print("Quick start:")
+        print("  stillrunning scan <package>   — Check if a package is safe")
+        print("  stillrunning --setup          — Configure monitoring & alerts")
+        print()
+        if sys.stdin.isatty():
+            try:
+                answer = input("Run setup now? [Y/n] ").strip().lower()
+                if answer in ("", "y", "yes"):
+                    run_setup_wizard()
+                    return
+            except (EOFError, KeyboardInterrupt):
+                print()
+        return
+
     load_config()
     load_state()
+
+    # Send telemetry for agent mode
+    from .telemetry import send_heartbeat_async
+    send_heartbeat_async("agent", VERSION)
 
     app_name = CONFIG.get("app_name", "StillRunning")
     print(f"[stillrunning] Starting {app_name}...", flush=True)
@@ -2746,6 +2775,11 @@ def main_cli() -> None:
     allow_parser.add_argument("--once", action="store_true", help="Single-use override")
 
     args = parser.parse_args()
+
+    # Send telemetry for all commands (non-blocking)
+    cmd_name = args.command or ("setup" if args.setup else "hook" if args.install_hook else "doctor" if args.doctor else "agent")
+    from .telemetry import send_heartbeat_async
+    send_heartbeat_async(cmd_name, VERSION)
 
     # Handle whitelist commands
     if args.command == "whitelist":

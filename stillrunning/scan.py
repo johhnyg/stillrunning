@@ -399,6 +399,13 @@ def print_report(filepath: str, score: int, reasons: list, analysis: dict):
 # ─── Main ────────────────────────────────────────────────────────────────────
 
 def main():
+    # Send telemetry
+    try:
+        from .telemetry import send_heartbeat_async
+        send_heartbeat_async("scan", "2.2.4")
+    except Exception:
+        pass
+
     if len(sys.argv) < 2:
         print(f"Usage: python3 {sys.argv[0]} <file>")
         print("Supported: .py, .pkl, .pickle files")
