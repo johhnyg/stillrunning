@@ -1,5 +1,32 @@
 # Changelog
 
+## v2.5.0 — April 24, 2026
+
+**Completeness release — all deferred items from v2.4.0 shipped**
+
+### Added
+- **Virtual environment interception** via sitecustomize.py (survives `source .venv/bin/activate`)
+- **`stillrunning venv-install`** command to enable venv persistence
+- **`stillrunning venv-uninstall`** command to cleanly remove venv integration
+- **Debug logging infrastructure** — set STILLRUNNING_DEBUG=1 for verbose output
+
+### Changed
+- **Exception handlers audited** — critical handlers now log to debug instead of silent pass
+- **VERSION constant** bumped to 2.5.0 in cli.py
+
+### Internal
+- **stillrunning/venv_hook.py** — lightweight hook for sitecustomize.py integration
+- **12 new tests** for venv persistence and logging infrastructure
+- **40 total tests** passing
+
+### Deferred
+- A2 (cache version-aware): Requires dashboard.py changes — documented in v2.6.0-followups.md
+- A5 (async scan endpoint): Requires dashboard.py changes — documented in v2.6.0-followups.md
+- F (GitHub Action): Separate repo — documented in v2.6.0-followups.md
+- A4 (exception audit): ~20 handlers updated, remaining documented for future work
+
+---
+
 ## v2.4.0 — April 24, 2026
 
 **Refinement release — closes HIGH-severity gaps from product audit**
