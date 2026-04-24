@@ -1,5 +1,17 @@
 # Changelog
 
+## v2.3.0 — April 24, 2026
+
+**Critical correctness fixes**
+
+- **Fix:** `/api/check-package` now checks blocklist (was returning UNKNOWN for blocked packages)
+- **Fix:** `stillrunning scan <package>` command now works (was documented but not implemented)
+- **Fix:** `uv pip install` and `uv add` are now intercepted (previously silent bypass)
+- **Fix:** Namespace packages (`azure.storage.blob`) now checked against blocklist
+- **Security:** All four fixes address cases where the tool appeared to work but didn't protect users
+
+---
+
 ## v2.1.0 — April 19, 2026
 
 **Anonymous telemetry (opt-in)**

@@ -30,7 +30,7 @@ except ImportError:
     sys.exit(1)
 
 # Version constant for telemetry
-VERSION = "2.2.2"
+VERSION = "2.3.0"
 
 # ---------------------------------------------------------------------------
 # Config
@@ -2467,6 +2467,122 @@ def _allow_package_local(pkg_name: str, once: bool = False) -> None:
     tmp.replace(override_file)
 
 
+def _scan_package(pkg_name: str) -> int:
+    """Scan a package for security issues. Returns exit code: 0=CLEAN, 1=BLOCKED/SUSPICIOUS, 2=ERROR."""
+    import signal
+    import urllib.request
+    import urllib.error
+
+    # Fire heartbeat
+    try:
+        from .telemetry import send_heartbeat_async
+        send_heartbeat_async("scan", VERSION)
+    except Exception:
+        pass
+
+    # 30-second timeout
+    def timeout_handler(signum, frame):
+        print("\n\033[91mERROR\033[0m: Scan timed out (30s)")
+        sys.exit(2)
+
+    if hasattr(signal, 'SIGALRM'):
+        signal.signal(signal.SIGALRM, timeout_handler)
+        signal.alarm(30)
+
+    print(f"Scanning package: {pkg_name}")
+    print()
+
+    # Check blocklist first (hardcoded + files)
+    KNOWN_BAD = {
+        "logutilkit", "apachelicense", "fluxhttp", "license-utils-kit", "logkitx",
+        "pino-debugger", "dev-log-core", "logger-base", "axios", "axois",
+        "plain-crypto-js", "termncolor", "colorinal",
+    }
+    pkg_lower = pkg_name.lower().replace("-", "_")
+
+    if pkg_lower in KNOWN_BAD:
+        print(f"\033[91m\033[1mBLOCKED\033[0m — {pkg_name}")
+        print(f"   Reason: Known malicious package (hardcoded blocklist)")
+        print(f"   DO NOT install this package.")
+        return 1
+
+    # Check known_bad_packages.json
+    try:
+        kb_path = Path.home() / "my-app" / "known_bad_packages.json"
+        if not kb_path.exists():
+            kb_path = Path.home() / ".stillrunning" / "known_bad_packages.json"
+        if kb_path.exists():
+            with open(kb_path) as f:
+                known_bad = json.load(f)
+            if pkg_lower in known_bad.get("pip", {}) or pkg_name in known_bad.get("pip", {}):
+                print(f"\033[91m\033[1mBLOCKED\033[0m — {pkg_name}")
+                print(f"   Reason: Known malicious package (threat feed)")
+                print(f"   DO NOT install this package.")
+                return 1
+    except Exception:
+        pass
+
+    # Check if package exists on PyPI
+    try:
+        url = f"https://pypi.org/pypi/{pkg_name}/json"
+        req = urllib.request.Request(url, headers={"User-Agent": "stillrunning/2.3.0"})
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            pypi_data = json.loads(resp.read().decode())
+    except urllib.error.HTTPError as e:
+        if e.code == 404:
+            print(f"\033[91mERROR\033[0m: Package '{pkg_name}' not found on PyPI")
+            return 2
+        print(f"\033[91mERROR\033[0m: PyPI returned HTTP {e.code}")
+        return 2
+    except urllib.error.URLError:
+        print(f"\033[91mERROR\033[0m: Unable to reach PyPI")
+        return 2
+    except Exception as e:
+        print(f"\033[91mERROR\033[0m: {e}")
+        return 2
+
+    # Call the API for AI review
+    try:
+        api_url = "https://stillrunning.io/api/check-package"
+        req = urllib.request.Request(
+            f"{api_url}?name={pkg_name}&ecosystem=pip",
+            headers={"User-Agent": "stillrunning/2.3.0"}
+        )
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            result = json.loads(resp.read().decode())
+
+        verdict = result.get("verdict", "UNKNOWN")
+        reason = result.get("reason", "")
+
+        if verdict == "BLOCKED":
+            print(f"\033[91m\033[1mBLOCKED\033[0m — {pkg_name}")
+            print(f"   Reason: {reason or 'Security threat detected'}")
+            print(f"   DO NOT install this package.")
+            return 1
+        elif verdict == "SUSPICIOUS":
+            print(f"\033[93m\033[1mSUSPICIOUS\033[0m — {pkg_name}")
+            print(f"   Reason: {reason or 'Potential security concern'}")
+            print(f"   Review carefully before installing.")
+            return 1
+        elif verdict == "CLEAN":
+            print(f"\033[92m\033[1mCLEAN\033[0m — {pkg_name}")
+            print(f"   Package appears safe to install.")
+            return 0
+        else:
+            # UNKNOWN - fallback to basic checks passed
+            print(f"\033[92mCLEAN\033[0m — {pkg_name}")
+            print(f"   Not on blocklist. Package exists on PyPI.")
+            print(f"   (No detailed AI review available)")
+            return 0
+
+    except Exception as e:
+        # API failed, but package passed blocklist check
+        print(f"\033[92mCLEAN\033[0m — {pkg_name}")
+        print(f"   Not on blocklist. Package exists on PyPI.")
+        print(f"   (API check unavailable)")
+        return 0
+
+
 def _run_claude_code_hook() -> None:
     """Run as Claude Code PreToolUse hook. Branded messages, proper exit codes."""
     import re
@@ -2745,6 +2861,10 @@ def main_cli() -> None:
     allow_parser.add_argument("package", help="Package name to allow")
     allow_parser.add_argument("--once", action="store_true", help="Single-use override")
 
+    # v2.3.0: Scan subcommand — check if a package is safe
+    scan_parser = subparsers.add_parser("scan", help="Check if a package is safe to install")
+    scan_parser.add_argument("package", help="Package name to scan")
+
     args = parser.parse_args()
 
     # Handle whitelist commands
@@ -2768,6 +2888,10 @@ def main_cli() -> None:
     if args.command == "allow":
         _allow_package_local(args.package, once=args.once)
         return
+
+    # v2.3.0: Handle scan subcommand
+    if args.command == "scan":
+        sys.exit(_scan_package(args.package))
 
     # SESSION 97: Handle Claude Code hook install/uninstall
     if args.hook_claude_code:

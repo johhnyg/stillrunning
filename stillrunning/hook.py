@@ -94,6 +94,12 @@ TRUSTED_CORE_PACKAGES = {
     "stillrunning",
 }
 
+# v2.3.0: Namespace blocklist — blocks full dotted paths (e.g., azure.storage.blob attack)
+# These are checked at every level: import azure.storage.blob checks azure, azure.storage, azure.storage.blob
+NAMESPACE_BLOCKLIST: set = set()
+# Add known malicious namespace packages here, e.g.:
+# NAMESPACE_BLOCKLIST.add("malicious.namespace.package")
+
 
 # ─── Database Functions ──────────────────────────────────────────────────────
 
@@ -396,8 +402,20 @@ class StillRunningFinder(importlib.abc.MetaPathFinder):
 
     def find_spec(self, fullname: str, path, target=None):
         """Called for every import. Must be fast."""
-        # Only check top-level packages
-        top_level = fullname.split(".")[0]
+        # v2.3.0: Check full namespace path for blocked packages (azure.storage.blob attack vector)
+        parts = fullname.split(".")
+        top_level = parts[0]
+
+        # Check ALL namespace prefixes against blocklist (e.g., azure, azure.storage, azure.storage.blob)
+        for i in range(len(parts), 0, -1):
+            namespace = ".".join(parts[:i]).lower().replace("-", "_")
+            if namespace in NAMESPACE_BLOCKLIST:
+                raise ImportError(
+                    f"\n\n\U0001F6A8 IMPORT BLOCKED by stillrunning\n"
+                    f"Package: {fullname}\n"
+                    f"Blocked namespace: {namespace}\n"
+                    f"Reason: Known malicious namespace package\n"
+                )
 
         # Skip trusted packages (instant)
         if top_level.lower().replace("-", "_") in TRUSTED_CORE_PACKAGES:

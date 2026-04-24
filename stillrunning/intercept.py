@@ -461,7 +461,8 @@ def main():
     manager = sys.argv[1].lower()
     args = sys.argv[2:]
 
-    if manager not in ("pip", "pip3", "npm", "yarn", "pnpm"):
+    # v2.3.0: Added uv support
+    if manager not in ("pip", "pip3", "npm", "yarn", "pnpm", "uv"):
         print(f"{RED}[intercept]{RESET} Unknown manager: {manager}")
         sys.exit(1)
 
@@ -471,10 +472,25 @@ def main():
         print(f"{RED}[intercept]{RESET} Package manager not found: {manager}")
         sys.exit(1)
 
+    # v2.3.0: Handle uv subcommands (uv pip install, uv add)
+    is_uv_pip = False
+    if manager == "uv" and args:
+        if args[0] == "pip" and len(args) > 1:
+            # "uv pip install foo" -> treat as pip install
+            is_uv_pip = True
+            args = args[1:]  # Remove "pip" from args
+        elif args[0] == "add":
+            # "uv add foo" -> intercept as pip install
+            pass
+        elif args[0] not in ("install", "i", "add"):
+            # Non-install uv commands pass through
+            result = subprocess.run([manager_path] + sys.argv[2:])
+            sys.exit(result.returncode)
+
     # Only intercept install commands
     if not args or args[0] not in ("install", "i", "add"):
         # Pass through non-install commands
-        result = subprocess.run([manager_path] + args)
+        result = subprocess.run([manager_path] + (sys.argv[2:] if not is_uv_pip else args))
         sys.exit(result.returncode)
 
     # Extract packages to check
@@ -491,7 +507,8 @@ def main():
     warnings = []
 
     for pkg in packages:
-        if manager in ("pip", "pip3"):
+        # v2.3.0: uv uses PyPI, treat as pip
+        if manager in ("pip", "pip3", "uv"):
             status, reason = check_pypi_package(pkg)
         else:
             status, reason = check_npm_package(pkg)
