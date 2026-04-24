@@ -30,7 +30,22 @@ except ImportError:
     sys.exit(1)
 
 # Version constant for telemetry
-VERSION = "2.3.0"
+VERSION = "2.5.0"
+
+# v2.5.0: Simple logger for exception visibility
+import logging
+_logger = logging.getLogger("stillrunning")
+_logger.addHandler(logging.NullHandler())  # No output by default
+
+def _enable_debug_logging():
+    """Enable debug logging to stderr."""
+    handler = logging.StreamHandler(sys.stderr)
+    handler.setFormatter(logging.Formatter("[stillrunning] %(levelname)s: %(message)s"))
+    _logger.addHandler(handler)
+    _logger.setLevel(logging.DEBUG)
+
+if os.environ.get("STILLRUNNING_DEBUG", "").lower() in ("1", "true", "yes"):
+    _enable_debug_logging()
 
 # ---------------------------------------------------------------------------
 # Config
@@ -117,8 +132,8 @@ def load_state() -> None:
                 _state["restart_cooldowns"] = data.get("restart_cooldowns", {})
                 _state["consecutive_failures"] = data.get("consecutive_failures", {})
                 _state["disabled_processes"] = set(data.get("disabled_processes", []))
-    except Exception:
-        pass
+    except Exception as e:
+        _logger.debug("load_state failed (fresh start): %s", e)
 
 
 def save_state() -> None:
@@ -134,8 +149,8 @@ def save_state() -> None:
             }, f, indent=2)
         import os
         os.replace(tmp_file, state_file)
-    except Exception:
-        pass
+    except Exception as e:
+        _logger.debug("save_state failed: %s", e)
 
 
 # ---------------------------------------------------------------------------
@@ -2642,6 +2657,111 @@ def _scan_manifest(path_str: str) -> int:
     return 0
 
 
+# ─── v2.5.0: Venv Persistence ────────────────────────────────────────────────
+
+_SITECUSTOMIZE_MARKER = "# Added by stillrunning v2.5.0"
+_SITECUSTOMIZE_BLOCK = f'''{_SITECUSTOMIZE_MARKER}
+try:
+    import stillrunning.venv_hook
+except ImportError:
+    pass
+# End stillrunning block
+'''
+
+
+def _get_user_site_packages() -> Path:
+    """Get the user site-packages directory."""
+    import site
+    user_site = site.getusersitepackages()
+    return Path(user_site)
+
+
+def _venv_install() -> int:
+    """Install sitecustomize.py hook for venv persistence."""
+    try:
+        user_site = _get_user_site_packages()
+        user_site.mkdir(parents=True, exist_ok=True)
+
+        sitecustomize_path = user_site / "sitecustomize.py"
+
+        if sitecustomize_path.exists():
+            content = sitecustomize_path.read_text()
+            if _SITECUSTOMIZE_MARKER in content:
+                print(f"stillrunning venv hook already installed in {sitecustomize_path}")
+                return 0
+            new_content = content.rstrip() + "\n\n" + _SITECUSTOMIZE_BLOCK
+        else:
+            new_content = _SITECUSTOMIZE_BLOCK
+
+        tmp_path = sitecustomize_path.with_suffix(".tmp")
+        tmp_path.write_text(new_content)
+        tmp_path.replace(sitecustomize_path)
+
+        print(f"Venv persistence installed!")
+        print(f"  File: {sitecustomize_path}")
+        print()
+        print("stillrunning will now intercept packages even inside virtual environments.")
+        print("Remove with: stillrunning venv-uninstall")
+        return 0
+
+    except PermissionError:
+        print(f"Permission denied. Try: sudo stillrunning venv-install")
+        return 1
+    except Exception as e:
+        print(f"Error installing venv hook: {e}")
+        return 1
+
+
+def _venv_uninstall() -> int:
+    """Remove sitecustomize.py hook."""
+    try:
+        user_site = _get_user_site_packages()
+        sitecustomize_path = user_site / "sitecustomize.py"
+
+        if not sitecustomize_path.exists():
+            print("No sitecustomize.py found. Nothing to remove.")
+            return 0
+
+        content = sitecustomize_path.read_text()
+        if _SITECUSTOMIZE_MARKER not in content:
+            print("stillrunning block not found in sitecustomize.py. Nothing to remove.")
+            return 0
+
+        lines = content.split("\n")
+        new_lines = []
+        skip = False
+        for line in lines:
+            if _SITECUSTOMIZE_MARKER in line:
+                skip = True
+                continue
+            if skip and "# End stillrunning block" in line:
+                skip = False
+                continue
+            if not skip:
+                new_lines.append(line)
+
+        new_content = "\n".join(new_lines).strip()
+
+        if not new_content:
+            sitecustomize_path.unlink()
+            print(f"Removed {sitecustomize_path} (was empty after removing stillrunning block)")
+        else:
+            tmp_path = sitecustomize_path.with_suffix(".tmp")
+            tmp_path.write_text(new_content + "\n")
+            tmp_path.replace(sitecustomize_path)
+            print(f"Removed stillrunning block from {sitecustomize_path}")
+
+        print("Venv persistence removed.")
+        return 0
+
+    except PermissionError:
+        print(f"Permission denied. Try: sudo stillrunning venv-uninstall")
+        return 1
+    except Exception as e:
+        print(f"Error removing venv hook: {e}")
+        return 1
+
+
 def _run_claude_code_hook() -> None:
     """Run as Claude Code PreToolUse hook. Branded messages, proper exit codes."""
     import re
@@ -2928,6 +3048,10 @@ def main_cli() -> None:
     manifest_parser = subparsers.add_parser("scan-manifest", help="Scan a requirements.txt or similar file")
     manifest_parser.add_argument("path", help="Path to manifest file")
 
+    # v2.5.0: Venv persistence commands
+    subparsers.add_parser("venv-install", help="Install sitecustomize.py hook for venv persistence")
+    subparsers.add_parser("venv-uninstall", help="Remove sitecustomize.py hook")
+
     args = parser.parse_args()
 
     # Handle whitelist commands
@@ -2959,6 +3083,12 @@ def main_cli() -> None:
     # v2.4.0: Handle scan-manifest subcommand
     if args.command == "scan-manifest":
         sys.exit(_scan_manifest(args.path))
+
+    # v2.5.0: Handle venv-install/uninstall
+    if args.command == "venv-install":
+        sys.exit(_venv_install())
+    if args.command == "venv-uninstall":
+        sys.exit(_venv_uninstall())
 
     # SESSION 97: Handle Claude Code hook install/uninstall
     if args.hook_claude_code:
