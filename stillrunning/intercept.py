@@ -8,6 +8,9 @@ Usage:
   stillrunning-intercept npm install <package>
 
 Called automatically when stillrunning wraps pip/npm.
+
+v2.4.0: Added support for poetry, pdm, pipenv, conda, pixi, bun, pnpm.
+        Added manifest file parsing for requirements.txt, pyproject.toml, etc.
 """
 
 import json
@@ -20,17 +23,14 @@ from pathlib import Path
 
 # ─── Constants ───────────────────────────────────────────────────────────────
 
-# Use ~/.stillrunning for customer installs (not ~/my-app which is server-only)
 STILLRUNNING_DIR = Path.home() / ".stillrunning"
 STILLRUNNING_DIR.mkdir(exist_ok=True)
 
-# For backwards compatibility with server install
 _server_env = Path.home() / "my-app" / ".env"
 _server_known_bad = Path.home() / "my-app" / "known_bad_packages.json"
 ENV_FILE = _server_env if _server_env.exists() else STILLRUNNING_DIR / ".env"
 KNOWN_BAD_JSON = _server_known_bad if _server_known_bad.exists() else STILLRUNNING_DIR / "known_bad_packages.json"
 
-# Known malicious packages — block all versions (hardcoded baseline)
 KNOWN_BAD_PIP = {
     "logutilkit": ["any"],
     "apachelicense": ["any"],
@@ -51,6 +51,34 @@ KNOWN_BAD_NPM = {
     "node-log-helper": ["any"],
 }
 
+# v2.4.0: All supported package managers
+SUPPORTED_MANAGERS = {
+    "pip", "pip3", "npm", "yarn", "pnpm", "uv", "bun",
+    "poetry", "pdm", "pipenv", "conda", "pixi"
+}
+
+INSTALL_COMMANDS = {
+    "pip": ("install",),
+    "pip3": ("install",),
+    "npm": ("install", "i", "add", "ci"),
+    "yarn": ("add", "install"),
+    "pnpm": ("add", "install", "i"),
+    "bun": ("add", "install", "i"),
+    "uv": ("pip", "add", "install"),
+    "poetry": ("add", "install"),
+    "pdm": ("add", "install"),
+    "pipenv": ("install",),
+    "conda": ("install", "create"),
+    "pixi": ("add", "install"),
+}
+
+MANAGER_ECOSYSTEM = {
+    "pip": "pip", "pip3": "pip", "uv": "pip", "poetry": "pip",
+    "pdm": "pip", "pipenv": "pip", "pixi": "pip",
+    "npm": "npm", "yarn": "npm", "pnpm": "npm", "bun": "npm",
+    "conda": "conda",
+}
+
 
 def _load_auto_synced_known_bad() -> tuple[dict, dict]:
     """Load auto-synced known-bad packages from threat_feed."""
@@ -67,19 +95,21 @@ def _load_auto_synced_known_bad() -> tuple[dict, dict]:
     return pip_extra, npm_extra
 
 
-# Threat cache location
 _server_cache = Path.home() / "my-app" / "threat_cache.json"
 THREAT_CACHE_JSON = _server_cache if _server_cache.exists() else STILLRUNNING_DIR / "threat_cache.json"
-THREAT_CACHE_TTL_SECONDS = 3600  # 60 minutes
-
-# ─── Scan Usage Tracking ─────────────────────────────────────────────────────
+THREAT_CACHE_TTL_SECONDS = 3600
 
 SCAN_USAGE_FILE = STILLRUNNING_DIR / "scan_usage.json"
 FREE_DAILY_LIMIT = 10
 
+RED = "\033[91m"
+YELLOW = "\033[93m"
+GREEN = "\033[92m"
+BOLD = "\033[1m"
+RESET = "\033[0m"
+
 
 def _get_scan_usage() -> dict:
-    """Get today's scan count."""
     from datetime import date
     today = str(date.today())
     try:
@@ -94,7 +124,6 @@ def _get_scan_usage() -> dict:
 
 
 def _increment_scan_usage(pkg_count: int = 1) -> int:
-    """Increment scan count, return new total."""
     usage = _get_scan_usage()
     usage["count"] += pkg_count
     tmp = SCAN_USAGE_FILE.with_suffix(".tmp")
@@ -105,7 +134,6 @@ def _increment_scan_usage(pkg_count: int = 1) -> int:
 
 
 def _show_upgrade_prompt(scans_used: int) -> None:
-    """Show upgrade prompt based on scan usage."""
     remaining = FREE_DAILY_LIMIT - scans_used
     if remaining <= 3 and remaining > 0:
         print(f"\n{YELLOW}Scans remaining today: {remaining}/{FREE_DAILY_LIMIT}{RESET}")
@@ -117,12 +145,10 @@ def _show_upgrade_prompt(scans_used: int) -> None:
 
 
 def _load_threat_cache():
-    """Load cached threat rules from API."""
     try:
         if THREAT_CACHE_JSON.exists():
             with open(THREAT_CACHE_JSON) as f:
                 data = json.load(f)
-            # Check TTL
             cached_at = data.get("cached_at", 0)
             if time.time() - cached_at < THREAT_CACHE_TTL_SECONDS:
                 return data.get("packages", {})
@@ -132,8 +158,6 @@ def _load_threat_cache():
 
 
 def _fetch_threat_rules_from_api():
-    """Fetch threat rules from stillrunning.io API. Returns dict or None."""
-    # Get token from .env
     token = None
     if ENV_FILE.exists():
         with open(ENV_FILE) as f:
@@ -147,17 +171,14 @@ def _fetch_threat_rules_from_api():
         return None
 
     try:
-        import time
         url = "https://stillrunning.io/api/threats/rules"
         req = urllib.request.Request(url, headers={"Authorization": f"Bearer {token}"})
         with urllib.request.urlopen(req, timeout=10) as resp:
             if resp.status == 200:
                 data = json.loads(resp.read().decode())
                 packages = data.get("packages", {})
-                # Cache the result atomically (SESSION 90)
                 cache_data = {"packages": packages, "cached_at": time.time(), "version": data.get("version")}
                 try:
-                    import os
                     tmp_path = str(THREAT_CACHE_JSON) + ".tmp"
                     with open(tmp_path, "w") as f:
                         json.dump(cache_data, f, indent=2)
@@ -171,27 +192,19 @@ def _fetch_threat_rules_from_api():
 
 
 def _get_api_rules():
-    """Get rules from API with cache fallback."""
-    # Try cache first
     cached = _load_threat_cache()
     if cached:
         return cached
-
-    # Try API
     api_rules = _fetch_threat_rules_from_api()
     if api_rules:
         return api_rules
-
-    # Fallback to empty (will use hardcoded only)
     return {}
 
 
 def get_known_bad_pip() -> dict:
-    """Get merged known-bad pip packages (hardcoded + auto-synced + API)."""
     extra_pip, _ = _load_auto_synced_known_bad()
     merged = dict(KNOWN_BAD_PIP)
     merged.update(extra_pip)
-    # SESSION 72: Add API rules
     api_rules = _get_api_rules()
     for pkg, info in api_rules.items():
         if info.get("ecosystem") in ("pip", "unknown") and pkg not in merged:
@@ -200,28 +213,17 @@ def get_known_bad_pip() -> dict:
 
 
 def get_known_bad_npm() -> dict:
-    """Get merged known-bad npm packages (hardcoded + auto-synced + API)."""
     _, extra_npm = _load_auto_synced_known_bad()
     merged = dict(KNOWN_BAD_NPM)
     merged.update(extra_npm)
-    # SESSION 72: Add API rules
     api_rules = _get_api_rules()
     for pkg, info in api_rules.items():
         if info.get("ecosystem") in ("npm", "unknown") and pkg not in merged:
             merged[pkg] = info.get("versions", ["any"])
     return merged
 
-# Colors
-RED = "\033[91m"
-YELLOW = "\033[93m"
-GREEN = "\033[92m"
-BOLD = "\033[1m"
-RESET = "\033[0m"
-
-# ─── Telegram Alert ──────────────────────────────────────────────────────────
 
 def send_telegram_alert(package: str, reason: str):
-    """Send Telegram alert for blocked package."""
     bot_token = None
     chat_id = None
 
@@ -239,25 +241,16 @@ def send_telegram_alert(package: str, reason: str):
 
     try:
         import urllib.parse
-
         msg = f"\U0001F6A8 [intercept] BLOCKED — {package}\nReason: {reason}"
         url = f"https://api.telegram.org/bot{bot_token}/sendMessage"
-        data = urllib.parse.urlencode({
-            "chat_id": chat_id,
-            "text": msg
-        }).encode()
-
+        data = urllib.parse.urlencode({"chat_id": chat_id, "text": msg}).encode()
         req = urllib.request.Request(url, data=data)
         urllib.request.urlopen(req, timeout=10)
     except Exception:
         pass
 
 
-# ─── Server-side AI Scan (SESSION 88) ────────────────────────────────────────
-
 def _get_token() -> str:
-    """Get customer token from config or .env."""
-    # Try config file first
     config_file = Path(__file__).parent / "stillrunning.yaml"
     if config_file.exists():
         try:
@@ -270,7 +263,6 @@ def _get_token() -> str:
         except Exception:
             pass
 
-    # Fall back to .env
     env_file = Path.home() / "stillrunning.yaml"
     if env_file.exists():
         try:
@@ -287,15 +279,6 @@ def _get_token() -> str:
 
 
 def call_ai_scan(package: str, ecosystem: str = "pip") -> tuple[str, str] | None:
-    """
-    Call stillrunning.io/api/scan for server-side AI review.
-    Requires AI tier or higher.
-
-    Returns: (status, reason) or None if scan unavailable/failed
-    - "BLOCKED", reason if DANGEROUS
-    - "WARN", reason if SUSPICIOUS
-    - None if CLEAN or scan failed
-    """
     token = _get_token()
     if not token:
         return None
@@ -313,16 +296,14 @@ def call_ai_scan(package: str, ecosystem: str = "pip") -> tuple[str, str] | None
             data=payload,
             headers={
                 "Content-Type": "application/json",
-                "User-Agent": "stillrunning-intercept/1.9.0"
+                "User-Agent": "stillrunning-intercept/2.4.0"
             }
         )
 
         with urllib.request.urlopen(req, timeout=30) as resp:
             result = json.loads(resp.read().decode())
 
-        # Check for errors (tier/rate limit)
         if "error" in result:
-            # Silently skip AI review if not available
             return None
 
         verdict = result.get("verdict", "CLEAN")
@@ -336,42 +317,23 @@ def call_ai_scan(package: str, ecosystem: str = "pip") -> tuple[str, str] | None
             reason = reasons[0] if reasons else f"AI review: suspicious (score {score})"
             return "WARN", reason
 
-        return None  # CLEAN
+        return None
 
     except Exception:
-        # Silently fail - don't block installs if API is down
         return None
 
 
-# ─── PyPI Check ──────────────────────────────────────────────────────────────
-
 def check_pypi_package(package: str, version: str = None) -> tuple[str, str]:
-    """
-    Check PyPI package.
-    Returns: (status, reason)
-    status: "BLOCKED", "WARN", "CLEAN"
-    """
-    # Check known-bad list (merged: hardcoded + auto-synced)
     known_bad = get_known_bad_pip()
     if package.lower() in known_bad:
         return "BLOCKED", f"Package '{package}' is in known-malicious list"
 
-    # Query PyPI for package info
     try:
         url = f"https://pypi.org/pypi/{package}/json"
-        req = urllib.request.Request(url, headers={"User-Agent": "stillrunning/1.5.0"})
+        req = urllib.request.Request(url, headers={"User-Agent": "stillrunning/2.4.0"})
         with urllib.request.urlopen(req, timeout=15) as resp:
-            data = json.loads(resp.read().decode())
+            json.loads(resp.read().decode())
 
-        info = data.get("info", {})
-
-        # Check if package is very new (< 30 days)
-        # This would require parsing upload_time, simplified here
-
-        # Check download count (if available)
-        # PyPI doesn't expose this easily, would need BigQuery
-
-        # Server-side AI review (SESSION 88)
         ai_result = call_ai_scan(package, "pip")
         if ai_result:
             return ai_result
@@ -386,26 +348,17 @@ def check_pypi_package(package: str, version: str = None) -> tuple[str, str]:
         return "WARN", f"PyPI check failed: {e}"
 
 
-# ─── npm Check ───────────────────────────────────────────────────────────────
-
 def check_npm_package(package: str, version: str = None) -> tuple[str, str]:
-    """
-    Check npm package.
-    Returns: (status, reason)
-    """
-    # Check known-bad list (merged: hardcoded + auto-synced)
     known_bad = get_known_bad_npm()
     if package.lower() in known_bad:
         return "BLOCKED", f"Package '{package}' is in known-malicious list"
 
-    # Query npm registry
     try:
         url = f"https://registry.npmjs.org/{package}"
-        req = urllib.request.Request(url, headers={"User-Agent": "stillrunning/1.5.0"})
+        req = urllib.request.Request(url, headers={"User-Agent": "stillrunning/2.4.0"})
         with urllib.request.urlopen(req, timeout=15) as resp:
-            data = json.loads(resp.read().decode())
+            json.loads(resp.read().decode())
 
-        # Server-side AI review (SESSION 88)
         ai_result = call_ai_scan(package, "npm")
         if ai_result:
             return ai_result
@@ -422,93 +375,56 @@ def check_npm_package(package: str, version: str = None) -> tuple[str, str]:
 
 # ─── Main Logic ──────────────────────────────────────────────────────────────
 
-def extract_packages(args: list, manager: str) -> list:
-    """Extract package names from command args."""
+def extract_packages_and_manifests(args: list, manager: str) -> tuple[list, list]:
+    """Extract package names and manifest files from command args."""
     packages = []
-
-    # Skip flags and the 'install' command
+    manifests = []
     skip_next = False
-    for arg in args:
+    editable_next = False
+
+    for i, arg in enumerate(args):
         if skip_next:
             skip_next = False
             continue
+        if editable_next:
+            editable_next = False
+            continue
 
         if arg.startswith("-"):
-            # Some flags take values
-            if arg in ("-r", "--requirement", "-e", "--editable"):
+            if arg in ("-r", "--requirement"):
                 skip_next = True
+                if i + 1 < len(args):
+                    manifests.append(Path(args[i + 1]))
+            elif arg in ("-e", "--editable"):
+                editable_next = True
+            elif arg.startswith("-r"):
+                manifests.append(Path(arg[2:]))
+            elif arg.startswith("--requirement="):
+                manifests.append(Path(arg.split("=", 1)[1]))
             continue
 
-        if arg in ("install", "i", "add"):
+        if arg in ("install", "i", "add", "ci", "create", "pip"):
             continue
 
-        # This is a package name (possibly with version specifier)
-        pkg = arg.split("==")[0].split(">=")[0].split("<=")[0].split("@")[0]
-        if pkg:
-            packages.append(pkg)
+        if arg.startswith("git+") or arg.startswith("https://") or arg.startswith("http://"):
+            continue
+        if arg.startswith(".") or arg.startswith("/") or arg.startswith("~"):
+            continue
 
-    return packages
+        pkg = arg.split("==")[0].split(">=")[0].split("<=")[0].split("@")[0].split("[")[0]
+        if pkg and not pkg.startswith("-"):
+            packages.append(pkg.lower())
+
+    return packages, manifests
 
 
-def main():
-    import shutil
-
-    if len(sys.argv) < 3:
-        print(f"Usage: {sys.argv[0]} <pip|npm> <command> [args...]")
-        print("Example: python3 npm_pip_intercept.py pip install requests")
-        sys.exit(1)
-
-    manager = sys.argv[1].lower()
-    args = sys.argv[2:]
-
-    # v2.3.0: Added uv support
-    if manager not in ("pip", "pip3", "npm", "yarn", "pnpm", "uv"):
-        print(f"{RED}[intercept]{RESET} Unknown manager: {manager}")
-        sys.exit(1)
-
-    # SECURITY FIX: Resolve to absolute path to prevent PATH hijacking
-    manager_path = shutil.which(manager)
-    if not manager_path:
-        print(f"{RED}[intercept]{RESET} Package manager not found: {manager}")
-        sys.exit(1)
-
-    # v2.3.0: Handle uv subcommands (uv pip install, uv add)
-    is_uv_pip = False
-    if manager == "uv" and args:
-        if args[0] == "pip" and len(args) > 1:
-            # "uv pip install foo" -> treat as pip install
-            is_uv_pip = True
-            args = args[1:]  # Remove "pip" from args
-        elif args[0] == "add":
-            # "uv add foo" -> intercept as pip install
-            pass
-        elif args[0] not in ("install", "i", "add"):
-            # Non-install uv commands pass through
-            result = subprocess.run([manager_path] + sys.argv[2:])
-            sys.exit(result.returncode)
-
-    # Only intercept install commands
-    if not args or args[0] not in ("install", "i", "add"):
-        # Pass through non-install commands
-        result = subprocess.run([manager_path] + (sys.argv[2:] if not is_uv_pip else args))
-        sys.exit(result.returncode)
-
-    # Extract packages to check
-    packages = extract_packages(args, manager)
-
-    if not packages:
-        # No packages specified (maybe installing from requirements.txt)
-        # Pass through
-        result = subprocess.run([manager_path] + args)
-        sys.exit(result.returncode)
-
-    # Check each package
+def _check_packages(packages: list, ecosystem: str) -> tuple[list, list]:
+    """Check packages and return (blocked, warnings)."""
     blocked = []
     warnings = []
 
     for pkg in packages:
-        # v2.3.0: uv uses PyPI, treat as pip
-        if manager in ("pip", "pip3", "uv"):
+        if ecosystem in ("pip", "conda"):
             status, reason = check_pypi_package(pkg)
         else:
             status, reason = check_npm_package(pkg)
@@ -517,43 +433,119 @@ def main():
             blocked.append((pkg, reason))
             print(f"{RED}{BOLD}\U0001F6A8 BLOCKED{RESET} — {pkg}")
             print(f"   {reason}")
-            print(f"   {RED}Install cancelled.{RESET}")
             send_telegram_alert(pkg, reason)
-
         elif status == "WARN":
             warnings.append((pkg, reason))
-            print(f"{YELLOW}\u26A0 WARNING{RESET} — {pkg}")
+            print(f"{YELLOW}⚠ WARNING{RESET} — {pkg}")
             print(f"   {reason}")
-
         else:
-            print(f"{GREEN}\u2705 CLEAN{RESET} — {pkg}")
+            print(f"{GREEN}✅ CLEAN{RESET} — {pkg}")
 
-    # Track scan usage and show upgrade prompt for free tier
+    return blocked, warnings
+
+
+def main():
+    import shutil
+
+    if len(sys.argv) < 3:
+        print(f"Usage: {sys.argv[0]} <manager> <command> [args...]")
+        print("Supported: pip, npm, uv, poetry, pdm, pipenv, conda, pixi, bun, pnpm")
+        sys.exit(1)
+
+    manager = sys.argv[1].lower()
+    args = sys.argv[2:]
+
+    if manager not in SUPPORTED_MANAGERS:
+        print(f"{RED}[intercept]{RESET} Unknown manager: {manager}")
+        sys.exit(1)
+
+    manager_path = shutil.which(manager)
+    if not manager_path:
+        print(f"{RED}[intercept]{RESET} Package manager not found: {manager}")
+        sys.exit(1)
+
+    ecosystem = MANAGER_ECOSYSTEM.get(manager, "pip")
+    original_args = args[:]
+
+    is_uv_pip = False
+    if manager == "uv" and args and args[0] == "pip":
+        is_uv_pip = True
+        args = args[1:]
+
+    if not args:
+        result = subprocess.run([manager_path] + original_args)
+        sys.exit(result.returncode)
+
+    install_cmds = INSTALL_COMMANDS.get(manager, ("install",))
+    if args[0] not in install_cmds:
+        result = subprocess.run([manager_path] + original_args)
+        sys.exit(result.returncode)
+
+    packages, manifests = extract_packages_and_manifests(args, manager)
+
+    if manifests:
+        try:
+            from stillrunning.manifest import parse_manifest
+            for manifest_path in manifests:
+                if manifest_path.exists():
+                    print(f"[stillrunning] Scanning {manifest_path}...")
+                    specs = parse_manifest(manifest_path)
+                    for spec in specs:
+                        if not spec.is_local and not spec.is_url and not spec.is_git:
+                            packages.append(spec.name)
+        except ImportError:
+            print(f"{YELLOW}[intercept] Manifest parsing unavailable{RESET}")
+
+    if not packages and not manifests:
+        cwd = Path.cwd()
+        try:
+            from stillrunning.manifest import find_manifest_in_dir, parse_manifest
+            manifest = find_manifest_in_dir(cwd)
+            if manifest:
+                print(f"[stillrunning] Scanning {manifest}...")
+                specs = parse_manifest(manifest)
+                for spec in specs:
+                    if not spec.is_local and not spec.is_url and not spec.is_git:
+                        packages.append(spec.name)
+        except ImportError:
+            pass
+
+    if not packages:
+        result = subprocess.run([manager_path] + original_args)
+        sys.exit(result.returncode)
+
+    packages = list(dict.fromkeys(packages))
+
+    if len(packages) > 50:
+        print(f"[stillrunning] Checking {len(packages)} packages...")
+
+    blocked, warnings = _check_packages(packages, ecosystem)
+
     scans_used = _increment_scan_usage(len(packages))
     _show_upgrade_prompt(scans_used)
 
-    # If any blocked, exit without installing
     if blocked:
         print()
         print(f"{RED}{BOLD}Installation blocked.{RESET} {len(blocked)} malicious package(s) detected.")
         sys.exit(1)
 
-    # If warnings, prompt for confirmation
     if warnings:
         print()
         try:
-            response = input(f"{YELLOW}Continue anyway? [y/N]{RESET} ")
-            if response.lower() != "y":
-                print("Installation cancelled.")
-                sys.exit(1)
+            if sys.stdin.isatty():
+                response = input(f"{YELLOW}Continue anyway? [y/N]{RESET} ")
+                if response.lower() != "y":
+                    print("Installation cancelled.")
+                    sys.exit(1)
+            else:
+                print(f"{YELLOW}Non-interactive mode — proceeding despite warnings{RESET}")
         except (EOFError, KeyboardInterrupt):
             print("\nInstallation cancelled.")
             sys.exit(1)
 
-    # All clear — run the actual install
     print()
     print(f"{GREEN}Proceeding with install...{RESET}")
-    result = subprocess.run([manager_path] + args)
+    result = subprocess.run([manager_path] + original_args)
     sys.exit(result.returncode)
 
 
