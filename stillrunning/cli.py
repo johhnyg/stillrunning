@@ -30,7 +30,7 @@ except ImportError:
     sys.exit(1)
 
 # Version constant for telemetry
-VERSION = "2.5.0"
+VERSION = "2.6.0"
 
 # v2.5.0: Simple logger for exception visibility
 import logging

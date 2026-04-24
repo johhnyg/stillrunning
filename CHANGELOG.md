@@ -1,5 +1,27 @@
 # Changelog
 
+## v2.6.0 — April 24, 2026
+
+**Fix OSV.dev integration — now ingests ~220,000 malicious packages**
+
+### Fixed
+- **OSV.dev API query was broken** — malformed `/v1/query` call returned 0 results
+- Now uses bulk GCS download (`osv-vulnerabilities.storage.googleapis.com`) instead
+
+### Added
+- **osv_bulk.py** — server-side bulk ingestion of MAL-* advisories
+- **222,873 malicious packages** now blocked (10,962 PyPI + 211,911 npm)
+- Nightly cron refresh at 03:00 UTC
+
+### Changed
+- Blocklist lookup remains O(1) (dict-based, not list)
+- Blocklist served from `/api/blocklist` — package size unchanged (76KB wheel)
+
+### Followups (v2.7.0)
+- Version-range blocking (currently blocks all versions via `["any"]`)
+
+---
+
 ## v2.5.0 — April 24, 2026
 
 **Completeness release — all deferred items from v2.4.0 shipped**
