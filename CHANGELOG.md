@@ -1,5 +1,18 @@
 # Changelog
 
+## v2.2.4 — April 24, 2026
+
+**Telemetry fixes**
+
+- **Fix:** `stillrunning` with no config now onboards instead of crashing
+- **Fix:** Heartbeats now fire from `scan`, `hook`, and other commands (not just agent mode)
+- **Fix:** Reduced agent-mode first-heartbeat delay from 30s to 2s
+- **Add:** `STILLRUNNING_NO_TELEMETRY=1` env var to disable telemetry
+- **Add:** Lazy `machine_id` generation — heartbeat works without running `setup`
+- **Privacy:** Heartbeat payload contains only command name, version, os, uuid, timestamp. No code, no package names, no user data.
+
+---
+
 ## v2.1.0 — April 19, 2026
 
 **Anonymous telemetry (opt-in)**

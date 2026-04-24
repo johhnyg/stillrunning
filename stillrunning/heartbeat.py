@@ -127,9 +127,9 @@ def send_intercept_event(config: dict, version: str, package: str, result: str) 
 def heartbeat_loop(config: dict, version: str) -> None:
     """
     Background thread that sends heartbeats every 6 hours.
-    First heartbeat fires 30 seconds after start.
+    First heartbeat fires within 2 seconds of start.
     """
-    time.sleep(30)  # Initial delay
+    time.sleep(2)  # Brief delay to let startup complete
 
     while True:
         try:
