@@ -2583,6 +2583,65 @@ def _scan_package(pkg_name: str) -> int:
         return 0
 
 
+def _scan_manifest(path_str: str) -> int:
+    """Scan all packages in a manifest file. Returns exit code: 0=all CLEAN, 1=some blocked."""
+    from pathlib import Path
+
+    path = Path(path_str).expanduser().resolve()
+    if not path.exists():
+        print(f"\033[91mERROR\033[0m: File not found: {path}")
+        return 2
+
+    try:
+        from .manifest import parse_manifest, check_manifest
+        from .intercept import check_pypi_package, check_npm_package
+    except ImportError as e:
+        print(f"\033[91mERROR\033[0m: Could not import manifest module: {e}")
+        return 2
+
+    print(f"Scanning manifest: {path}")
+    print()
+
+    specs = parse_manifest(path)
+    if not specs:
+        print(f"No packages found in {path.name}")
+        return 0
+
+    blocked = []
+    suspicious = []
+    clean = []
+    skipped = []
+
+    for spec in specs:
+        if spec.is_local or spec.is_url or spec.is_git:
+            skipped.append((spec.name, "local/url/git dependency"))
+            continue
+
+        if spec.ecosystem == "npm":
+            status, reason = check_npm_package(spec.name)
+        else:
+            status, reason = check_pypi_package(spec.name)
+
+        if status == "BLOCKED":
+            blocked.append((spec.name, reason))
+            print(f"\033[91m\033[1mBLOCKED\033[0m — {spec.name}")
+            print(f"   {reason}")
+        elif status == "WARN":
+            suspicious.append((spec.name, reason))
+            print(f"\033[93mSUSPICIOUS\033[0m — {spec.name}")
+            print(f"   {reason}")
+        else:
+            clean.append(spec.name)
+            print(f"\033[92mCLEAN\033[0m — {spec.name}")
+
+    print()
+    print(f"Summary: {len(clean)} clean, {len(suspicious)} suspicious, {len(blocked)} blocked, {len(skipped)} skipped")
+
+    if blocked:
+        return 1
+    return 0
+
+
 def _run_claude_code_hook() -> None:
     """Run as Claude Code PreToolUse hook. Branded messages, proper exit codes."""
     import re
@@ -2865,6 +2924,10 @@ def main_cli() -> None:
     scan_parser = subparsers.add_parser("scan", help="Check if a package is safe to install")
     scan_parser.add_argument("package", help="Package name to scan")
 
+    # v2.4.0: Scan-manifest subcommand — check all packages in a manifest file
+    manifest_parser = subparsers.add_parser("scan-manifest", help="Scan a requirements.txt or similar file")
+    manifest_parser.add_argument("path", help="Path to manifest file")
+
     args = parser.parse_args()
 
     # Handle whitelist commands
@@ -2892,6 +2955,10 @@ def main_cli() -> None:
     # v2.3.0: Handle scan subcommand
     if args.command == "scan":
         sys.exit(_scan_package(args.package))
+
+    # v2.4.0: Handle scan-manifest subcommand
+    if args.command == "scan-manifest":
+        sys.exit(_scan_manifest(args.path))
 
     # SESSION 97: Handle Claude Code hook install/uninstall
     if args.hook_claude_code:

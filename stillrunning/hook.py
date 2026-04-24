@@ -32,13 +32,17 @@ from typing import Optional
 
 # ─── Constants ───────────────────────────────────────────────────────────────
 
-# Database path — same as npm_pip_intercept uses
-DB_PATH = Path("/root/my-app/package_security.db")
-FALLBACK_DB_PATH = Path.home() / ".stillrunning" / "package_security.db"
+# XDG-compliant paths with fallbacks
+_STILLRUNNING_DIR = Path(os.environ.get("STILLRUNNING_DIR", "")) if os.environ.get("STILLRUNNING_DIR") else Path.home() / ".stillrunning"
+_STILLRUNNING_DIR.mkdir(parents=True, exist_ok=True)
+
+# Database path — user's local cache
+DB_PATH = _STILLRUNNING_DIR / "package_security.db"
+FALLBACK_DB_PATH = DB_PATH  # Same location now
 
 # Config file for token
-CONFIG_PATH = Path.home() / ".stillrunning" / "stillrunning.yaml"
-ENV_PATH = Path("/root/my-app/.env")
+CONFIG_PATH = _STILLRUNNING_DIR / "stillrunning.yaml"
+ENV_PATH = _STILLRUNNING_DIR / ".env"
 
 # Cache for instant lookups (populated from SQLite)
 _import_cache: dict = {}  # {package_name: {"status": "CLEAN/DANGEROUS/SUSPICIOUS", "score": int, "reason": str}}
@@ -104,12 +108,8 @@ NAMESPACE_BLOCKLIST: set = set()
 # ─── Database Functions ──────────────────────────────────────────────────────
 
 def _get_db_path() -> Path:
-    """Get the database path, falling back to home directory if server DB unavailable."""
-    if DB_PATH.exists():
-        return DB_PATH
-    # Ensure fallback directory exists
-    FALLBACK_DB_PATH.parent.mkdir(parents=True, exist_ok=True)
-    return FALLBACK_DB_PATH
+    """Get the database path."""
+    return DB_PATH
 
 
 def _init_local_db():

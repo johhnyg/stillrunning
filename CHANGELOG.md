@@ -1,5 +1,27 @@
 # Changelog
 
+## v2.4.0 — April 24, 2026
+
+**Refinement release — closes HIGH-severity gaps from product audit**
+
+### Added
+- **Manifest parsing** for requirements.txt, pyproject.toml, Pipfile, package.json, environment.yml, pixi.toml
+- **Interception for poetry, pdm, pipenv, conda, pixi, bun, pnpm** — all major package managers now covered
+- **`stillrunning scan-manifest`** CLI command — check all packages in a manifest file before install
+- **`pip install -r requirements.txt`** now scans each package (previously bypassed entirely)
+
+### Fixed
+- **Hardcoded /root/my-app/.env path** in hook.py — now uses XDG-compliant ~/.stillrunning directory
+- **Editable installs** (`pip install -e .`) no longer erroneously blocked or flagged
+- **Git/URL dependencies** correctly skipped (can't be checked, shouldn't block)
+
+### Internal
+- **stillrunning/manifest.py** — shared manifest parser for all package managers
+- **28 new tests** covering manifest parsing, package manager support, and intercept behavior
+- **MANAGER_ECOSYSTEM mapping** — proper ecosystem detection for all package managers
+
+---
+
 ## v2.3.0 — April 24, 2026
 
 **Critical correctness fixes**
