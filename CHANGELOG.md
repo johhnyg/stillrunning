@@ -1,5 +1,46 @@
 # Changelog
 
+## v2.8.0 — April 25, 2026
+
+**Async scan endpoint + version-aware AI cache**
+
+### Added
+- **Async scan endpoint** — `POST /api/scan/async` returns immediately with job_id, poll `/api/scan/status/{job_id}` for results
+- **Version-aware AI cache** — cache key is now `(package_name, version)` instead of just `package_name`
+- **cache_clear_older_than(days)** — maintenance function to purge old cache entries
+- **resolve_latest_version()** — resolves "latest" to actual version from PyPI/npm
+
+### Changed
+- Async jobs auto-expire after 1 hour (TTL)
+- Legacy cache entries marked `version="unknown"` for re-review on next check
+
+### Breaking
+- **Exit codes standardized** across the stillrunning family:
+  - 0 = CLEAN (operation succeeded, no threats)
+  - 1 = Generic error (network failure, internal bug)
+  - 2 = Usage error (bad arguments, missing file)
+  - 10 = BLOCKED (confirmed malicious package)
+  - 11 = SUSPICIOUS (AI flagged, not confirmed)
+  - 12 = RATE_LIMITED (free tier exhausted)
+- CI pipelines that assumed exit 1 = block must update to check for exit 10
+
+---
+
+## v2.7.0 — April 25, 2026
+
+**Source tracking + curated blocklist**
+
+### Added
+- **Source tracking** — each blocked package shows advisory source (OSV, GitHub, NVD, etc.)
+- **Advisory ID linking** — direct links to original security advisories
+- **Curated blocklist** — 200,000+ packages from 8 threat intelligence sources
+
+### Changed
+- `/security-advisories` page shows source metadata badges
+- Blocklist entries include `source` and `advisory_id` fields
+
+---
+
 ## v2.6.0 — April 24, 2026
 
 **Fix OSV.dev integration — now ingests ~220,000 malicious packages**
