@@ -8,12 +8,12 @@
 ![Python](https://img.shields.io/badge/python-3.8+-green)
 ![License](https://img.shields.io/badge/license-MIT-blue)
 
-## What's new in v2.7
+## What's new in v2.8
 
-- **Source tracking** — every blocklist entry records where it came from (OSV, Gemini Hunter, manual)
-- **Version-range blocking** — respects OSV's affected-version specifiers
+- **Async scan endpoint** — `POST /api/scan/async` for non-blocking scans
+- **Version-aware AI cache** — cache keyed by `(package, version)` tuple
+- **Source tracking** — every blocklist entry records where it came from
 - **OSV.dev bulk ingestion** — 222k malicious packages from PyPI and npm
-- **Withdrawn advisory filtering** — removes false positives automatically
 - **Registry liveness checking** — marks packages removed from registries
 
 ## What it protects against
