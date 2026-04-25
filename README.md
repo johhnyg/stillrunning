@@ -1,128 +1,133 @@
 # stillrunning
 
 > Supply chain security for developers and AI coding agents.
-> Blocks malicious packages at install AND import time.
+> Active protection against 200,000+ verified malicious packages from 8 threat intelligence sources.
 
-![Version](https://img.shields.io/badge/version-2.1.0-blue)
+[![PyPI version](https://img.shields.io/pypi/v/stillrunning)](https://pypi.org/project/stillrunning/)
 ![Protected by stillrunning](https://stillrunning.io/badge/protected)
 ![Python](https://img.shields.io/badge/python-3.8+-green)
 ![License](https://img.shields.io/badge/license-MIT-blue)
 
-## What's new in v2.0
+## What's new in v2.7
 
-- **Python import hook** — blocks at execution, not just install
-- **MCP server** — Claude Code checks packages before installing
-- **Interactive Telegram approvals** — default deny, one tap to allow
-- **Works with every AI coding agent** — Claude Code, Cursor, Devin, Replit, Windsurf, Aider
-- **Autonomous mode** for CI/CD pipelines
-- **Hash verification** against PyPI registry
+- **Source tracking** — every blocklist entry records where it came from (OSV, Gemini Hunter, manual)
+- **Version-range blocking** — respects OSV's affected-version specifiers
+- **OSV.dev bulk ingestion** — 222k malicious packages from PyPI and npm
+- **Withdrawn advisory filtering** — removes false positives automatically
+- **Registry liveness checking** — marks packages removed from registries
 
-## What it blocks
+## What it protects against
 
-| Attack Vector | Status |
-|--------------|--------|
-| `pip install malicious-pkg` | Blocked |
-| `pip3 install malicious-pkg` | Blocked |
-| `python3 -m pip install malicious-pkg` | Blocked |
-| `npm install malicious-pkg` | Blocked |
-| `pip install -r requirements.txt` | Scans all packages |
-| `import malicious_pkg` | Blocked (via hook) |
-| `from malicious_pkg import x` | Blocked (via hook) |
+| Threat Class | Example |
+|-------------|---------|
+| Typosquats | `reqeusts`, `colourma`, `djanga` |
+| Malicious packages | Pre/post-install scripts stealing credentials |
+| Prompt injection | README-based attacks targeting AI agents |
+| Dependency confusion | Internal package names registered publicly |
+| Hallucinated packages | AI-suggested packages that don't exist (then claimed) |
 
-## Known limitations
+## Supported package managers
 
-| Gap | Workaround |
-|----|------------|
-| `/usr/bin/pip` direct binary | Use import hook for coverage |
-| Virtual env pip | Activate intercept or use import hook |
-| Conda/poetry/pipx | Manual activation required |
+| Package Manager | Status |
+|----------------|--------|
+| pip / pip3 | Intercepted |
+| python3 -m pip | Intercepted |
+| uv | Intercepted |
+| poetry | Intercepted |
+| pdm | Intercepted |
+| pipenv | Intercepted |
+| conda | Intercepted |
+| pixi | Intercepted |
+| npm | Intercepted |
+| bun | Intercepted |
+| pnpm | Intercepted |
+| requirements.txt | Scanned |
+| import statement | Blocked (via hook) |
 
-## Quick start (30 seconds)
+## Quick start
 
 ```bash
 pip install stillrunning
-stillrunning --setup
+stillrunning --setup              # 3-minute setup wizard
+stillrunning scan <package>       # One-shot scan
+stillrunning --install-hook       # Always-on import protection
 ```
 
-## Import protection (one line)
+## Import protection
 
 ```python
-import stillrunning.hook
+import stillrunning.hook  # Blocks malicious imports at runtime
 ```
 
-## Always-on import protection
+## AI agent integrations
+
+Works with: Claude Code, Cursor, Devin, Replit, GitHub Copilot, Windsurf, Aider
+
+Setup: [stillrunning.io/agent-setup](https://stillrunning.io/agent-setup)
+
+### Claude Code skill
 
 ```bash
-stillrunning --install-hook
+claude mcp add stillrunning -- stillrunning mcp
 ```
 
-## Telemetry
-
-stillrunning sends an anonymous heartbeat every 6 hours if you opt in during setup. No email, IP, or log content — just a random ID so we know how many agents are running.
-
-Disable by setting `telemetry: false` in `stillrunning.yaml`.
-
-## Autonomous mode (CI/CD + AI agents)
-
-```bash
-export STILLRUNNING_APP_NAME="my-app"
-export STILLRUNNING_TELEGRAM_TOKEN="..."
-export STILLRUNNING_CHAT_ID="..."
-stillrunning --autonomous
-```
-
-## MCP / Claude Code integration
-
-Add to `~/.claude/settings.json`:
+Or add to `~/.claude/settings.json`:
 
 ```json
 {
   "mcpServers": {
     "stillrunning": {
       "type": "url",
-      "url": "https://stillrunning.io/mcp",
-      "name": "stillrunning"
+      "url": "https://stillrunning.io/mcp"
     }
   }
 }
 ```
 
-## Claude Skill
+## Security Advisories
 
-Install the stillrunning skill for automatic package checking in every Claude Code session:
+Browse the full threat database: [stillrunning.io/security-advisories](https://stillrunning.io/security-advisories)
 
-[github.com/johhnyg/stillrunning-skill](https://github.com/johhnyg/stillrunning-skill)
+RSS feed: [stillrunning.io/security-advisories/rss.xml](https://stillrunning.io/security-advisories/rss.xml)
 
-## Works with every AI coding agent
+## Privacy
 
-Claude Code, Cursor, Devin, Replit, GitHub Copilot, Windsurf, Aider
+Heartbeats contain: command name, version, OS, anonymous UUID, timestamp.
+**No code, file paths, or package names are sent.**
 
-Setup: [stillrunning.io/agent-setup](https://stillrunning.io/agent-setup)
+Disable: `STILLRUNNING_NO_TELEMETRY=1` or `--no-telemetry` flag.
+
+## Configuration
+
+| Variable | Purpose |
+|----------|---------|
+| `STILLRUNNING_NO_TELEMETRY=1` | Disable heartbeat |
+| `BLOCKLIST_MAX_AGE_DAYS=730` | Max age for blocklist entries (default 2 years) |
+
+Config file: `~/.stillrunning/config.yaml`
 
 ## Commands
 
 ```bash
-stillrunning --setup          # 3-minute setup wizard
+stillrunning --setup          # Setup wizard
 stillrunning --doctor         # Health check
 stillrunning --install-hook   # Enable always-on import protection
-stillrunning --autonomous     # CI/CD mode (no prompts)
+stillrunning --autonomous     # CI/CD mode
 stillrunning --allow <pkg>    # Allow a blocked package
-stillrunning --block <pkg>    # Manually block a package
+stillrunning scan <pkg>       # One-shot scan
 stillrunning whitelist add <pkg>    # Add to whitelist
-stillrunning whitelist remove <pkg> # Remove from whitelist
 stillrunning whitelist list         # Show whitelist
 ```
 
 ## Pricing
 
-| Tier | Price | AI Scans | Features |
-|------|-------|----------|----------|
-| **Free** | $0 | 0 | Blocklist checks (10/day) |
-| **Personal** | $9/mo | 0 | Guard daemon, 1 machine, blocklist |
-| **Basic** | $29/mo | 0 | Dashboard, 3 machines, Telegram, blocklist |
-| **AI** | $49/mo | 100/day | AI package review, unlimited machines |
-| **Enterprise** | $499/mo | 10,000/day | SIEM, SSO, compliance |
-| **Enterprise+** | $2,499/mo | Unlimited | Dedicated support, on-prem |
+| Tier | Price | Features |
+|------|-------|----------|
+| **Free** | $0 | 10 blocklist checks/day |
+| **Personal** | $9/mo | Guard daemon, 1 machine |
+| **Basic** | $29/mo | Dashboard, 3 machines, Telegram |
+| **AI** | $49/mo | AI package review, unlimited machines |
+| **Enterprise** | $499/mo | SIEM, SSO, compliance |
 
 ## Badge
 
@@ -133,7 +138,8 @@ stillrunning whitelist list         # Show whitelist
 ## Links
 
 - [stillrunning.io](https://stillrunning.io)
-- [stillrunning.io/agent-setup](https://stillrunning.io/agent-setup)
+- [Security Advisories](https://stillrunning.io/security-advisories)
+- [Agent Setup](https://stillrunning.io/agent-setup)
 - [@bit_bot9000](https://x.com/bit_bot9000)
 
 ## License
