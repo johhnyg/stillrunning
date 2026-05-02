@@ -121,13 +121,45 @@ stillrunning whitelist list         # Show whitelist
 
 ## Pricing
 
-| Tier | Price | Features |
-|------|-------|----------|
-| **Free** | $0 | 10 blocklist checks/day |
-| **Personal** | $9/mo | Guard daemon, 1 machine |
-| **Basic** | $29/mo | Dashboard, 3 machines, Telegram |
-| **AI** | $49/mo | AI package review, unlimited machines |
-| **Enterprise** | $499/mo | SIEM, SSO, compliance |
+<!-- BEGIN:tier-table -->
+| Tier | Price | Scans/day | Machines | Dashboard |
+|------|-------|-----------|----------|-----------|
+| Free | Free | 10 | 1 | No |
+| Personal | $9/mo | 100 | 1 | No |
+| Basic | $29/mo | Unlimited | 3 | Yes |
+| Ai | $49/mo | Unlimited | Unlimited | Yes |
+| Enterprise | $499/mo | Unlimited | Unlimited | Yes |
+<!-- END:tier-table -->
+
+<!-- BEGIN:feature-list -->
+**Personal** ($9/mo)
+- Everything in Free
+- 100 scans/day
+- Telegram + email alerts
+- Email support
+
+**Basic** ($29/mo)
+- Everything in Personal
+- yourname.stillrunning.io dashboard
+- Monday weekly reports
+- Uptime milestone alerts
+- 3 machines
+
+**Ai** ($49/mo)
+- Everything in Basic
+- AI crash diagnosis
+- Reply to alerts - AI answers
+- Crash pattern detection
+- Unlimited machines
+- Priority support
+
+**Enterprise** ($499/mo)
+- Everything in AI
+- Dedicated account manager
+- Custom integrations
+- SLA guarantee
+- On-premises option
+<!-- END:feature-list -->
 
 ## Badge
 
