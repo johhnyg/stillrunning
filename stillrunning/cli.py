@@ -30,7 +30,16 @@ except ImportError:
     sys.exit(1)
 
 # Version constant for telemetry
-VERSION = "2.6.0"
+VERSION = "2.10.0"
+
+# Exit codes (v2.9.0 standardization)
+EXIT_CLEAN = 0
+EXIT_ERROR = 1
+EXIT_USAGE = 2
+EXIT_BLOCKED = 10
+EXIT_SUSPICIOUS = 11
+EXIT_RATE_LIMITED = 12
+EXIT_WITHDRAWN = 13
 
 # v2.5.0: Simple logger for exception visibility
 import logging
@@ -2483,7 +2492,7 @@ def _allow_package_local(pkg_name: str, once: bool = False) -> None:
 
 
 def _scan_package(pkg_name: str) -> int:
-    """Scan a package for security issues. Returns exit code: 0=CLEAN, 1=BLOCKED/SUSPICIOUS, 2=ERROR."""
+    """Scan a package for security issues. Returns: 0=CLEAN, 10=BLOCKED, 11=SUSPICIOUS, 1=ERROR."""
     import signal
     import urllib.request
     import urllib.error
@@ -2516,10 +2525,10 @@ def _scan_package(pkg_name: str) -> int:
     pkg_lower = pkg_name.lower().replace("-", "_")
 
     if pkg_lower in KNOWN_BAD:
-        print(f"\033[91m\033[1mBLOCKED\033[0m — {pkg_name}")
+        print(f"✗ stillrunning BLOCKED [exit {EXIT_BLOCKED}]: {pkg_name}")
         print(f"   Reason: Known malicious package (hardcoded blocklist)")
-        print(f"   DO NOT install this package.")
-        return 1
+        print(f"   See: https://stillrunning.io/security-advisories?pkg={pkg_name}")
+        return EXIT_BLOCKED
 
     # Check known_bad_packages.json
     try:
@@ -2530,10 +2539,10 @@ def _scan_package(pkg_name: str) -> int:
             with open(kb_path) as f:
                 known_bad = json.load(f)
             if pkg_lower in known_bad.get("pip", {}) or pkg_name in known_bad.get("pip", {}):
-                print(f"\033[91m\033[1mBLOCKED\033[0m — {pkg_name}")
+                print(f"✗ stillrunning BLOCKED [exit {EXIT_BLOCKED}]: {pkg_name}")
                 print(f"   Reason: Known malicious package (threat feed)")
-                print(f"   DO NOT install this package.")
-                return 1
+                print(f"   See: https://stillrunning.io/security-advisories?pkg={pkg_name}")
+                return EXIT_BLOCKED
     except Exception:
         pass
 
@@ -2546,15 +2555,15 @@ def _scan_package(pkg_name: str) -> int:
     except urllib.error.HTTPError as e:
         if e.code == 404:
             print(f"\033[91mERROR\033[0m: Package '{pkg_name}' not found on PyPI")
-            return 2
+            return EXIT_ERROR
         print(f"\033[91mERROR\033[0m: PyPI returned HTTP {e.code}")
-        return 2
+        return EXIT_ERROR
     except urllib.error.URLError:
         print(f"\033[91mERROR\033[0m: Unable to reach PyPI")
-        return 2
+        return EXIT_ERROR
     except Exception as e:
         print(f"\033[91mERROR\033[0m: {e}")
-        return 2
+        return EXIT_ERROR
 
     # Call the API for AI review
     try:
@@ -2570,36 +2579,33 @@ def _scan_package(pkg_name: str) -> int:
         reason = result.get("reason", "")
 
         if verdict == "BLOCKED":
-            print(f"\033[91m\033[1mBLOCKED\033[0m — {pkg_name}")
+            print(f"✗ stillrunning BLOCKED [exit {EXIT_BLOCKED}]: {pkg_name}")
             print(f"   Reason: {reason or 'Security threat detected'}")
-            print(f"   DO NOT install this package.")
-            return 1
+            print(f"   See: https://stillrunning.io/security-advisories?pkg={pkg_name}")
+            return EXIT_BLOCKED
         elif verdict == "SUSPICIOUS":
-            print(f"\033[93m\033[1mSUSPICIOUS\033[0m — {pkg_name}")
+            print(f"⚠ stillrunning SUSPICIOUS [exit {EXIT_SUSPICIOUS}]: {pkg_name}")
             print(f"   Reason: {reason or 'Potential security concern'}")
             print(f"   Review carefully before installing.")
-            return 1
+            return EXIT_SUSPICIOUS
         elif verdict == "CLEAN":
-            print(f"\033[92m\033[1mCLEAN\033[0m — {pkg_name}")
+            print(f"✓ stillrunning CLEAN [exit {EXIT_CLEAN}]: {pkg_name}")
             print(f"   Package appears safe to install.")
-            return 0
+            return EXIT_CLEAN
         else:
-            # UNKNOWN - fallback to basic checks passed
-            print(f"\033[92mCLEAN\033[0m — {pkg_name}")
+            print(f"✓ stillrunning CLEAN [exit {EXIT_CLEAN}]: {pkg_name}")
             print(f"   Not on blocklist. Package exists on PyPI.")
-            print(f"   (No detailed AI review available)")
-            return 0
+            return EXIT_CLEAN
 
     except Exception as e:
-        # API failed, but package passed blocklist check
-        print(f"\033[92mCLEAN\033[0m — {pkg_name}")
+        print(f"✓ stillrunning CLEAN [exit {EXIT_CLEAN}]: {pkg_name}")
         print(f"   Not on blocklist. Package exists on PyPI.")
         print(f"   (API check unavailable)")
-        return 0
+        return EXIT_CLEAN
 
 
 def _scan_manifest(path_str: str) -> int:
-    """Scan all packages in a manifest file. Returns exit code: 0=all CLEAN, 1=some blocked."""
+    """Scan all packages in a manifest file. Returns: 0=CLEAN, 10=BLOCKED, 11=SUSPICIOUS."""
     from pathlib import Path
 
     path = Path(path_str).expanduser().resolve()
@@ -2612,7 +2618,7 @@ def _scan_manifest(path_str: str) -> int:
         from .intercept import check_pypi_package, check_npm_package
     except ImportError as e:
         print(f"\033[91mERROR\033[0m: Could not import manifest module: {e}")
-        return 2
+        return EXIT_ERROR
 
     print(f"Scanning manifest: {path}")
     print()
@@ -2653,8 +2659,10 @@ def _scan_manifest(path_str: str) -> int:
     print(f"Summary: {len(clean)} clean, {len(suspicious)} suspicious, {len(blocked)} blocked, {len(skipped)} skipped")
 
     if blocked:
-        return 1
-    return 0
+        return EXIT_BLOCKED
+    if suspicious:
+        return EXIT_SUSPICIOUS
+    return EXIT_CLEAN
 
 
 # ─── v2.5.0: Venv Persistence ────────────────────────────────────────────────
@@ -2760,6 +2768,276 @@ def _venv_uninstall() -> int:
     except Exception as e:
         print(f"Error removing venv hook: {e}")
         return 1
+
+
+# ---------------------------------------------------------------------------
+# Shell auto-activation (CVE-2026-31431 gap fix)
+# ---------------------------------------------------------------------------
+
+_SHELL_ACTIVATE_MARKER = "# >>> stillrunning shell hooks >>>"
+_SHELL_ACTIVATE_END = "# <<< stillrunning shell hooks <<<"
+
+_WRAPPER_SCRIPT_PIP = '''#!/bin/bash
+# stillrunning pip wrapper — checks packages before install
+set -e
+if [[ "$1" == "install" || "$1" == "download" ]]; then
+    shift
+    packages=()
+    for arg in "$@"; do
+        [[ "$arg" == -* ]] && continue
+        [[ "$arg" == */* ]] && continue  # Skip paths
+        pkg=$(echo "$arg" | sed 's/[=<>!\\[].*$//')
+        [[ -n "$pkg" ]] && packages+=("$pkg")
+    done
+    for pkg in "${packages[@]}"; do
+        if ! stillrunning scan "$pkg" >/dev/null 2>&1; then
+            echo "stillrunning: Package '$pkg' blocked. See https://stillrunning.io/blocked?pkg=$pkg"
+            exit 1
+        fi
+    done
+    exec /usr/bin/pip install "$@"
+else
+    exec /usr/bin/pip "$@"
+fi
+'''
+
+_WRAPPER_SCRIPT_NPM = '''#!/bin/bash
+# stillrunning npm wrapper — checks packages before install
+set -e
+if [[ "$1" == "install" || "$1" == "i" || "$1" == "add" ]]; then
+    shift
+    packages=()
+    for arg in "$@"; do
+        [[ "$arg" == -* ]] && continue
+        pkg="${arg%%@*}"
+        [[ "$arg" == @* ]] && pkg="$arg"
+        [[ -n "$pkg" ]] && packages+=("$pkg")
+    done
+    for pkg in "${packages[@]}"; do
+        if ! stillrunning scan "$pkg" --npm >/dev/null 2>&1; then
+            echo "stillrunning: Package '$pkg' blocked. See https://stillrunning.io/blocked?pkg=$pkg"
+            exit 1
+        fi
+    done
+    exec /usr/bin/npm install "$@"
+else
+    exec /usr/bin/npm "$@"
+fi
+'''
+
+_ACTIVATE_SCRIPT = '''#!/bin/bash
+# stillrunning shell hooks — auto-loaded on shell init
+# Remove with: stillrunning shell-uninstall
+
+export STILLRUNNING_SHELL_ACTIVE=1
+export PATH="$HOME/.stillrunning/bin:$PATH"
+
+# python -m pip intercept
+function python3() {
+    if [[ "$1" == "-m" && "$2" == "pip" ]]; then
+        shift 2
+        "$HOME/.stillrunning/bin/pip" "$@"
+    else
+        /usr/bin/python3 "$@"
+    fi
+}
+export -f python3
+
+function python() {
+    if [[ "$1" == "-m" && "$2" == "pip" ]]; then
+        shift 2
+        "$HOME/.stillrunning/bin/pip" "$@"
+    else
+        /usr/bin/python3 "$@"
+    fi
+}
+export -f python
+'''
+
+
+def _shell_install() -> int:
+    """Install shell hooks for auto-activation."""
+    sr_dir = Path.home() / ".stillrunning"
+    bin_dir = sr_dir / "bin"
+
+    try:
+        bin_dir.mkdir(parents=True, exist_ok=True)
+
+        # Create wrapper scripts
+        pip_wrapper = bin_dir / "pip"
+        pip3_wrapper = bin_dir / "pip3"
+        npm_wrapper = bin_dir / "npm"
+        activate_script = sr_dir / "activate.sh"
+
+        pip_wrapper.write_text(_WRAPPER_SCRIPT_PIP)
+        pip_wrapper.chmod(0o755)
+        pip3_wrapper.write_text(_WRAPPER_SCRIPT_PIP.replace("/usr/bin/pip", "/usr/bin/pip3"))
+        pip3_wrapper.chmod(0o755)
+        npm_wrapper.write_text(_WRAPPER_SCRIPT_NPM)
+        npm_wrapper.chmod(0o755)
+        activate_script.write_text(_ACTIVATE_SCRIPT)
+        activate_script.chmod(0o755)
+
+        # Detect and update shell rc files
+        rc_files = []
+        home = Path.home()
+
+        # Check which shells exist
+        if (home / ".bashrc").exists() or shutil.which("bash"):
+            rc_files.append(home / ".bashrc")
+        if (home / ".zshrc").exists() or shutil.which("zsh"):
+            rc_files.append(home / ".zshrc")
+        if (home / ".profile").exists():
+            rc_files.append(home / ".profile")
+
+        source_line = f'\n{_SHELL_ACTIVATE_MARKER}\nsource "$HOME/.stillrunning/activate.sh"\n{_SHELL_ACTIVATE_END}\n'
+
+        updated = []
+        for rc_file in rc_files:
+            try:
+                content = rc_file.read_text() if rc_file.exists() else ""
+                if _SHELL_ACTIVATE_MARKER in content:
+                    continue  # Already installed
+
+                # Append idempotently
+                with open(rc_file, "a") as f:
+                    f.write(source_line)
+                updated.append(str(rc_file))
+            except PermissionError:
+                continue
+
+        print("stillrunning shell hooks installed!")
+        print()
+        print("Created:")
+        print(f"  {bin_dir}/pip, pip3, npm — wrapper scripts")
+        print(f"  {activate_script} — shell activation")
+        print()
+        if updated:
+            print(f"Updated: {', '.join(updated)}")
+            print()
+        print("stillrunning hooks now active in all new shells.")
+        print("Open a new terminal or run: source ~/.bashrc")
+        print()
+        print("Verify with: stillrunning status")
+        return 0
+
+    except Exception as e:
+        print(f"Error installing shell hooks: {e}")
+        return 1
+
+
+def _shell_uninstall() -> int:
+    """Remove shell hooks."""
+    sr_dir = Path.home() / ".stillrunning"
+    bin_dir = sr_dir / "bin"
+
+    try:
+        # Remove wrapper scripts
+        for script in ["pip", "pip3", "npm"]:
+            script_path = bin_dir / script
+            if script_path.exists():
+                script_path.unlink()
+
+        activate_path = sr_dir / "activate.sh"
+        if activate_path.exists():
+            activate_path.unlink()
+
+        # Clean up rc files
+        home = Path.home()
+        for rc_name in [".bashrc", ".zshrc", ".profile"]:
+            rc_file = home / rc_name
+            if not rc_file.exists():
+                continue
+
+            content = rc_file.read_text()
+            if _SHELL_ACTIVATE_MARKER not in content:
+                continue
+
+            # Remove the stillrunning block
+            lines = content.split("\n")
+            new_lines = []
+            skip = False
+            for line in lines:
+                if _SHELL_ACTIVATE_MARKER in line:
+                    skip = True
+                    continue
+                if _SHELL_ACTIVATE_END in line:
+                    skip = False
+                    continue
+                if not skip:
+                    new_lines.append(line)
+
+            new_content = "\n".join(new_lines).rstrip() + "\n"
+            tmp_path = rc_file.with_suffix(".tmp")
+            tmp_path.write_text(new_content)
+            tmp_path.replace(rc_file)
+
+        print("stillrunning shell hooks removed.")
+        print("Open a new terminal for changes to take effect.")
+        return 0
+
+    except Exception as e:
+        print(f"Error removing shell hooks: {e}")
+        return 1
+
+
+def _status() -> int:
+    """Show status of all stillrunning protection layers."""
+    print("stillrunning protection status")
+    print("=" * 40)
+    print()
+
+    # Shell hooks
+    shell_active = os.environ.get("STILLRUNNING_SHELL_ACTIVE") == "1"
+    shell_installed = (Path.home() / ".stillrunning" / "activate.sh").exists()
+    if shell_active:
+        print("[OK] Shell hooks: ACTIVE")
+    elif shell_installed:
+        print("[--] Shell hooks: installed but not active (open new terminal)")
+    else:
+        print("[  ] Shell hooks: not installed (stillrunning shell-install)")
+
+    # Venv hook
+    try:
+        import site
+        user_site = Path(site.getusersitepackages())
+        sitecustomize = user_site / "sitecustomize.py"
+        if sitecustomize.exists() and _SITECUSTOMIZE_MARKER in sitecustomize.read_text():
+            print("[OK] Venv persistence: ACTIVE")
+        else:
+            print("[  ] Venv persistence: not installed (stillrunning venv-install)")
+    except Exception:
+        print("[  ] Venv persistence: unknown")
+
+    # Claude Code hook
+    hooks_file = Path.home() / ".claude" / "hooks.json"
+    if hooks_file.exists():
+        try:
+            with open(hooks_file) as f:
+                hooks = json.load(f)
+            if any("stillrunning" in str(h) for h in hooks.get("hooks", [])):
+                print("[OK] Claude Code hook: ACTIVE")
+            else:
+                print("[  ] Claude Code hook: not installed (stillrunning --hook-claude-code)")
+        except Exception:
+            print("[  ] Claude Code hook: unknown")
+    else:
+        print("[  ] Claude Code hook: not installed (stillrunning --hook-claude-code)")
+
+    # Import hook (.pth)
+    try:
+        import site
+        user_site = Path(site.getusersitepackages())
+        pth_file = user_site / "stillrunning.pth"
+        if pth_file.exists():
+            print("[OK] Import hook (.pth): ACTIVE")
+        else:
+            print("[  ] Import hook (.pth): not installed (stillrunning --install-hook)")
+    except Exception:
+        print("[  ] Import hook (.pth): unknown")
+
+    print()
+    return 0
 
 
 def _run_claude_code_hook() -> None:
@@ -3052,6 +3330,11 @@ def main_cli() -> None:
     subparsers.add_parser("venv-install", help="Install sitecustomize.py hook for venv persistence")
     subparsers.add_parser("venv-uninstall", help="Remove sitecustomize.py hook")
 
+    # CVE-2026-31431: Shell auto-activation
+    subparsers.add_parser("shell-install", help="Install shell hooks for auto-activation")
+    subparsers.add_parser("shell-uninstall", help="Remove shell hooks")
+    subparsers.add_parser("status", help="Show status of all protection layers")
+
     args = parser.parse_args()
 
     # Handle whitelist commands
@@ -3089,6 +3372,14 @@ def main_cli() -> None:
         sys.exit(_venv_install())
     if args.command == "venv-uninstall":
         sys.exit(_venv_uninstall())
+
+    # CVE-2026-31431: Shell auto-activation
+    if args.command == "shell-install":
+        sys.exit(_shell_install())
+    if args.command == "shell-uninstall":
+        sys.exit(_shell_uninstall())
+    if args.command == "status":
+        sys.exit(_status())
 
     # SESSION 97: Handle Claude Code hook install/uninstall
     if args.hook_claude_code:

@@ -1,5 +1,42 @@
 # Changelog
 
+## v2.10.0 — May 2, 2026
+
+**CVE-2026-31431 gap fixes — shell auto-activation**
+
+### Added
+- **`stillrunning shell-install`** — auto-activate hooks on shell init (bash/zsh/profile)
+- **`stillrunning shell-uninstall`** — remove shell hooks
+- **`stillrunning status`** — show status of all protection layers
+- **Wrapper scripts** — `~/.stillrunning/bin/pip`, `pip3`, `npm` intercept installs
+- **Idempotent rc updates** — reinstall won't duplicate lines in shell config
+
+### Security
+- **Closes CVE-2026-31431 audit gap #4** — hooks now activate without manual `source activate.sh`
+
+---
+
+## v2.9.0 — April 25, 2026
+
+**Customer experience polish + CLI standardization**
+
+### Added
+- **pricing.py** — single source of truth for all tier pricing
+- **Welcome email idempotency** — Stripe webhook retries no longer send duplicate emails
+- **Telegram wizard** — `/dash/{subdomain}/telegram` for in-dashboard bot setup
+- **Resend-welcome endpoint** — admin can resend welcome emails via API
+
+### Changed
+- All pricing references now use `pricing.py` (landing, /pricing, emails)
+- Welcome emails now use `alerts@stillrunning.io` From header
+
+### Breaking
+- **Exit codes standardized** across all CLI tools:
+  - 0 = CLEAN, 1 = ERROR, 2 = USAGE
+  - 10 = BLOCKED, 11 = SUSPICIOUS, 12 = RATE_LIMITED, 13 = WITHDRAWN
+
+---
+
 ## v2.8.0 — April 25, 2026
 
 **Async scan endpoint + version-aware AI cache**
