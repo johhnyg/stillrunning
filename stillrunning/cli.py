@@ -2770,6 +2770,29 @@ def _venv_uninstall() -> int:
         return 1
 
 
+def _venv_install_silent() -> bool:
+    """Install venv hook silently. Returns True on success."""
+    try:
+        user_site = _get_user_site_packages()
+        user_site.mkdir(parents=True, exist_ok=True)
+        sitecustomize_path = user_site / "sitecustomize.py"
+
+        if sitecustomize_path.exists():
+            content = sitecustomize_path.read_text()
+            if _SITECUSTOMIZE_MARKER in content:
+                return True  # Already installed
+            new_content = content.rstrip() + "\n\n" + _SITECUSTOMIZE_BLOCK
+        else:
+            new_content = _SITECUSTOMIZE_BLOCK
+
+        tmp_path = sitecustomize_path.with_suffix(".tmp")
+        tmp_path.write_text(new_content)
+        tmp_path.replace(sitecustomize_path)
+        return True
+    except Exception:
+        return False
+
+
 # ---------------------------------------------------------------------------
 # Shell auto-activation (CVE-2026-31431 gap fix)
 # ---------------------------------------------------------------------------
@@ -2852,6 +2875,40 @@ function python() {
     fi
 }
 export -f python
+
+# Source conda hook if present
+[[ -f "$HOME/.stillrunning/conda_hook.sh" ]] && source "$HOME/.stillrunning/conda_hook.sh"
+'''
+
+_CONDA_ACTIVATE_SCRIPT = '''#!/bin/bash
+# stillrunning conda hook — wraps conda install
+# Auto-installed by stillrunning shell-install
+
+_original_conda=$(which -a conda 2>/dev/null | grep -v stillrunning | head -1)
+[[ -z "$_original_conda" ]] && _original_conda="/opt/conda/bin/conda"
+
+function conda() {
+    if [[ "$1" == "install" || "$1" == "create" ]]; then
+        local cmd="$1"
+        shift
+        local packages=()
+        for arg in "$@"; do
+            [[ "$arg" == -* ]] && continue
+            [[ "$arg" == *=* ]] && arg="${arg%%=*}"
+            packages+=("$arg")
+        done
+        for pkg in "${packages[@]}"; do
+            if ! stillrunning scan "$pkg" >/dev/null 2>&1; then
+                echo "stillrunning: Package '$pkg' blocked. See https://stillrunning.io/blocked?pkg=$pkg"
+                return 1
+            fi
+        done
+        "$_original_conda" "$cmd" "$@"
+    else
+        "$_original_conda" "$@"
+    fi
+}
+export -f conda
 '''
 
 
@@ -2877,6 +2934,11 @@ def _shell_install() -> int:
         npm_wrapper.chmod(0o755)
         activate_script.write_text(_ACTIVATE_SCRIPT)
         activate_script.chmod(0o755)
+
+        # Conda hook (sourced by activate.sh if conda is present)
+        conda_hook = sr_dir / "conda_hook.sh"
+        conda_hook.write_text(_CONDA_ACTIVATE_SCRIPT)
+        conda_hook.chmod(0o755)
 
         # Detect and update shell rc files
         rc_files = []
@@ -2906,11 +2968,17 @@ def _shell_install() -> int:
             except PermissionError:
                 continue
 
+        # Also install venv hook for Python-level coverage
+        venv_ok = _venv_install_silent()
+
         print("stillrunning shell hooks installed!")
         print()
         print("Created:")
         print(f"  {bin_dir}/pip, pip3, npm — wrapper scripts")
         print(f"  {activate_script} — shell activation")
+        print(f"  {sr_dir}/conda_hook.sh — conda intercept")
+        if venv_ok:
+            print(f"  sitecustomize.py — venv persistence")
         print()
         if updated:
             print(f"Updated: {', '.join(updated)}")
