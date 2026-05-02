@@ -29,8 +29,8 @@ except ImportError:
     print("ERROR: PyYAML required. Install with: pip install pyyaml")
     sys.exit(1)
 
-# Version constant for telemetry
-VERSION = "2.10.0"
+# Version constant for telemetry — synced from features.json
+VERSION = "2.11.0"
 
 # Exit codes (v2.9.0 standardization)
 EXIT_CLEAN = 0
