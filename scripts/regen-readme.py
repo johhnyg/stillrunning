@@ -1,22 +1,22 @@
 #!/usr/bin/env python3
 """
-Regenerate README.md tier table from features.json.
+Regenerate README.md tier table and feature list from features.json.
 
 Run as pre-commit hook or manually:
     python scripts/regen-readme.py
 
-Replaces content between <!-- TIERS-START --> and <!-- TIERS-END --> markers.
+Replaces content between markers:
+  <!-- BEGIN:tier-table --> ... <!-- END:tier-table -->
+  <!-- BEGIN:feature-list --> ... <!-- END:feature-list -->
 """
 
 import json
+import sys
 from pathlib import Path
 
 ROOT = Path(__file__).parent.parent
 FEATURES = ROOT / "features.json"
 README = ROOT / "README.md"
-
-START_MARKER = "<!-- TIERS-START -->"
-END_MARKER = "<!-- TIERS-END -->"
 
 
 def generate_tier_table(tiers: dict) -> str:
@@ -36,23 +36,56 @@ def generate_tier_table(tiers: dict) -> str:
     return "\n".join(lines)
 
 
+def generate_feature_list(tiers: dict) -> str:
+    """Generate markdown feature list per tier."""
+    lines = []
+    for name, config in tiers.items():
+        if name == "free":
+            continue
+        price = f"${config['price']}/mo"
+        lines.append(f"**{name.capitalize()}** ({price})")
+        for feat in config.get("features", []):
+            lines.append(f"- {feat}")
+        lines.append("")
+    return "\n".join(lines).rstrip()
+
+
+def replace_section(content: str, start_marker: str, end_marker: str, new_content: str) -> str:
+    """Replace content between markers."""
+    if start_marker not in content or end_marker not in content:
+        return content
+    start_idx = content.index(start_marker) + len(start_marker)
+    end_idx = content.index(end_marker)
+    return content[:start_idx] + "\n" + new_content + "\n" + content[end_idx:]
+
+
 def main():
     with open(FEATURES) as f:
         data = json.load(f)
 
-    table = generate_tier_table(data["tiers"])
-
     content = README.read_text()
+    updated = False
 
-    # Find and replace tier table
-    if START_MARKER in content and END_MARKER in content:
-        start_idx = content.index(START_MARKER) + len(START_MARKER)
-        end_idx = content.index(END_MARKER)
-        new_content = content[:start_idx] + "\n" + table + "\n" + content[end_idx:]
-        README.write_text(new_content)
-        print(f"Updated tier table in {README}")
+    # Tier table
+    if "<!-- BEGIN:tier-table -->" in content:
+        table = generate_tier_table(data["tiers"])
+        content = replace_section(content, "<!-- BEGIN:tier-table -->", "<!-- END:tier-table -->", table)
+        updated = True
+        print("Updated tier-table")
+
+    # Feature list
+    if "<!-- BEGIN:feature-list -->" in content:
+        features = generate_feature_list(data["tiers"])
+        content = replace_section(content, "<!-- BEGIN:feature-list -->", "<!-- END:feature-list -->", features)
+        updated = True
+        print("Updated feature-list")
+
+    if updated:
+        README.write_text(content)
+        print(f"Wrote {README}")
     else:
-        print(f"Markers not found in {README}. Add {START_MARKER} and {END_MARKER}.")
+        print("No markers found. Add <!-- BEGIN:tier-table --> and <!-- END:tier-table --> to README.md")
+        sys.exit(1)
 
 
 if __name__ == "__main__":
