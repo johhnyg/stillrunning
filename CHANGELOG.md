@@ -1,5 +1,22 @@
 # Changelog
 
+## v2.11.0 — May 2, 2026
+
+**Single source of truth + bypass route coverage**
+
+### Added
+- **features.json** — version, tiers, verify_checks, last_session in one file
+- **`/api/version`** — serves features.json with 5-minute cache
+- **scripts/sync-version.py** — syncs version to pyproject.toml and cli.py
+- **scripts/regen-readme.py** — regenerates tier table from features.json
+- **Venv auto-enable** — shell-install now installs sitecustomize.py automatically
+- **Conda hook** — conda_hook.sh wraps `conda install/create`
+
+### Security
+- **Closes CVE-2026-31431 gaps #1 (venv) and #5 (conda)**
+
+---
+
 ## v2.10.0 — May 2, 2026
 
 **CVE-2026-31431 gap fixes — shell auto-activation**
