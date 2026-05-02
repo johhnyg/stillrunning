@@ -1,0 +1,72 @@
+{
+  "version": "2.11.0",
+  "released": "2026-05-02",
+  "tiers": {
+    "free": {
+      "price": 0,
+      "scans_per_day": 10,
+      "machines": 1,
+      "dashboard": false,
+      "features": [
+        "Guard daemon (always-on)",
+        "npm/pip intercept",
+        "Live threat rules (hourly updates)"
+      ]
+    },
+    "personal": {
+      "price": 9,
+      "scans_per_day": 100,
+      "machines": 1,
+      "dashboard": false,
+      "features": [
+        "Everything in Free",
+        "100 scans/day",
+        "Telegram + email alerts",
+        "Email support"
+      ]
+    },
+    "basic": {
+      "price": 29,
+      "scans_per_day": null,
+      "machines": 3,
+      "dashboard": true,
+      "features": [
+        "Everything in Personal",
+        "yourname.stillrunning.io dashboard",
+        "Monday weekly reports",
+        "Uptime milestone alerts",
+        "3 machines"
+      ]
+    },
+    "ai": {
+      "price": 49,
+      "scans_per_day": null,
+      "machines": null,
+      "dashboard": true,
+      "features": [
+        "Everything in Basic",
+        "AI crash diagnosis",
+        "Reply to alerts - AI answers",
+        "Crash pattern detection",
+        "Unlimited machines",
+        "Priority support"
+      ]
+    },
+    "enterprise": {
+      "price": 499,
+      "scans_per_day": null,
+      "machines": null,
+      "dashboard": true,
+      "features": [
+        "Everything in AI",
+        "Dedicated account manager",
+        "Custom integrations",
+        "SLA guarantee",
+        "On-premises option"
+      ]
+    }
+  },
+  "verify_checks": 67,
+  "last_session": 105,
+  "blocklist_count": 222873
+}
