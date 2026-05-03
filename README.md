@@ -143,6 +143,7 @@ stillrunning whitelist list         # Show whitelist
 - yourname.stillrunning.io dashboard
 - Monday weekly reports
 - Uptime milestone alerts
+- File integrity tripwire
 - 3 machines
 
 **Ai** ($49/mo)

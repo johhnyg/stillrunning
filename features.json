@@ -1,6 +1,6 @@
 {
-  "version": "2.11.0",
-  "released": "2026-05-02",
+  "version": "2.12.0",
+  "released": "2026-05-03",
   "tiers": {
     "free": {
       "price": 0,
@@ -35,6 +35,7 @@
         "yourname.stillrunning.io dashboard",
         "Monday weekly reports",
         "Uptime milestone alerts",
+        "File integrity tripwire",
         "3 machines"
       ]
     },
@@ -66,7 +67,7 @@
       ]
     }
   },
-  "verify_checks": 68,
-  "last_session": 105,
+  "verify_checks": 70,
+  "last_session": 106,
   "blocklist_count": 222873
 }
