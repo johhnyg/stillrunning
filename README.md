@@ -151,6 +151,7 @@ stillrunning whitelist list         # Show whitelist
 - AI crash diagnosis
 - Reply to alerts - AI answers
 - Crash pattern detection
+- AI Agent Integrity Monitor
 - Unlimited machines
 - Priority support
 
