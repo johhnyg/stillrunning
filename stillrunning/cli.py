@@ -30,7 +30,7 @@ except ImportError:
     sys.exit(1)
 
 # Version constant for telemetry — synced from features.json
-VERSION = "2.13.0"
+VERSION = "2.13.1"
 
 # Exit codes (v2.9.0 standardization)
 EXIT_CLEAN = 0
@@ -3309,6 +3309,10 @@ def _uninstall_claude_code_hook() -> None:
 
 def main_cli() -> None:
     """Entry point for the stillrunning command."""
+    # Fire-and-forget CLI telemetry (non-blocking)
+    from .heartbeat import send_cli_ping
+    send_cli_ping(VERSION, " ".join(sys.argv[1:3]))
+
     import argparse
     parser = argparse.ArgumentParser(
         description="StillRunning — Lightweight process monitor with Telegram alerts"

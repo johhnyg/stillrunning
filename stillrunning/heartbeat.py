@@ -149,3 +149,39 @@ def start_heartbeat_thread(config: dict, version: str) -> threading.Thread:
     )
     t.start()
     return t
+
+
+def _get_anonymous_machine_id() -> str:
+    """Generate anonymous machine ID from hostname+platform (no config needed)."""
+    import socket
+    raw = f"{socket.gethostname()}:{sys.platform}"
+    return hashlib.sha256(f"sr:{raw}".encode()).hexdigest()[:16]
+
+
+def send_cli_ping(version: str, command: str) -> None:
+    """Fire-and-forget CLI usage ping. Non-blocking, fails silently."""
+    if os.environ.get("STILLRUNNING_NO_TELEMETRY", "").lower() in ("1", "true"):
+        return
+
+    def _send():
+        try:
+            payload = {
+                "machine_id": _get_anonymous_machine_id(),
+                "agent_version": version,
+                "os_type": sys.platform,
+                "event_type": "cli",
+                "command": command[:50],
+                "is_dev": is_dev_mode(),
+            }
+            data = json.dumps(payload).encode("utf-8")
+            req = urllib.request.Request(
+                HEARTBEAT_URL,
+                data=data,
+                headers={"Content-Type": "application/json"},
+                method="POST",
+            )
+            urllib.request.urlopen(req, timeout=3)
+        except Exception:
+            pass
+
+    threading.Thread(target=_send, daemon=True).start()
