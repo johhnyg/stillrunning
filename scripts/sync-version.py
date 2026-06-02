@@ -8,6 +8,7 @@ Run before release:
 Updates:
 - pyproject.toml version
 - stillrunning/cli.py VERSION constant
+- stillrunning/__init__.py __version__ constant
 - CHANGELOG.md header (if releasing new version)
 """
 
@@ -19,6 +20,7 @@ ROOT = Path(__file__).parent.parent
 FEATURES = ROOT / "features.json"
 PYPROJECT = ROOT / "pyproject.toml"
 CLI = ROOT / "stillrunning" / "cli.py"
+INIT = ROOT / "stillrunning" / "__init__.py"
 
 
 def main():
@@ -39,6 +41,12 @@ def main():
     content = re.sub(r'VERSION = "[^"]+"', f'VERSION = "{version}"', content)
     CLI.write_text(content)
     print(f"  Updated {CLI}")
+
+    # Update __init__.py __version__ constant
+    content = INIT.read_text()
+    content = re.sub(r'__version__ = "[^"]+"', f'__version__ = "{version}"', content)
+    INIT.write_text(content)
+    print(f"  Updated {INIT}")
 
     print("Done!")
 
