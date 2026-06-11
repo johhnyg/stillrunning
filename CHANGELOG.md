@@ -1,5 +1,27 @@
 # Changelog
 
+## v2.13.2 — June 11, 2026
+
+**npm scanning actually works**
+
+### Fixed
+- **`stillrunning scan --npm`** — the npm wrapper called `scan <pkg> --npm`, but the
+  flag never existed; combined with `set -e` the wrapper failed closed and blocked
+  EVERY npm install. scan now checks the npm registry (scoped `@org/pkg` names
+  supported), the npm section of the threat feed, and passes `ecosystem=npm` to the
+  check-package API.
+- **Hardcoded blocklist normalization** — dash-named entries (`pino-debugger`,
+  `dev-log-core`, ...) could never match because only the input was normalized to
+  underscores. Both sides normalize now.
+- **`axios` delegated to the threat feed** — covered by MAL-2026-2307 (malicious
+  0.30.4/1.14.1) with proper withdrawal lifecycle instead of a permanent hardcode.
+
+### Added
+- **`@anthropic-ai/*` trusted-scope skip** in the npm wrapper template.
+
+---
+
+
 ## v2.11.0 — May 2, 2026
 
 **Single source of truth + bypass route coverage**
