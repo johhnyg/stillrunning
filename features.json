@@ -1,6 +1,6 @@
 {
-  "version": "2.13.1",
-  "released": "2026-05-06",
+  "version": "2.13.2",
+  "released": "2026-06-11",
   "tiers": {
     "free": {
       "price": 0,
@@ -69,6 +69,6 @@
     }
   },
   "verify_checks": 73,
-  "last_session": 106,
-  "blocklist_count": 222873
+  "last_session": 110,
+  "blocklist_count": 224540
 }
