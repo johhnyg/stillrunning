@@ -2491,11 +2491,14 @@ def _allow_package_local(pkg_name: str, once: bool = False) -> None:
     tmp.replace(override_file)
 
 
-def _scan_package(pkg_name: str) -> int:
+def _scan_package(pkg_name: str, npm: bool = False) -> int:
     """Scan a package for security issues. Returns: 0=CLEAN, 10=BLOCKED, 11=SUSPICIOUS, 1=ERROR."""
     import signal
+    import urllib.parse
     import urllib.request
     import urllib.error
+
+    ecosystem = "npm" if npm else "pip"
 
     # Fire heartbeat
     try:
@@ -2517,14 +2520,22 @@ def _scan_package(pkg_name: str) -> int:
     print()
 
     # Check blocklist first (hardcoded + files)
+    # v2.13.2: "axios" moved out of the hardcoded set — it is covered by the
+    # threat feed (MAL-2026-2307, malicious 0.30.4/1.14.1), which tracks
+    # withdrawal/expiry. Hardcoding it here would block axios forever even
+    # after OSV withdraws the advisory. Net behavior today: still BLOCKED.
     KNOWN_BAD = {
         "logutilkit", "apachelicense", "fluxhttp", "license-utils-kit", "logkitx",
-        "pino-debugger", "dev-log-core", "logger-base", "axios", "axois",
+        "pino-debugger", "dev-log-core", "logger-base", "axois",
         "plain-crypto-js", "termncolor", "colorinal",
     }
-    pkg_lower = pkg_name.lower().replace("-", "_")
+    # v2.13.2: normalize BOTH sides — entries contain dashes, so the old
+    # one-sided replace("-","_") meant dash-named entries could never match.
+    def _norm(name: str) -> str:
+        return name.lower().replace("-", "_")
+    pkg_lower = _norm(pkg_name)
 
-    if pkg_lower in KNOWN_BAD:
+    if pkg_lower in {_norm(k) for k in KNOWN_BAD}:
         print(f"✗ stillrunning BLOCKED [exit {EXIT_BLOCKED}]: {pkg_name}")
         print(f"   Reason: Known malicious package (hardcoded blocklist)")
         print(f"   See: https://stillrunning.io/security-advisories?pkg={pkg_name}")
@@ -2538,7 +2549,8 @@ def _scan_package(pkg_name: str) -> int:
         if kb_path.exists():
             with open(kb_path) as f:
                 known_bad = json.load(f)
-            if pkg_lower in known_bad.get("pip", {}) or pkg_name in known_bad.get("pip", {}):
+            eco_bad = known_bad.get(ecosystem, {})
+            if pkg_lower in eco_bad or pkg_name in eco_bad or pkg_name.lower() in eco_bad:
                 print(f"✗ stillrunning BLOCKED [exit {EXIT_BLOCKED}]: {pkg_name}")
                 print(f"   Reason: Known malicious package (threat feed)")
                 print(f"   See: https://stillrunning.io/security-advisories?pkg={pkg_name}")
@@ -2546,20 +2558,26 @@ def _scan_package(pkg_name: str) -> int:
     except Exception:
         pass
 
-    # Check if package exists on PyPI
-    try:
+    # Check the package exists on its registry (v2.13.2: npm support)
+    if npm:
+        registry_name = "npm"
+        # scoped names (@scope/pkg) need the slash encoded for the registry URL
+        url = f"https://registry.npmjs.org/{urllib.parse.quote(pkg_name, safe='@')}"
+    else:
+        registry_name = "PyPI"
         url = f"https://pypi.org/pypi/{pkg_name}/json"
+    try:
         req = urllib.request.Request(url, headers={"User-Agent": "stillrunning/2.3.0"})
         with urllib.request.urlopen(req, timeout=10) as resp:
-            pypi_data = json.loads(resp.read().decode())
+            json.loads(resp.read().decode())
     except urllib.error.HTTPError as e:
         if e.code == 404:
-            print(f"\033[91mERROR\033[0m: Package '{pkg_name}' not found on PyPI")
+            print(f"\033[91mERROR\033[0m: Package '{pkg_name}' not found on {registry_name}")
             return EXIT_ERROR
-        print(f"\033[91mERROR\033[0m: PyPI returned HTTP {e.code}")
+        print(f"\033[91mERROR\033[0m: {registry_name} returned HTTP {e.code}")
         return EXIT_ERROR
     except urllib.error.URLError:
-        print(f"\033[91mERROR\033[0m: Unable to reach PyPI")
+        print(f"\033[91mERROR\033[0m: Unable to reach {registry_name}")
         return EXIT_ERROR
     except Exception as e:
         print(f"\033[91mERROR\033[0m: {e}")
@@ -2569,7 +2587,7 @@ def _scan_package(pkg_name: str) -> int:
     try:
         api_url = "https://stillrunning.io/api/check-package"
         req = urllib.request.Request(
-            f"{api_url}?name={pkg_name}&ecosystem=pip",
+            f"{api_url}?name={urllib.parse.quote(pkg_name)}&ecosystem={ecosystem}",
             headers={"User-Agent": "stillrunning/2.3.0"}
         )
         with urllib.request.urlopen(req, timeout=15) as resp:
@@ -2837,6 +2855,9 @@ if [[ "$1" == "install" || "$1" == "i" || "$1" == "add" ]]; then
         [[ -n "$pkg" ]] && packages+=("$pkg")
     done
     for pkg in "${packages[@]}"; do
+        if [[ "$pkg" == @anthropic-ai/* ]]; then
+            continue   # trusted scope, skip scan
+        fi
         if ! stillrunning scan "$pkg" --npm >/dev/null 2>&1; then
             echo "stillrunning: Package '$pkg' blocked. See https://stillrunning.io/blocked?pkg=$pkg"
             exit 1
@@ -3393,6 +3414,8 @@ def main_cli() -> None:
     # v2.3.0: Scan subcommand — check if a package is safe
     scan_parser = subparsers.add_parser("scan", help="Check if a package is safe to install")
     scan_parser.add_argument("package", help="Package name to scan")
+    scan_parser.add_argument("--npm", action="store_true",
+                             help="Scan an npm package (default: PyPI). Used by the npm wrapper.")
 
     # v2.4.0: Scan-manifest subcommand — check all packages in a manifest file
     manifest_parser = subparsers.add_parser("scan-manifest", help="Scan a requirements.txt or similar file")
@@ -3431,9 +3454,9 @@ def main_cli() -> None:
         _allow_package_local(args.package, once=args.once)
         return
 
-    # v2.3.0: Handle scan subcommand
+    # v2.3.0: Handle scan subcommand (v2.13.2: --npm)
     if args.command == "scan":
-        sys.exit(_scan_package(args.package))
+        sys.exit(_scan_package(args.package, npm=args.npm))
 
     # v2.4.0: Handle scan-manifest subcommand
     if args.command == "scan-manifest":
