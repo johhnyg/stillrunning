@@ -1,5 +1,18 @@
 # Changelog
 
+## v2.13.3 — June 12, 2026
+
+**Telemetry heartbeats actually reach the server**
+
+### Fixed
+- **Anonymous heartbeats were silently 403'd.** stillrunning.io sits behind
+  Cloudflare, which blocks the default `Python-urllib/x.y` User-Agent. The
+  heartbeat client sent no User-Agent, so every `install`/`active`/`intercept`/`cli`
+  heartbeat was rejected and the exception swallowed — no agent telemetry had ever
+  landed. All three request sites (`_send_heartbeat`, `send_intercept_event`,
+  `send_cli_ping`) now send `User-Agent: stillrunning/{version}`. Verified: a clean
+  container install now lands a heartbeat (HTTP 200).
+
 ## v2.13.2 — June 11, 2026
 
 **npm scanning actually works**
