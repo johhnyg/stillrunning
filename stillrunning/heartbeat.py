@@ -76,7 +76,7 @@ def _send_heartbeat(config: dict, version: str, event_type: str = "active") -> b
         req = urllib.request.Request(
             HEARTBEAT_URL,
             data=data,
-            headers={"Content-Type": "application/json"},
+            headers={"Content-Type": "application/json", "User-Agent": f"stillrunning/{version}"},
             method="POST",
         )
         with urllib.request.urlopen(req, timeout=10) as resp:
@@ -115,7 +115,7 @@ def send_intercept_event(config: dict, version: str, package: str, result: str) 
         req = urllib.request.Request(
             HEARTBEAT_URL,
             data=data,
-            headers={"Content-Type": "application/json"},
+            headers={"Content-Type": "application/json", "User-Agent": f"stillrunning/{version}"},
             method="POST",
         )
         with urllib.request.urlopen(req, timeout=10) as resp:
@@ -177,7 +177,7 @@ def send_cli_ping(version: str, command: str) -> None:
             req = urllib.request.Request(
                 HEARTBEAT_URL,
                 data=data,
-                headers={"Content-Type": "application/json"},
+                headers={"Content-Type": "application/json", "User-Agent": f"stillrunning/{version}"},
                 method="POST",
             )
             urllib.request.urlopen(req, timeout=3)
