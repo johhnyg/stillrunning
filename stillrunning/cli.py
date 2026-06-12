@@ -30,7 +30,7 @@ except ImportError:
     sys.exit(1)
 
 # Version constant for telemetry — synced from features.json
-VERSION = "2.13.2"
+VERSION = "2.13.3"
 
 # Exit codes (v2.9.0 standardization)
 EXIT_CLEAN = 0
