@@ -30,7 +30,7 @@ except ImportError:
     sys.exit(1)
 
 # Version constant for telemetry — synced from features.json
-VERSION = "2.13.4"
+VERSION = "2.13.5"
 
 # Exit codes (v2.9.0 standardization)
 EXIT_CLEAN = 0
@@ -3129,6 +3129,43 @@ def _status() -> int:
     return 0
 
 
+def _is_locally_blocked(pkg_name: str, ecosystem: str = "pip") -> tuple[bool, str]:
+    """Check if package is in local blocklist (hardcoded or threat feed file).
+
+    Returns (is_blocked, reason).
+    """
+    # Hardcoded known-bad packages (high-confidence, never changes)
+    KNOWN_BAD = {
+        "logutilkit", "apachelicense", "fluxhttp", "license-utils-kit", "logkitx",
+        "pino-debugger", "dev-log-core", "logger-base", "axois",
+        "plain-crypto-js", "termncolor", "colorinal",
+    }
+
+    def _norm(name: str) -> str:
+        return name.lower().replace("-", "_")
+
+    pkg_lower = _norm(pkg_name)
+
+    if pkg_lower in {_norm(k) for k in KNOWN_BAD}:
+        return True, "Known malicious package (hardcoded blocklist)"
+
+    # Check known_bad_packages.json (threat feed)
+    try:
+        kb_path = Path.home() / "my-app" / "known_bad_packages.json"
+        if not kb_path.exists():
+            kb_path = Path.home() / ".stillrunning" / "known_bad_packages.json"
+        if kb_path.exists():
+            with open(kb_path) as f:
+                known_bad = json.load(f)
+            eco_bad = known_bad.get(ecosystem, {})
+            if pkg_lower in eco_bad or pkg_name in eco_bad or pkg_name.lower() in eco_bad:
+                return True, "Known malicious package (threat feed)"
+    except Exception:
+        pass
+
+    return False, ""
+
+
 def _run_claude_code_hook() -> None:
     """Run as Claude Code PreToolUse hook. Branded messages, proper exit codes."""
     import re
@@ -3211,44 +3248,86 @@ def _run_claude_code_hook() -> None:
 
                 if verdict == "DANGEROUS":
                     reason_text = reason or "Known malicious package"
-                    sys.stderr.write(f"\n⛔ stillrunning: blocked {pkg_type} install {pkg_name}\n")
+                    sys.stderr.write(f"\n🤖 stillrunning blocked {pkg_type} install of {pkg_name}\n")
                     sys.stderr.write(f"   reason: {reason_text}\n")
                     sys.stderr.write(f"   details: https://stillrunning.io/blocked?pkg={pkg_name}\n")
-                    sys.stderr.write(f"   to override: stillrunning allow {pkg_name} --once\n\n")
+                    sys.stderr.write(f"   override: stillrunning allow {pkg_name} --once\n\n")
                     sys.exit(2)
 
                 elif verdict == "SUSPICIOUS":
                     reason_text = reason or "Package flagged as suspicious"
                     # Non-strict mode: warn but allow
-                    sys.stderr.write(f"\n⚠️  stillrunning: {pkg_name} looks suspicious — proceeding\n")
+                    sys.stderr.write(f"\n🤖 stillrunning: {pkg_name} looks suspicious — proceeding\n")
                     sys.stderr.write(f"   reason: {reason_text}\n")
                     sys.stderr.write(f"   details: https://stillrunning.io/check?pkg={pkg_name}\n\n")
                     # exit 0 = allow with warning
 
             except urllib.error.HTTPError as e:
                 if e.code == 429:
-                    # Rate limited - warn but allow (fail open)
-                    sys.stderr.write(f"\n⚠️  stillrunning: scan limit reached, allowing {pkg_name}\n")
-                    sys.stderr.write(f"   upgrade: https://stillrunning.io/pricing\n\n")
+                    # Rate limited - check local blocklist first, then BLOCK (fail-closed)
+                    is_blocked, reason = _is_locally_blocked(pkg_name, pkg_type)
+                    if is_blocked:
+                        sys.stderr.write(f"\n🤖 stillrunning blocked {pkg_type} install of {pkg_name}\n")
+                        sys.stderr.write(f"   reason: {reason}\n")
+                        sys.stderr.write(f"   details: https://stillrunning.io/blocked?pkg={pkg_name}\n\n")
+                        sys.exit(2)
+                    else:
+                        # Not in local blocklist, but can't verify with API - block to be safe
+                        sys.stderr.write(f"\n🤖 stillrunning blocked {pkg_name} (scan limit reached)\n")
+                        sys.stderr.write(f"   Free tier can't verify this package. Options:\n")
+                        sys.stderr.write(f"   • Get API token: https://stillrunning.io/pricing\n")
+                        sys.stderr.write(f"   • One-time allow: stillrunning allow {pkg_name} --once\n\n")
+                        sys.exit(2)
                 else:
-                    _debug(f"HTTP error {e.code}, failing open")
-                    sys.stderr.write(f"⚠️  stillrunning: API error ({e.code}), allowing install\n")
+                    # Other HTTP errors - check local blocklist, then block unknown
+                    is_blocked, reason = _is_locally_blocked(pkg_name, pkg_type)
+                    if is_blocked:
+                        sys.stderr.write(f"\n🤖 stillrunning blocked {pkg_type} install of {pkg_name}\n")
+                        sys.stderr.write(f"   reason: {reason}\n")
+                        sys.exit(2)
+                    else:
+                        sys.stderr.write(f"\n🤖 stillrunning blocked {pkg_name} (API error {e.code})\n")
+                        sys.stderr.write(f"   Can't verify safety. Use: stillrunning allow {pkg_name} --once\n\n")
+                        sys.exit(2)
             except urllib.error.URLError as e:
-                _debug(f"URL error: {e}, failing open")
-                sys.stderr.write(f"⚠️  stillrunning: couldn't reach API, allowing install\n")
+                # Network error - check local blocklist, then block unknown
+                _debug(f"URL error: {e}")
+                is_blocked, reason = _is_locally_blocked(pkg_name, pkg_type)
+                if is_blocked:
+                    sys.stderr.write(f"\n🤖 stillrunning blocked {pkg_type} install of {pkg_name}\n")
+                    sys.stderr.write(f"   reason: {reason}\n")
+                    sys.exit(2)
+                else:
+                    sys.stderr.write(f"\n🤖 stillrunning blocked {pkg_name} (can't reach API)\n")
+                    sys.stderr.write(f"   Can't verify safety. Use: stillrunning allow {pkg_name} --once\n\n")
+                    sys.exit(2)
             except Exception as e:
-                _debug(f"exception: {e}, failing open")
-                sys.stderr.write(f"⚠️  stillrunning: check failed, allowing install\n")
+                # Unknown error - check local blocklist, then block unknown
+                _debug(f"exception: {e}")
+                is_blocked, reason = _is_locally_blocked(pkg_name, pkg_type)
+                if is_blocked:
+                    sys.stderr.write(f"\n🤖 stillrunning blocked {pkg_type} install of {pkg_name}\n")
+                    sys.stderr.write(f"   reason: {reason}\n")
+                    sys.exit(2)
+                else:
+                    sys.stderr.write(f"\n🤖 stillrunning blocked {pkg_name} (check failed)\n")
+                    sys.stderr.write(f"   Can't verify safety. Use: stillrunning allow {pkg_name} --once\n\n")
+                    sys.exit(2)
 
         sys.exit(0)
 
     except json.JSONDecodeError:
-        sys.stderr.write("⚠️  stillrunning: invalid input, allowing\n")
-        sys.exit(0)
+        # Invalid JSON from Claude Code - this shouldn't happen, block to be safe
+        sys.stderr.write("🤖 stillrunning blocked (invalid hook input)\n")
+        sys.stderr.write("   Report: https://github.com/johhnyg/stillrunning/issues\n")
+        sys.exit(2)
     except Exception as e:
+        # Unknown error in hook - block to be safe
         if debug:
-            sys.stderr.write(f"⚠️  stillrunning: error ({e}), allowing\n")
-        sys.exit(0)
+            sys.stderr.write(f"🤖 stillrunning blocked (hook error: {e})\n")
+        else:
+            sys.stderr.write("🤖 stillrunning blocked (hook error)\n")
+        sys.exit(2)
 
 
 def _install_claude_code_hook() -> None:
