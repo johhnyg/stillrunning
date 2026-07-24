@@ -43,10 +43,15 @@ def _get_machine_id_hash() -> str:
     return _machine_id_hash
 
 
+def is_dev_mode() -> bool:
+    """Check if running in dev mode (STILLRUNNING_DEV=1)."""
+    return os.environ.get("STILLRUNNING_DEV", "").lower() in ("1", "true", "yes")
+
+
 def is_funnel_enabled() -> bool:
     """Check if funnel telemetry is enabled."""
     # Disabled if STILLRUNNING_DEV=1 (internal usage)
-    if os.environ.get("STILLRUNNING_DEV", "").lower() in ("1", "true", "yes"):
+    if is_dev_mode():
         return False
     # Disabled if STILLRUNNING_NO_FUNNEL=1 (explicit opt-out)
     if os.environ.get("STILLRUNNING_NO_FUNNEL", "").lower() in ("1", "true", "yes"):

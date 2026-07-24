@@ -3601,7 +3601,14 @@ def main_cli() -> None:
     elif args.setup or args.autonomous:
         run_setup_wizard(autonomous=args.autonomous)
     else:
-        main()
+        # First-run detection: no config → run setup wizard
+        if not CONFIG_FILE.exists():
+            print()
+            print("  No configuration found. Starting setup wizard...")
+            print()
+            run_setup_wizard(autonomous=False)
+        else:
+            main()
 
 
 if __name__ == "__main__":
