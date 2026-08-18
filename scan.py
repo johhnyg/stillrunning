@@ -14,6 +14,66 @@ import urllib.error
 
 API_URL = "https://stillrunning.io/api/github-action/scan"
 
+# ── ANSI palette (GitHub Actions log viewer renders basic ANSI) ─────────
+RESET = "\033[0m"
+BOLD = "\033[1m"
+RED = "\033[31m"
+BRIGHT_RED = "\033[91m"
+YELLOW = "\033[93m"
+WHITE = "\033[97m"
+DIM = "\033[2m"
+
+_ANSI_RE = re.compile(r"\033\[[0-9;]*m")
+_BOX_WIDTH = 58  # inner width of the security-block banner
+
+
+def _row(content: str = "") -> str:
+    """One banner row, padded to the box width (ANSI codes excluded)."""
+    pad = " " * max(0, _BOX_WIDTH - len(_ANSI_RE.sub("", content)))
+    edge = f"{BOLD}{RED}║{RESET}"
+    return f"{edge} {content}{pad} {edge}"
+
+
+def print_security_block(dangerous: list[dict]) -> None:
+    """Render the StillRunning security-block banner."""
+    top = f"{BOLD}{RED}╔{'═' * (_BOX_WIDTH + 2)}╗{RESET}"
+    mid = f"{BOLD}{RED}╠{'═' * (_BOX_WIDTH + 2)}╣{RESET}"
+    bot = f"{BOLD}{RED}╚{'═' * (_BOX_WIDTH + 2)}╝{RESET}"
+
+    shield = [
+        "▗▄▄▄▄▄▄▄▖",
+        "▐███████▌",
+        "▐██ ✗ ██▌",
+        "▐███████▌",
+        " ▜█████▛ ",
+        "   ▜█▛   ",
+    ]
+    tags = [
+        "",
+        f"{BOLD}{WHITE}S T I L L R U N N I N G{RESET}",
+        f"{BOLD}{YELLOW}SUPPLY-CHAIN SECURITY BLOCK{RESET}",
+        "",
+        f"{DIM}Deliberate security stop — not a flaky build.{RESET}",
+        f"{DIM}Do not re-run. Remove the package below.{RESET}",
+    ]
+
+    lines = [top]
+    for art, tag in zip(shield, tags):
+        lines.append(_row(f"{BRIGHT_RED}{art}{RESET}   {tag}"))
+    lines.append(mid)
+    for pkg in dangerous:
+        name = str(pkg.get("package", "unknown"))[: _BOX_WIDTH - 11]
+        reason = str(pkg.get("reason", "Known malicious"))[: _BOX_WIDTH - 11]
+        lines.append(_row(f"{BOLD}{BRIGHT_RED}✗ BLOCKED{RESET}  {BOLD}{YELLOW}{name}{RESET}"))
+        lines.append(_row(f"{DIM}           {reason}{RESET}"))
+    lines.append(mid)
+    n = len(dangerous)
+    plural = "s" if n != 1 else ""
+    lines.append(_row(f"{BOLD}{WHITE}{n} malicious package{plural} stopped before install.{RESET}"))
+    lines.append(_row(f"{DIM}stillrunning.io — so your code is still running tomorrow.{RESET}"))
+    lines.append(bot)
+    print("\n" + "\n".join(lines) + "\n", flush=True)
+
 
 def parse_requirements(path: str) -> list[str]:
     """Parse requirements.txt and return list of package specs."""
@@ -158,9 +218,12 @@ def main():
     print(f"{'='*60}\n")
 
     if dangerous:
-        print("::error::DANGEROUS packages found:")
+        print_security_block(dangerous)
+        # Plain workflow commands (no ANSI) so GitHub renders proper
+        # annotations in the Checks / PR UI alongside the banner above.
         for pkg in dangerous:
-            print(f"  - {pkg.get('package')}: {pkg.get('reason', 'Known malicious')}")
+            print(f"::error title=StillRunning security block::"
+                  f"{pkg.get('package')}: {pkg.get('reason', 'Known malicious')}")
 
     if suspicious:
         level = "error" if fail_on_suspicious else "warning"
@@ -182,7 +245,8 @@ def main():
 
     # Exit with error if dangerous found (or suspicious if configured)
     if dangerous:
-        print("\n::error::CI blocked: Dangerous packages detected")
+        print("\n::error title=StillRunning security block::"
+              "CI blocked: malicious packages detected — this is a security stop, not a build failure")
         sys.exit(1)
 
     if suspicious and fail_on_suspicious:
