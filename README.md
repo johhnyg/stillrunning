@@ -84,6 +84,36 @@ Or add to `~/.claude/settings.json`:
 }
 ```
 
+### GitHub Actions
+
+Add supply chain security to your CI/CD pipeline:
+
+```yaml
+# .github/workflows/security.yml
+name: Security Scan
+on: [push, pull_request]
+
+jobs:
+  stillrunning:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: johhnyg/stillrunning@v1
+        with:
+          requirements: requirements.txt
+          # Optional: fail on suspicious packages too
+          # fail-on-suspicious: true
+```
+
+For npm projects:
+
+```yaml
+      - uses: johhnyg/stillrunning@v1
+        with:
+          package-json: package.json
+          package-lock: package-lock.json
+```
+
 ## Security Advisories
 
 Browse the full threat database: [stillrunning.io/security-advisories](https://stillrunning.io/security-advisories)

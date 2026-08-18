@@ -1,0 +1,58 @@
+name: 'StillRunning Security Scan'
+description: 'Block malicious pip/npm packages before they reach your CI. Checks dependencies against 225k+ known-bad packages.'
+author: 'johhnyg'
+branding:
+  icon: 'shield'
+  color: 'green'
+
+inputs:
+  requirements:
+    description: 'Path to requirements.txt file'
+    required: false
+    default: 'requirements.txt'
+  package-json:
+    description: 'Path to package.json file'
+    required: false
+    default: ''
+  package-lock:
+    description: 'Path to package-lock.json file'
+    required: false
+    default: ''
+  token:
+    description: 'StillRunning API token (optional, for AI scanning of unknown packages)'
+    required: false
+    default: ''
+  fail-on-suspicious:
+    description: 'Fail CI on SUSPICIOUS packages (not just DANGEROUS)'
+    required: false
+    default: 'false'
+
+outputs:
+  status:
+    description: 'Overall scan status: CLEAN, SUSPICIOUS, or DANGEROUS'
+  dangerous-count:
+    description: 'Number of dangerous packages found'
+  suspicious-count:
+    description: 'Number of suspicious packages found'
+  report:
+    description: 'Full scan report in markdown format'
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Install dependencies
+      shell: bash
+      run: |
+        python3 -m pip install --quiet requests
+
+    - name: Run StillRunning scan
+      id: scan
+      shell: bash
+      env:
+        INPUT_REQUIREMENTS: ${{ inputs.requirements }}
+        INPUT_PACKAGE_JSON: ${{ inputs.package-json }}
+        INPUT_PACKAGE_LOCK: ${{ inputs.package-lock }}
+        INPUT_TOKEN: ${{ inputs.token }}
+        INPUT_FAIL_ON_SUSPICIOUS: ${{ inputs.fail-on-suspicious }}
+        GITHUB_REPOSITORY: ${{ github.repository }}
+      run: python3 ${{ github.action_path }}/scan.py
