@@ -1,5 +1,33 @@
 # Changelog
 
+## Unreleased — August 18, 2026 (Session 122)
+
+**GitHub Action + CI hardening**
+
+### Added
+- **GitHub Action** (`johhnyg/stillrunning@v1`) — CI/CD supply chain scanning via
+  `action.yml` + `scan.py`. Scans `requirements.txt` (default) and/or
+  `package.json`/`package-lock.json`, fails the build on DANGEROUS packages
+  (optionally SUSPICIOUS with `fail-on-suspicious: true`). Outputs: `status`,
+  `dangerous-count`, `suspicious-count`, `report`. Optional `token` input enables
+  AI scanning of unknown packages.
+
+  ```yaml
+  - uses: johhnyg/stillrunning@v1
+    with:
+      requirements: requirements.txt
+  ```
+
+- **ASCII security block banner** — `scan.py` renders a bold red shield banner
+  ("SUPPLY-CHAIN SECURITY BLOCK") when malicious packages are detected, so blocks
+  are unmissable in CI logs.
+
+### Fixed
+- **pip/npm shim subcommand handling** — the wrappers hardcoded `install`
+  regardless of the command actually run, breaking `pip download` entirely and
+  rewriting `npm i` / `npm add` semantics. Both shims now capture the original
+  subcommand and pass it through.
+
 ## v2.13.3 — June 12, 2026
 
 **Telemetry heartbeats actually reach the server**
