@@ -2822,6 +2822,7 @@ _WRAPPER_SCRIPT_PIP = '''#!/bin/bash
 # stillrunning pip wrapper — checks packages before install
 set -e
 if [[ "$1" == "install" || "$1" == "download" ]]; then
+    subcmd="$1"
     shift
     packages=()
     for arg in "$@"; do
@@ -2836,7 +2837,7 @@ if [[ "$1" == "install" || "$1" == "download" ]]; then
             exit 1
         fi
     done
-    exec /usr/bin/pip install "$@"
+    exec /usr/bin/pip "$subcmd" "$@"
 else
     exec /usr/bin/pip "$@"
 fi
@@ -2846,6 +2847,7 @@ _WRAPPER_SCRIPT_NPM = '''#!/bin/bash
 # stillrunning npm wrapper — checks packages before install
 set -e
 if [[ "$1" == "install" || "$1" == "i" || "$1" == "add" ]]; then
+    subcmd="$1"
     shift
     packages=()
     for arg in "$@"; do
@@ -2863,7 +2865,7 @@ if [[ "$1" == "install" || "$1" == "i" || "$1" == "add" ]]; then
             exit 1
         fi
     done
-    exec /usr/bin/npm install "$@"
+    exec /usr/bin/npm "$subcmd" "$@"
 else
     exec /usr/bin/npm "$@"
 fi
