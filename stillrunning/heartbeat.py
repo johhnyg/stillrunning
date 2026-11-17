@@ -13,6 +13,7 @@ Event types:
 Dev/CI exclusion: Set STILLRUNNING_DEV=1 to flag as internal usage.
 """
 
+from stillrunning.apibase import api_base, api_url
 import hashlib
 import json
 import os
@@ -24,7 +25,7 @@ import urllib.error
 from pathlib import Path
 from datetime import datetime
 
-HEARTBEAT_URL = "https://stillrunning.io/api/heartbeat/anonymous"
+HEARTBEAT_URL = api_url("/api/heartbeat/anonymous")
 HEARTBEAT_INTERVAL_SEC = 6 * 60 * 60  # 6 hours
 
 _start_time = time.time()

@@ -145,9 +145,10 @@ def test_wrappers_share_the_verdict_function(script):
     (13, "0", True, ""),
     (10, "0", False, "known malicious"),
     (11, "0", False, "suspicious"),
-    (1, "0", True, "NOT checked"),
-    (12, "0", True, "quota"),
-    (127, "0", True, "not installed"),
+    (1, "0", False, "stopped"),          # Session 135: unverified needs approval by default
+    (12, "0", False, "quota"),
+    (127, "0", False, "not installed"),
+    (3, "0", False, "not on the public registry"),
     (1, "1", False, "stopped"),
     (127, "1", False, "stopped"),
     (10, "1", False, "known malicious"),
@@ -181,7 +182,11 @@ class _Net:
 
 
 @pytest.fixture
-def cli_scan(monkeypatch):
+def cli_scan(monkeypatch, tmp_path):
+    # Session 135: `scan` runs on the Claude Code hook's engine, which keeps
+    # its state (token, overrides) under $HOME/.stillrunning.
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.delenv("STILLRUNNING_API_BASE", raising=False)
     monkeypatch.setattr(cli, "Path", cli.Path)
     monkeypatch.setattr(cli.Path, "home", classmethod(lambda c: Path("/nonexistent-home")))
     monkeypatch.setattr("stillrunning.hook._get_api_token", lambda: None)
@@ -194,34 +199,62 @@ def cli_scan(monkeypatch):
 
 
 def test_scan_blocked_by_api_before_registry(cli_scan):
-    rc, seen = cli_scan({"check-package": {"verdict": "BLOCKED", "reason": "delisted malware"}})
-    assert rc == cli.EXIT_BLOCKED and not any("pypi.org" in u for u in seen)
+    # a delisted malicious package 404s on the registry and is still BLOCKED
+    rc, seen = cli_scan({"check-package": {"verdict": "BLOCKED", "reason": "delisted malware"},
+                         "pypi.org": (404, {})})
+    assert rc == cli.EXIT_BLOCKED
 
 
 def test_scan_quota_is_12_not_clean(cli_scan):
-    rc, _ = cli_scan({"check-package": (429, {"error": "quota"})})
+    # allowance used up and the unmetered route gives no proof of a fresh list
+    rc, _ = cli_scan({"check-package": (429, {"error": "quota"}),
+                      "/api/blocklist/": {"blocked": False}, "pypi.org": {"info": {}}})
     assert rc == cli.EXIT_RATE_LIMITED == 12
 
 
+def test_scan_quota_falls_back_to_the_unmetered_blocklist_route(cli_scan):
+    """Session 135 (e2e): the eleventh lookup of the day stopped every install.
+    A fresh miss on the unmetered route is a completed lookup; a hit blocks."""
+    fresh_miss = {"blocked": False, "fresh": True, "threat_data_age_hours": 3.0,
+                  "threat_database_size": 12277}
+    rc, seen = cli_scan({"check-package": (429, {"error": "quota"}),
+                         "/api/blocklist/": fresh_miss, "pypi.org": {"info": {}}})
+    assert rc == 0 and any("/api/blocklist/somepkg" in u for u in seen)
+    rc, _ = cli_scan({"check-package": (429, {"error": "quota"}),
+                      "/api/blocklist/": {"blocked": True, "advisory_ids": ["MAL-1-2"]},
+                      "pypi.org": {"info": {}}})
+    assert rc == cli.EXIT_BLOCKED
+
+
 def test_scan_offline_is_1_not_clean(cli_scan):
-    rc, _ = cli_scan({"check-package": urllib.error.URLError("down")})
+    rc, _ = cli_scan({"check-package": urllib.error.URLError("down"), "pypi.org": {"info": {}}})
     assert rc == cli.EXIT_ERROR
 
 
 def test_scan_stale_data_is_1(cli_scan):
-    rc, _ = cli_scan({"check-package": (503, {"verdict": "UNKNOWN", "status": "stale_data"})})
+    rc, _ = cli_scan({"check-package": (503, {"verdict": "UNKNOWN", "status": "stale_data"}),
+                      "pypi.org": {"info": {}}})
     assert rc == cli.EXIT_ERROR
 
 
 def test_scan_not_on_registry_is_3(cli_scan):
-    rc, _ = cli_scan({"check-package": {"verdict": "UNKNOWN"}, "pypi.org": (404, {})})
+    rc, _ = cli_scan({"check-package": {"verdict": "UNKNOWN", "status": "not_in_threat_database"},
+                      "pypi.org": (404, {})})
     assert rc == cli.EXIT_NOT_FOUND == 3
 
 
-def test_scan_not_on_blocklist_is_0_and_says_so_honestly(cli_scan, capsys):
+def test_scan_unknown_without_a_completed_lookup_is_not_a_pass(cli_scan):
+    # a bare UNKNOWN (no "not_in_threat_database") means the lookup did not complete
     rc, _ = cli_scan({"check-package": {"verdict": "UNKNOWN"}, "pypi.org": {"info": {}}})
+    assert rc == cli.EXIT_ERROR
+
+
+def test_scan_not_on_blocklist_is_0_and_says_so_honestly(cli_scan, capsys):
+    rc, _ = cli_scan({"check-package": {"verdict": "UNKNOWN", "status": "not_in_threat_database"},
+                      "pypi.org": {"info": {}}})
     out = capsys.readouterr().out
-    assert rc == 0 and "not on the blocklist" in out and "CLEAN" not in out
+    assert rc == 0 and "not on the blocklist" in out and "not a guarantee" in out
+    assert "CLEAN" not in out and "clean" not in out.lower() and "safe" not in out.lower()
 
 
 def test_conda_wrapper_uses_the_same_policy():
@@ -229,8 +262,14 @@ def test_conda_wrapper_uses_the_same_policy():
     assert "if ! stillrunning scan" not in cli._CONDA_ACTIVATE_SCRIPT
 
 
-def test_wrapper_exit_3_allows_with_a_note():
+def test_wrapper_exit_3_needs_approval():
+    """Session 135: "not on the registry" (typo, invented or private name) is
+    unverified — it needs approval instead of passing with a note."""
     script = _verdict_fn() + "\n__stillrunning_verdict demo 3\n"
     r = subprocess.run(["bash", "-c", script], capture_output=True, text=True,
-                       env={"PATH": "/usr/bin:/bin", "STILLRUNNING_FAIL_CLOSED": "1"})
-    assert r.returncode == 0 and "not on the public registry" in r.stderr
+                       env={"PATH": "/usr/bin:/bin"}, stdin=subprocess.DEVNULL)
+    assert r.returncode == 1 and "not on the public registry" in r.stderr
+    r = subprocess.run(["bash", "-c", script], capture_output=True, text=True,
+                       stdin=subprocess.DEVNULL,
+                       env={"PATH": "/usr/bin:/bin", "STILLRUNNING_ALLOW_UNVERIFIED": "1"})
+    assert r.returncode == 0 and "NOT checked" in r.stderr

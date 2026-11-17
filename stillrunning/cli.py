@@ -10,6 +10,7 @@ Usage:
 Requires: PyYAML (pip install pyyaml)
 """
 
+from stillrunning.apibase import api_base, api_url
 import gzip
 import json
 import os
@@ -41,6 +42,8 @@ EXIT_BLOCKED = 10
 EXIT_SUSPICIOUS = 11
 EXIT_RATE_LIMITED = 12
 EXIT_WITHDRAWN = 13
+EXIT_NEEDS_PERSON = 14  # part of it IS on the blocklist (some versions, or a local override
+                        # allows a listed package): only a person at the keyboard may continue
 
 # v2.5.0: Simple logger for exception visibility
 import logging
@@ -1248,7 +1251,7 @@ def _test_api_connection() -> tuple:
     """Test connection to stillrunning.io API. Returns (success, version, scans_remaining)."""
     try:
         req = urllib.request.Request(
-            "https://stillrunning.io/api/version",
+            api_url("/api/version"),
             headers={"User-Agent": "stillrunning-cli"}
         )
         with urllib.request.urlopen(req, timeout=10) as resp:
@@ -1275,7 +1278,7 @@ def _post_early_signup(email: str, channel: str, machine_id_hash: str) -> bool:
 
         data = json.dumps(payload).encode("utf-8")
         req = urllib.request.Request(
-            "https://stillrunning.io/api/early-signup",
+            api_url("/api/early-signup"),
             data=data,
             headers={"Content-Type": "application/json", "User-Agent": f"stillrunning/{VERSION}"},
             method="POST",
@@ -1306,6 +1309,13 @@ def _validate_email(email: str) -> bool:
 
 
 def run_setup_wizard(autonomous: bool = False) -> None:
+    """Setup: the alert questions, then an honest report of what is and is
+    not protected (and an offer to switch the Claude Code hook on)."""
+    _run_alert_setup(autonomous=autonomous)
+    _finish_setup(interactive=not autonomous)
+
+
+def _run_alert_setup(autonomous: bool = False) -> None:
     """Interactive setup wizard. If autonomous=True, reads config from env vars."""
     # Import funnel telemetry (opt-out, anonymous aggregate stats)
     from . import funnel
@@ -1542,7 +1552,7 @@ def run_setup_wizard(autonomous: bool = False) -> None:
 _SHIELD_CHECK_INTERVAL = 60  # Check every 60 seconds
 _SHIELD_ATTACKS_CAP = 10000  # Max entries in stillrunning_attacks.json
 _SHIELD_LEARNING_THRESHOLD = 50  # AI analysis every N attacks (AI tier)
-_SHIELD_API_URL = "https://stillrunning.io"
+_SHIELD_API_URL = api_base()
 
 # Shield runtime state
 _shield_tier: str = "basic"  # Set by validate_token response
@@ -1785,6 +1795,9 @@ def _fetch_shared_blocklist(token: str) -> list:
 
 def _report_threat_to_server(token: str, ip: str, threat_level: str) -> bool:
     """Report a HIGH+ threat to shared blocklist. AI tier only."""
+    from stillrunning.apibase import token_allowed
+    if not token_allowed():      # the account token only goes to the default server
+        return False
     try:
         payload = json.dumps({"token": token, "ip": ip, "threat_level": threat_level}).encode()
         req = urllib.request.Request(
@@ -2025,6 +2038,9 @@ def get_shield_summary() -> str:
 # Entry point
 # ---------------------------------------------------------------------------
 def main() -> None:
+    if _unsupported_os("monitor", "Package checks work here: stillrunning scan <package>, "
+                                  "stillrunning --hook-claude-code, stillrunning shell-install."):
+        sys.exit(1)
     load_config()
     load_state()
 
@@ -2092,7 +2108,7 @@ def _add_server_to_account(token: str, server_name: str) -> None:
     print(f"\nAdding server '{server_name}' to your account...")
 
     try:
-        url = "https://stillrunning.io/api/servers/add"
+        url = api_url("/api/servers/add")
         payload = json.dumps({"token": token, "server_name": server_name}).encode()
         req = urllib.request.Request(
             url,
@@ -2127,11 +2143,14 @@ def _add_server_to_account(token: str, server_name: str) -> None:
         print(f"Error: {e}")
 
 
-def run_doctor() -> None:
-    """Run comprehensive health check on stillrunning agent."""
+def run_doctor() -> int:
+    """Health check. Returns the exit code: 1 when no layer that checks
+    installs is ON, or when any check failed; 0 otherwise."""
+    import urllib.error
     import urllib.request
     import subprocess
     import shutil
+    from . import claude_hook, layers as layers_mod
 
     print("\n" + "=" * 50)
     print("STILLRUNNING DOCTOR")
@@ -2140,105 +2159,75 @@ def run_doctor() -> None:
     issues = []
     warnings = []
 
-    # 1. Check config file exists
-    config_path = Path.home() / ".stillrunning" / "config.json"
-    print("[1/6] Checking configuration...")
-    if not config_path.exists():
-        issues.append("Config file not found: ~/.stillrunning/config.json")
-        print("  [FAIL] Config file missing")
-        print("  Fix: Run 'stillrunning --setup' to create config")
-    else:
-        print("  [OK] Config file exists")
-        try:
-            with open(config_path) as f:
-                config = json.load(f)
-            token = config.get("token", "")
-            if not token:
-                issues.append("No token in config file")
-                print("  [FAIL] No token configured")
-        except Exception as e:
-            issues.append(f"Config file invalid: {e}")
-            print(f"  [FAIL] Config parse error: {e}")
+    # 1. What is actually protecting this machine
+    print("[1/6] Protection layers...")
+    layers = layers_mod.protection_layers()
+    for line in layers_mod.render(layers).splitlines():
+        print("  " + line)
+    if not layers_mod.install_time_protection(layers):
+        issues.append("No layer that checks installs is ON "
+                      "(fix: stillrunning --hook-claude-code, or stillrunning shell-install)")
 
-    # 2. Check agent process is running
-    print("\n[2/6] Checking agent process...")
+    # 2. Can the blocklist be reached, and does it answer?
+    print("\n[2/6] Blocklist lookup (a known-malicious test name)...")
     try:
-        result = subprocess.run(
-            ["pgrep", "-f", "stillrunning"],
-            capture_output=True, timeout=5
-        )
-        if result.returncode == 0:
-            pids = result.stdout.decode().strip().split('\n')
-            print(f"  [OK] Agent running (PID: {pids[0]})")
+        req = urllib.request.Request(
+            api_url("/api/blocklist/axois?ecosystem=npm"),
+            headers={"User-Agent": f"stillrunning/{VERSION}"})
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            answer = json.loads(resp.read().decode())
+        if isinstance(answer, dict) and answer.get("blocked") is True:
+            print("  [OK] stillrunning.io answered and recognises the test package as blocked")
         else:
-            warnings.append("Agent process not detected")
-            print("  [WARN] Agent not running")
-            print("  Fix: Run 'stillrunning' to start the agent")
+            issues.append("The blocklist did not recognise a known-malicious test package")
+            print("  [FAIL] The server answered, but did not flag the known-malicious test package")
     except Exception as e:
-        warnings.append(f"Could not check process: {e}")
-        print(f"  [WARN] Process check failed: {e}")
+        warnings.append(f"Blocklist not reachable ({type(e).__name__}) — NOT VERIFIED")
+        print(f"  [NOT VERIFIED] Could not reach stillrunning.io ({type(e).__name__}).")
+        print("  While it is unreachable, installs are not looked up: each one asks you first.")
 
-    # 3. Validate token with API
-    print("\n[3/6] Validating token with server...")
-    if config_path.exists():
+    # 3. Token (optional)
+    print("\n[3/6] API token...")
+    token, source = claude_hook.resolve_token()
+    if not token:
+        print("  [OFF] No token — anonymous free tier (a limited number of lookups per day;")
+        print("        after that every install asks you first). Optional: stillrunning.io/pricing")
+    else:
         try:
-            with open(config_path) as f:
-                config = json.load(f)
-            token = config.get("token", "")
-            if token:
-                url = f"https://stillrunning.io/api/validate-token"
-                req = urllib.request.Request(
-                    url,
-                    headers={"Authorization": f"Bearer {token}"}
-                )
-                with urllib.request.urlopen(req, timeout=10) as resp:
-                    data = json.loads(resp.read().decode())
-                    if data.get("valid"):
-                        print(f"  [OK] Token valid (tier: {data.get('tier', 'unknown')})")
-                        if data.get("trial"):
-                            expires = data.get("trial_expires", "soon")
-                            warnings.append(f"Trial expires: {expires}")
-                            print(f"  [WARN] Trial mode - expires {expires}")
-                    else:
-                        issues.append("Token invalid or expired")
-                        print("  [FAIL] Token invalid")
-                        print("  Fix: Check your token at stillrunning.io/dashboard")
+            req = urllib.request.Request(api_url("/api/validate-token"),
+                                         headers={"Authorization": f"Bearer {token}"})
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                data = json.loads(resp.read().decode())
+            if data.get("valid"):
+                print(f"  [OK] Token from {source} is valid (tier: {data.get('tier', 'unknown')})")
+                if data.get("trial"):
+                    expires = data.get("trial_expires", "soon")
+                    warnings.append(f"Trial expires: {expires}")
+                    print(f"  [WARN] Trial mode - expires {expires}")
+            else:
+                issues.append(f"Token from {source} is invalid or expired")
+                print(f"  [FAIL] Token from {source} is invalid")
+                print("  Fix: Check your token at stillrunning.io/dashboard")
         except urllib.error.HTTPError as e:
             issues.append(f"Token validation failed: HTTP {e.code}")
             print(f"  [FAIL] Server returned {e.code}")
         except Exception as e:
-            warnings.append(f"Could not validate token: {e}")
-            print(f"  [WARN] Validation failed: {e}")
-    else:
-        print("  [SKIP] No config to validate")
+            warnings.append(f"Token from {source} could not be validated ({type(e).__name__})")
+            print(f"  [NOT VERIFIED] Validation could not run: {type(e).__name__}")
 
-    # 4. Check Telegram connectivity
-    print("\n[4/6] Testing Telegram alerts...")
-    if config_path.exists():
-        try:
-            with open(config_path) as f:
-                config = json.load(f)
-            tg_token = config.get("telegram_bot_token", "")
-            tg_chat = config.get("telegram_chat_id", "")
-            if tg_token and tg_chat:
-                # Just check the bot is valid, don't send message
-                url = f"https://api.telegram.org/bot{tg_token}/getMe"
-                with urllib.request.urlopen(url, timeout=10) as resp:
-                    data = json.loads(resp.read().decode())
-                    if data.get("ok"):
-                        print(f"  [OK] Telegram bot connected ({data['result']['username']})")
-                    else:
-                        issues.append("Telegram bot token invalid")
-                        print("  [FAIL] Bot token invalid")
-            else:
-                warnings.append("Telegram not configured")
-                print("  [WARN] Telegram not configured")
-                print("  Fix: Run 'stillrunning --setup' to configure alerts")
-        except Exception as e:
-            warnings.append(f"Telegram check failed: {e}")
-            print(f"  [WARN] Telegram check failed: {e}")
-    else:
-        print("  [SKIP] No config")
+    # 4. Process monitor (optional)
+    print("\n[4/6] Process monitor (optional)...")
+    try:
+        result = subprocess.run(["pgrep", "-f", "stillrunning"], capture_output=True, timeout=5)
+        pids = [p for p in result.stdout.decode().split() if p != str(os.getpid())]
+        if result.returncode == 0 and pids:
+            print(f"  [NOT VERIFIED] A process with 'stillrunning' in its command line is running "
+                  f"(PID {pids[0]}); doctor cannot tell whether it is the monitor.")
+        else:
+            print("  [OFF] Not running. Only needed for process monitoring and alerts,")
+            print("        not for package checks. Start it with: stillrunning")
+    except Exception as e:
+        print(f"  [NOT VERIFIED] Process check failed: {type(e).__name__}")
 
     # 5. Check disk space
     print("\n[5/6] Checking disk space...")
@@ -2256,7 +2245,7 @@ def run_doctor() -> None:
             print(f"  [OK] Disk {pct_used:.1f}% used ({free // (1024**3)}GB free)")
     except Exception as e:
         warnings.append(f"Disk check failed: {e}")
-        print(f"  [WARN] Could not check disk: {e}")
+        print(f"  [NOT VERIFIED] Could not check disk: {e}")
 
     # 6. Check memory
     print("\n[6/6] Checking memory...")
@@ -2274,11 +2263,9 @@ def run_doctor() -> None:
             print(f"  [WARN] Memory {pct_used:.1f}% used")
         else:
             print(f"  [OK] Memory {pct_used:.1f}% used ({avail_kb // 1024}MB available)")
-    except Exception as e:
-        # macOS or other OS
-        print(f"  [SKIP] Memory check not available on this OS")
+    except Exception:
+        print("  [NOT VERIFIED] Memory check is not available on this OS")
 
-    # Summary
     print("\n" + "=" * 50)
     if issues:
         print(f"CRITICAL: {len(issues)} issue(s) found")
@@ -2292,32 +2279,69 @@ def run_doctor() -> None:
         print("HEALTHY: All checks passed!")
     print("=" * 50 + "\n")
 
-    # Return status
     if issues:
         print("Status: CRITICAL")
-        return
-    elif warnings:
-        print("Status: WARNINGS")
-        return
-    else:
-        print("Status: HEALTHY")
-        return
+        return 1
+    print("Status: WARNINGS" if warnings else "Status: HEALTHY")
+    return 0
+
+
+def _finish_setup(interactive: bool) -> None:
+    """End of --setup: say exactly what is protected and what is not. Setup
+    used to stop after the alert questions with nothing checking installs."""
+    from . import claude_hook, layers as layers_mod
+    token, source = claude_hook.resolve_token()
+    canonical = Path.home() / ".stillrunning" / "config.json"
+    if token and not source.startswith(("~/.stillrunning/config.json", "the STILLRUNNING_TOKEN")):
+        try:
+            data = {}
+            if canonical.exists():
+                with open(canonical) as f:
+                    data = json.load(f)
+            if isinstance(data, dict) and not data.get("token"):
+                data["token"] = token
+                canonical.parent.mkdir(parents=True, exist_ok=True)
+                tmp = canonical.with_suffix(".tmp")
+                with open(tmp, "w") as f:
+                    json.dump(data, f, indent=2)
+                os.chmod(tmp, 0o600)
+                tmp.replace(canonical)
+                print(f"  Token copied from {source} to ~/.stillrunning/config.json "
+                      "(the one place every command reads it from).")
+        except (OSError, ValueError) as e:
+            print(f"  WARNING: could not copy the token to ~/.stillrunning/config.json ({e}).")
+
+    layers = layers_mod.protection_layers()
+    hook_on = any(l["key"] == "claude_hook" and l["state"] == layers_mod.ON for l in layers)
+    if interactive and not hook_on and sys.stdin.isatty():
+        print("  Package checks are not switched on yet.")
+        answer = input("  Install the Claude Code hook now, so every install Claude Code "
+                       "runs is looked up first? [Y/n]: ").strip().lower()
+        print()
+        if answer in ("", "y", "yes"):
+            try:
+                for message in claude_hook.install():
+                    print("  " + message)
+            except (claude_hook.InstallError, OSError) as e:
+                print(f"  Claude Code hook NOT installed: {e}")
+            print()
+            layers = layers_mod.protection_layers()
+
+    print("  What is protected right now")
+    print("  " + "-" * 40)
+    for line in layers_mod.render(layers).splitlines():
+        print("  " + line)
+    print()
 
 
 # ---------------------------------------------------------------------------
 # SESSION 91: Package Whitelist Commands
 # ---------------------------------------------------------------------------
 def _get_customer_token() -> str | None:
-    """Get customer token from config file."""
-    config_path = Path.home() / ".stillrunning" / "config.json"
-    if config_path.exists():
-        try:
-            with open(config_path) as f:
-                config = json.load(f)
-            return config.get("token", "")
-        except Exception:
-            pass
-    return None
+    """The API token, by the one precedence every command uses
+    (see claude_hook.resolve_token)."""
+    from .claude_hook import resolve_token
+    return resolve_token()[0]
 
 
 def _whitelist_add(package: str) -> None:
@@ -2328,7 +2352,7 @@ def _whitelist_add(package: str) -> None:
         return
 
     try:
-        url = "https://stillrunning.io/api/whitelist/add"
+        url = api_url("/api/whitelist/add")
         payload = json.dumps({"token": token, "package": package.lower()}).encode()
         req = urllib.request.Request(
             url, data=payload,
@@ -2356,7 +2380,7 @@ def _whitelist_remove(package: str) -> None:
         return
 
     try:
-        url = "https://stillrunning.io/api/whitelist/remove"
+        url = api_url("/api/whitelist/remove")
         payload = json.dumps({"token": token, "package": package.lower()}).encode()
         req = urllib.request.Request(
             url, data=payload,
@@ -2384,7 +2408,7 @@ def _whitelist_list() -> None:
         return
 
     try:
-        url = f"https://stillrunning.io/api/whitelist/list"
+        url = api_url("/api/whitelist/list")
         req = urllib.request.Request(
             url,
             headers={"Authorization": f"Bearer {token}"}
@@ -2492,13 +2516,130 @@ def _allow_package_local(pkg_name: str, once: bool = False) -> None:
     tmp.replace(override_file)
 
 
-def _scan_package(pkg_name: str, npm: bool = False) -> int:
-    """Scan a package. Returns 0 not on blocklist, 10 BLOCKED, 11 SUSPICIOUS,
-    12 quota exhausted, 1 could not check, 3 not on the registry, 2 timeout/usage."""
+_PIP_SPEC = re.compile(r"^([A-Za-z0-9][A-Za-z0-9._-]*)\s*(\[[^\]]*\])?\s*(.*)$")
+_NPM_SPEC = re.compile(r"^(@[^/@\s]+/[^@\s]+|[^@\s/]+)(?:@(.+))?$")
+def _split_spec3(spec: str, npm: bool = False) -> tuple:
+    """'requests==2.32.3' / 'axios@1.7.0' / 'pkg[extra]>=1' →
+    (name, exact version or None, range/tag or None). Only one exact version
+    counts as a pin; a range, wildcard or dist-tag is returned as the third
+    value so the engine does NOT answer for "the latest version" when some
+    versions of the package are listed. (None, None, None) when the name
+    cannot be read."""
+    from . import claude_hook as ch
+    spec = (spec or "").strip()
+    if npm:
+        match = _NPM_SPEC.match(spec)
+        if not match:
+            return None, None, None
+        exact, ranged = ch.split_npm_version(match.group(2) or "")
+        return match.group(1).lower(), exact, ranged
+    match = _PIP_SPEC.match(spec)
+    if not match:
+        return None, None, None
+    # drop environment markers, comments, --hash options and line continuations
+    rest = re.split(r"[;#]|\s--|\\", match.group(3), maxsplit=1)[0].strip()
+    if rest and rest[0] not in "<>=!~":
+        return None, None, None       # `name @ url`, stray words: not a registry spec
+    exact, ranged = ch.split_pip_version(rest)
+    return match.group(1), exact, ranged
+
+
+def _split_spec(spec: str, npm: bool = False) -> tuple:
+    """(name, exact version or None) — see _split_spec3."""
+    return _split_spec3(spec, npm=npm)[:2]
+
+
+def _check_one(ecosystem: str, name: str, version=None, spec=None, uncertain=False) -> tuple:
+    """One package through the same engine the Claude Code hook uses
+    (blocklist API, unmetered fallback when the free allowance is used up,
+    registry existence, look-alike names, version resolution for entries that
+    name specific bad versions). Returns (pkg, outcome); never raises — any
+    crash is "could not check"."""
+    from . import claude_hook as ch
+    pkg = {"eco": ecosystem, "name": name.strip().lower(), "version": version,
+           "spec": spec, "uncertain": bool(uncertain)}
+    try:
+        outcome = ch.lookup(pkg, token=ch.resolve_token()[0])
+    except Exception as exc:
+        print(f"[stillrunning] WARNING: lookup for {name} failed ({type(exc).__name__}: {exc})",
+              file=sys.stderr)
+        outcome = {"status": "unverified", "why": "server"}
+    if outcome.get("resolved_version") and not version:
+        pkg = dict(pkg, version=str(outcome["resolved_version"]))
+    return pkg, outcome
+
+
+def _outcome_exit(outcome: dict) -> int:
+    status = outcome.get("status")
+    if status in ("ok", "override"):
+        return EXIT_CLEAN
+    if status == "blocked":
+        return EXIT_BLOCKED
+    if status == "suspicious":
+        return EXIT_SUSPICIOUS
+    if status == "not_found":
+        return EXIT_NOT_FOUND
+    if status == "override_blocked" or outcome.get("why") in ("version", "version_range",
+                                                              "override_unchecked"):
+        return EXIT_NEEDS_PERSON
+    return EXIT_RATE_LIMITED if outcome.get("why") == "quota" else EXIT_ERROR
+
+
+def _print_outcome(pkg: dict, outcome: dict, indent: str = "") -> int:
+    """Plain-language result for one package. Returns the exit code."""
+    from . import claude_hook as ch
+    eco, name = pkg["eco"], pkg["name"]
+    label = name + (f" {pkg['version']}" if pkg.get("version") else "")
+    rc = _outcome_exit(outcome)
+    status = outcome.get("status")
+    twin = ch.lookalike_of(eco, name)
+    registry = ch.REGISTRY_NAME.get(eco, "the public registry")
+    evidence = ch.build_evidence(pkg, outcome)
+    if status == "blocked":
+        advisory = outcome.get("advisory")
+        print(f"{indent}✗ stillrunning BLOCKED [exit {rc}]: {label}")
+        text = (ch.explain("blocked_typosquat", name=name, lookalike=twin) if twin
+                else ch.explain("blocked_advisory", name=name, advisory=advisory) if advisory
+                else ch.explain("blocked_listed", name=name))
+        print(f"{indent}   {text}")
+        print(f"{indent}   See: https://stillrunning.io/security-advisories?pkg={name}")
+    elif status == "suspicious":
+        print(f"{indent}⚠ stillrunning SUSPICIOUS [exit {rc}]: {label}")
+        print(f"{indent}   {ch.explain('suspicious', name=name)}")
+    elif status == "not_found":
+        print(f"{indent}? '{name}' is not on {registry} [exit {rc}] — check the spelling "
+              f"(or it comes from a private index).")
+        if twin:
+            print(f"{indent}   Its name is one letter off from the popular `{twin}`. "
+                  f"If you meant `{twin}`, use that.")
+    elif status == "override":
+        print(f"{indent}· stillrunning: {label} — allowed by your own override [exit {rc}]")
+    elif status == "override_blocked":
+        print(f"{indent}⚠ stillrunning: {label} is ON THE BLOCKLIST and a local override allows it [exit {rc}]")
+        print(f"{indent}   {ch.explain('override_blocked', name=name)}")
+    elif rc == EXIT_NEEDS_PERSON:
+        print(f"{indent}⚠ stillrunning: {label} — some versions are reported as malicious [exit {rc}]")
+        bad = ", ".join(a for a in outcome.get("affected") or [] if isinstance(a, str))
+        print(f"{indent}   " + (ch.explain("version_range", name=name, affected=bad)
+                               if outcome.get("why") == "version_range"
+                               else ch.explain("check_failed", name=name, why="version")))
+    elif status == "ok":
+        print(f"{indent}✓ stillrunning: {label} is not on the blocklist [exit {rc}]")
+        print(f"{indent}   This is not a guarantee — only that no known report matches.")
+    else:
+        why = ch.CHECK_FAILED_WHY.get(outcome.get("why", "server"), ch.CHECK_FAILED_WHY["server"])
+        print(f"{indent}WARNING: {label} was NOT checked — {why} [exit {rc}]")
+    for line in ch.top_evidence(evidence, limit=4):
+        print(f"{indent}     • {line}")
+    return rc
+
+
+def _scan_package(pkg_name: str, npm: bool = False, not_latest: bool = False) -> int:
+    """Check one package (optionally `name==version` / `name@version`).
+    Returns 0 not on blocklist, 10 BLOCKED, 11 SUSPICIOUS, 12 free allowance
+    used up and the fallback failed, 1 could not check, 3 not on the registry,
+    2 timeout/usage."""
     import signal
-    import urllib.parse
-    import urllib.request
-    import urllib.error
 
     ecosystem = "npm" if npm else "pip"
 
@@ -2506,7 +2647,7 @@ def _scan_package(pkg_name: str, npm: bool = False) -> int:
     try:
         from .telemetry import send_heartbeat_async
         send_heartbeat_async("scan", VERSION)
-    except Exception:
+    except Exception:  # lint: allowed-silent(optional telemetry module; a scan never depends on it)
         pass
 
     # 30-second timeout
@@ -2518,134 +2659,32 @@ def _scan_package(pkg_name: str, npm: bool = False) -> int:
         signal.signal(signal.SIGALRM, timeout_handler)
         signal.alarm(30)
 
-    print(f"Scanning package: {pkg_name}")
+    name, version, ranged = _split_spec3(pkg_name, npm=npm)
+    if not name:
+        print(f"\033[91mERROR\033[0m: could not read a package name from {pkg_name!r} [exit {EXIT_USAGE}]")
+        return EXIT_USAGE
+
+    print(f"Scanning package: {name}" + (f" {version}" if version else ""))
     print()
-
-    # Check blocklist first (hardcoded + files)
-    # v2.13.2: "axios" moved out of the hardcoded set — it is covered by the
-    # threat feed (MAL-2026-2307, malicious 0.30.4/1.14.1), which tracks
-    # withdrawal/expiry. Hardcoding it here would block axios forever even
-    # after OSV withdraws the advisory. Net behavior today: still BLOCKED.
-    KNOWN_BAD = {
-        "logutilkit", "apachelicense", "fluxhttp", "license-utils-kit", "logkitx",
-        "pino-debugger", "dev-log-core", "logger-base", "axois",
-        "plain-crypto-js", "termncolor", "colorinal",
-    }
-    # v2.13.2: normalize BOTH sides — entries contain dashes, so the old
-    # one-sided replace("-","_") meant dash-named entries could never match.
-    def _norm(name: str) -> str:
-        return name.lower().replace("-", "_")
-    pkg_lower = _norm(pkg_name)
-
-    if pkg_lower in {_norm(k) for k in KNOWN_BAD}:
-        print(f"✗ stillrunning BLOCKED [exit {EXIT_BLOCKED}]: {pkg_name}")
-        print(f"   Reason: Known malicious package (hardcoded blocklist)")
-        print(f"   See: https://stillrunning.io/security-advisories?pkg={pkg_name}")
-        return EXIT_BLOCKED
-
-    # Check known_bad_packages.json
     try:
-        kb_path = Path.home() / "my-app" / "known_bad_packages.json"
-        if not kb_path.exists():
-            kb_path = Path.home() / ".stillrunning" / "known_bad_packages.json"
-        if kb_path.exists():
-            with open(kb_path) as f:
-                known_bad = json.load(f)
-            eco_bad = known_bad.get(ecosystem, {})
-            if pkg_lower in eco_bad or pkg_name in eco_bad or pkg_name.lower() in eco_bad:
-                print(f"✗ stillrunning BLOCKED [exit {EXIT_BLOCKED}]: {pkg_name}")
-                print(f"   Reason: Known malicious package (threat feed)")
-                print(f"   See: https://stillrunning.io/security-advisories?pkg={pkg_name}")
-                return EXIT_BLOCKED
-    except Exception:
-        pass
+        pkg, outcome = _check_one(ecosystem, name, version, ranged, not_latest)
+        return _print_outcome(pkg, outcome)
+    finally:
+        if hasattr(signal, 'SIGALRM'):
+            signal.alarm(0)
 
-    # v2.13.7: ask the threat API FIRST. A delisted known-malicious package
-    # 404s on the registry, and the old order returned "not found" before the
-    # API could say BLOCKED. Any API failure is "could not check" (exit 1 or
-    # 12) — never CLEAN.
-    api_verdict = None
-    http_failed = False
-    try:
-        from .hook import _get_api_token
-        token = _get_api_token()
-    except Exception:  # lint: allowed-silent(no token source readable → anonymous free tier)
-        token = None
-    try:
-        headers = {"User-Agent": f"stillrunning/{VERSION}"}
-        if token:
-            headers["Authorization"] = f"Bearer {token}"
-        req = urllib.request.Request(
-            "https://stillrunning.io/api/check-package?" + urllib.parse.urlencode(
-                {"name": pkg_name, "ecosystem": ecosystem}),
-            headers=headers)
-        try:
-            with urllib.request.urlopen(req, timeout=15) as resp:
-                result = json.loads(resp.read().decode())
-        except urllib.error.HTTPError as e:
-            if e.code == 429:
-                print(f"\033[93mWARNING\033[0m: daily scan quota exhausted — {pkg_name} was NOT checked "
-                      f"[exit {EXIT_RATE_LIMITED}]")
-                return EXIT_RATE_LIMITED
-            http_failed = True        # a non-200 answer can block, but can never clear
-            try:
-                result = json.loads(e.read().decode())     # 503 stale/scanner error carry a verdict body
-            except Exception:
-                result = {"verdict": "ERROR", "reason": f"HTTP {e.code}"}
-        api_verdict = str(result.get("verdict") or "UNKNOWN").upper()
-        reason = result.get("reason", "") or result.get("agent_message", "")
-    except urllib.error.URLError:
-        print(f"\033[93mWARNING\033[0m: stillrunning.io unreachable — {pkg_name} was NOT checked [exit {EXIT_ERROR}]")
-        return EXIT_ERROR
-    except Exception as e:
-        print(f"\033[93mWARNING\033[0m: threat check failed ({e}) — {pkg_name} was NOT checked [exit {EXIT_ERROR}]")
-        return EXIT_ERROR
 
-    if api_verdict == "BLOCKED":
-        print(f"✗ stillrunning BLOCKED [exit {EXIT_BLOCKED}]: {pkg_name}")
-        print(f"   Reason: {reason or 'Security threat detected'}")
-        print(f"   See: https://stillrunning.io/security-advisories?pkg={pkg_name}")
-        return EXIT_BLOCKED
-    if api_verdict == "SUSPICIOUS":
-        print(f"⚠ stillrunning SUSPICIOUS [exit {EXIT_SUSPICIOUS}]: {pkg_name}")
-        print(f"   Reason: {reason or 'Potential security concern'}")
-        print(f"   Review carefully before installing.")
-        return EXIT_SUSPICIOUS
-    if (api_verdict != "UNKNOWN" or http_failed
-            or result.get("status") in ("stale_data", "error", "degraded")):
-        # ERROR / stale data / non-200 / anything unexpected: the check did not complete.
-        print(f"\033[93mWARNING\033[0m: threat data unavailable ({reason or api_verdict}) — "
-              f"{pkg_name} was NOT checked [exit {EXIT_ERROR}]")
-        return EXIT_ERROR
-
-    # Not on the blocklist. Does the name exist at all? (typos / typosquats)
-    if npm:
-        registry_name = "npm"
-        url = f"https://registry.npmjs.org/{urllib.parse.quote(pkg_name, safe='@')}"
-    else:
-        registry_name = "PyPI"
-        url = f"https://pypi.org/pypi/{urllib.parse.quote(pkg_name, safe='')}/json"
-    try:
-        req = urllib.request.Request(url, headers={"User-Agent": f"stillrunning/{VERSION}"})
-        with urllib.request.urlopen(req, timeout=10):
-            pass
-    except urllib.error.HTTPError as e:
-        if e.code == 404:
-            print(f"? '{pkg_name}' is not on {registry_name} [exit {EXIT_NOT_FOUND}] — check the spelling "
-                  f"(or it comes from a private index).")
-            return EXIT_NOT_FOUND
-        print(f"   ({registry_name} existence check returned HTTP {e.code} — skipped)")
-    except Exception as e:
-        print(f"   ({registry_name} existence check unavailable: {type(e).__name__} — skipped)")
-
-    print(f"✓ stillrunning: {pkg_name} is not on the blocklist [exit {EXIT_CLEAN}]")
-    print(f"   This is not a clean bill of health — only that no known advisory matches.")
-    return EXIT_CLEAN
+MAX_MANIFEST_PACKAGES = 400
 
 
 def _scan_manifest(path_str: str) -> int:
-    """Scan all packages in a manifest file. Returns: 0=CLEAN, 10=BLOCKED, 11=SUSPICIOUS."""
+    """Check every package named in a requirements / lock / manifest file.
+    Returns 0 nothing on the blocklist, 10 BLOCKED, 11 SUSPICIOUS, 3 a name is
+    not on the registry, 12/1 one or more could not be checked, 2 the file
+    could not be read as a manifest. Worst result wins; "could not check" is
+    never reported as a pass."""
     from pathlib import Path
+    from concurrent.futures import ThreadPoolExecutor
 
     path = Path(path_str).expanduser().resolve()
     if not path.exists():
@@ -2653,8 +2692,7 @@ def _scan_manifest(path_str: str) -> int:
         return 2
 
     try:
-        from .manifest import parse_manifest, check_manifest
-        from .intercept import check_pypi_package, check_npm_package
+        from .manifest import parse_manifest_strict
     except ImportError as e:
         print(f"\033[91mERROR\033[0m: Could not import manifest module: {e}")
         return EXIT_ERROR
@@ -2662,46 +2700,66 @@ def _scan_manifest(path_str: str) -> int:
     print(f"Scanning manifest: {path}")
     print()
 
-    specs = parse_manifest(path)
+    specs = parse_manifest_strict(path)
+    if specs is None:
+        print(f"\033[91mERROR\033[0m: {path.name} is not a kind of file stillrunning can read "
+              f"(requirements files, pyproject.toml, Pipfile, package.json, package-lock.json, "
+              f"pnpm-lock.yaml, environment.yml, pixi.toml). Nothing was checked [exit {EXIT_USAGE}]")
+        return EXIT_USAGE
     if not specs:
         print(f"No packages found in {path.name}")
         return 0
 
-    blocked = []
-    suspicious = []
-    clean = []
-    skipped = []
-
+    skipped = [s.name for s in specs if s.is_local or s.is_url or s.is_git]
+    todo, seen = [], set()
     for spec in specs:
         if spec.is_local or spec.is_url or spec.is_git:
-            skipped.append((spec.name, "local/url/git dependency"))
             continue
+        eco = "npm" if spec.ecosystem == "npm" else "pip"
+        _, version, ranged = _split_spec3(
+            f"{spec.name}{'@' if eco == 'npm' else ''}{spec.version or ''}",
+            npm=(eco == "npm")) if spec.version else (None, None, None)
+        key = (eco, spec.name.lower(), version, ranged)
+        if key not in seen:
+            seen.add(key)
+            todo.append(key)
+    not_checked_extra = 0
+    if len(todo) > MAX_MANIFEST_PACKAGES:
+        not_checked_extra = len(todo) - MAX_MANIFEST_PACKAGES
+        todo = todo[:MAX_MANIFEST_PACKAGES]
 
-        if spec.ecosystem == "npm":
-            status, reason = check_npm_package(spec.name)
+    with ThreadPoolExecutor(max_workers=6) as pool:
+        results = list(pool.map(lambda k: _check_one(*k), todo))
+
+    counts = {"no known threat": 0, "blocked": 0, "suspicious": 0, "not on the registry": 0,
+              "not checked": not_checked_extra}
+    worst = EXIT_CLEAN
+    rank = {EXIT_CLEAN: 0, EXIT_NOT_FOUND: 1, EXIT_ERROR: 2, EXIT_RATE_LIMITED: 2,
+            EXIT_SUSPICIOUS: 3, EXIT_BLOCKED: 4}
+    for pkg, outcome in results:
+        rc = _outcome_exit(outcome)
+        if rc == EXIT_CLEAN:
+            counts["no known threat"] += 1
         else:
-            status, reason = check_pypi_package(spec.name)
-
-        if status == "BLOCKED":
-            blocked.append((spec.name, reason))
-            print(f"\033[91m\033[1mBLOCKED\033[0m — {spec.name}")
-            print(f"   {reason}")
-        elif status == "WARN":
-            suspicious.append((spec.name, reason))
-            print(f"\033[93mSUSPICIOUS\033[0m — {spec.name}")
-            print(f"   {reason}")
-        else:
-            clean.append(spec.name)
-            print(f"\033[92mCLEAN\033[0m — {spec.name}")
-
-    print()
-    print(f"Summary: {len(clean)} clean, {len(suspicious)} suspicious, {len(blocked)} blocked, {len(skipped)} skipped")
-
-    if blocked:
-        return EXIT_BLOCKED
-    if suspicious:
-        return EXIT_SUSPICIOUS
-    return EXIT_CLEAN
+            _print_outcome(pkg, outcome)
+            print()
+            counts[{EXIT_BLOCKED: "blocked", EXIT_SUSPICIOUS: "suspicious",
+                    EXIT_NOT_FOUND: "not on the registry"}.get(rc, "not checked")] += 1
+        if rank.get(rc, 2) > rank.get(worst, 0):
+            worst = rc
+    if not_checked_extra:
+        print(f"WARNING: {not_checked_extra} package(s) beyond the first {MAX_MANIFEST_PACKAGES} "
+              f"were NOT checked.")
+        if rank[worst] < rank[EXIT_ERROR]:
+            worst = EXIT_ERROR
+    if skipped:
+        print(f"Not looked up ({len(skipped)}): local paths, web addresses and repositories "
+              f"cannot be checked against the blocklist.")
+    print("Summary: " + ", ".join(f"{n} {label}" for label, n in counts.items()) +
+          f" [exit {worst}]")
+    if worst == EXIT_CLEAN:
+        print("   This is not a guarantee — only that no known report matches these names.")
+    return worst
 
 
 # ─── v2.5.0: Venv Persistence ────────────────────────────────────────────────
@@ -2838,131 +2896,379 @@ def _venv_install_silent() -> bool:
 
 _SHELL_ACTIVATE_MARKER = "# >>> stillrunning shell hooks >>>"
 _SHELL_ACTIVATE_END = "# <<< stillrunning shell hooks <<<"
+# POSIX on purpose: ~/.profile is read by plain sh (dash) on Debian/Ubuntu,
+# where `source` does not exist and activate.sh's bash syntax is an error.
+# Does nothing in other shells, or when ~/.stillrunning has been deleted.
+_SHELL_RC_BLOCK = (
+    f'\n{_SHELL_ACTIVATE_MARKER}\n'
+    '[ -n "${BASH_VERSION:-}${ZSH_VERSION:-}" ] && [ -r "$HOME/.stillrunning/activate.sh" ] '
+    '&& . "$HOME/.stillrunning/activate.sh" || :\n'
+    f'{_SHELL_ACTIVATE_END}\n')
+_SHELL_RC_BLOCK_LEGACY = (f'\n{_SHELL_ACTIVATE_MARKER}\nsource "$HOME/.stillrunning/activate.sh"\n'
+                          f'{_SHELL_ACTIVATE_END}\n')
 
-_WRAPPER_SCRIPT_PIP = '''#!/bin/bash
-# stillrunning pip wrapper — checks packages before install
-set -e
 
-# v2.13.7: only a real verdict blocks. 10 = BLOCKED, 11 = SUSPICIOUS. 0 / 13 /
-# 3 (not on the registry — pip/npm will report it) continue. Anything else
-# means the check could NOT run (1 error/offline/stale, 12 quota, 127 CLI
-# missing): warn loudly and allow, unless STILLRUNNING_FAIL_CLOSED=1.
-__stillrunning_verdict() {
-    local pkg="$1" rc="$2"
+def _unsupported_os(feature: str, alternative: str = "") -> bool:
+    """Say plainly when a feature cannot work on this OS. True = stop."""
+    names = {"win32": "Windows", "cygwin": "Windows", "darwin": "macOS"}
+    if feature == "shell" and sys.platform in ("win32", "cygwin"):
+        print("Terminal wrappers are not supported on Windows yet (they are bash scripts; "
+              "PowerShell and cmd are not covered).")
+    elif feature == "monitor" and not sys.platform.startswith("linux"):
+        print(f"The process monitor is not supported on {names.get(sys.platform, sys.platform)} yet "
+              "(it reads /proc and restarts processes through screen or systemd, which exist only on Linux).")
+    else:
+        return False
+    if alternative:
+        print(alternative)
+    return True
+
+
+# Shared by every wrapper. A real verdict (10 BLOCKED, 11 SUSPICIOUS) always
+# stops. Everything that means "this could not be checked" — check failed (1),
+# quota (12), CLI missing (127), not on the registry (3), a URL/VCS install, a
+# custom index — needs a person's approval: asked on a terminal, stopped when
+# nobody is there. STILLRUNNING_ALLOW_UNVERIFIED=1 warns and installs anyway
+# (the warning is printed every time); STILLRUNNING_FAIL_CLOSED=1 always stops
+# without asking.
+_WRAPPER_VERDICT_FN = '''__stillrunning_verdict() {
+    local pkg="$1" rc="$2" why answer=""
     case "$rc" in
         0|13) return 0 ;;
-        3) echo "stillrunning: note — '$pkg' is not on the public registry (typo? private index?)." >&2; return 0 ;;
         10) echo "stillrunning: BLOCKED '$pkg' — known malicious. See https://stillrunning.io/blocked?pkg=$pkg" >&2; return 1 ;;
         11) echo "stillrunning: BLOCKED '$pkg' — suspicious. Review: https://stillrunning.io/blocked?pkg=$pkg" >&2; return 1 ;;
+        14)
+            # Part of it IS on the blocklist (some versions, or a local override
+            # allows a listed package). Only a person at the keyboard may go on;
+            # STILLRUNNING_ALLOW_UNVERIFIED does not apply.
+            if [[ "${STILLRUNNING_FAIL_CLOSED:-0}" != "1" && -t 0 && -t 2 ]]; then
+                read -r -p "stillrunning: '$pkg' is on the blocklist (some versions, or allowed only by a local override). Run 'stillrunning scan $pkg' for details. Install anyway? [y/N] " answer
+                if [[ "$answer" == "y" || "$answer" == "Y" ]]; then
+                    return 0
+                fi
+            fi
+            echo "stillrunning: install of '$pkg' stopped — it is on the blocklist (some versions, or allowed only by a local override). Name an exact version, or run 'stillrunning scan $pkg' for details." >&2
+            return 1 ;;
+        3) why="it is not on the public registry (typo, invented name or private package)" ;;
         12) why="daily scan quota exhausted" ;;
         127) why="the stillrunning CLI is not installed or not on PATH" ;;
+        url) why="it installs from a web address or repository, which cannot be looked up" ;;
+        index) why="a custom package index is in use, so the names cannot be trusted to mean the public packages" ;;
         *) why="the check could not run (offline or server error, exit $rc)" ;;
     esac
     if [[ "${STILLRUNNING_FAIL_CLOSED:-0}" == "1" ]]; then
         echo "stillrunning: install of '$pkg' stopped — $why (STILLRUNNING_FAIL_CLOSED=1)." >&2
         return 1
     fi
-    echo "stillrunning: WARNING — '$pkg' was NOT checked: $why. Installing anyway (set STILLRUNNING_FAIL_CLOSED=1 to stop instead)." >&2
-    return 0
+    if [[ "${STILLRUNNING_ALLOW_UNVERIFIED:-0}" == "1" ]]; then
+        echo "stillrunning: WARNING — '$pkg' was NOT checked: $why. Installing anyway (STILLRUNNING_ALLOW_UNVERIFIED=1)." >&2
+        return 0
+    fi
+    if [[ -t 0 && -t 2 ]]; then
+        read -r -p "stillrunning: '$pkg' was NOT checked: $why. Install anyway? [y/N] " answer
+        if [[ "$answer" == "y" || "$answer" == "Y" ]]; then
+            return 0
+        fi
+        echo "stillrunning: install of '$pkg' stopped." >&2
+        return 1
+    fi
+    echo "stillrunning: install of '$pkg' stopped — $why. Nobody is at the keyboard to approve it (set STILLRUNNING_ALLOW_UNVERIFIED=1 to install unchecked packages anyway)." >&2
+    return 1
 }
-if [[ "$1" == "install" || "$1" == "download" ]]; then
-    subcmd="$1"
-    shift
-    packages=()
-    for arg in "$@"; do
-        [[ "$arg" == -* ]] && continue
-        [[ "$arg" == */* ]] && continue  # Skip paths
-        pkg=$(echo "$arg" | sed 's/[=<>!\\[].*$//')
-        [[ -n "$pkg" ]] && packages+=("$pkg")
+'''
+
+# Find the real tool at run time. Never a fixed path (a venv's pip, Homebrew's
+# npm and macOS all live somewhere else) and never this wrapper again.
+_WRAPPER_RESOLVE_FN = '''__stillrunning_is_wrapper() {
+    [[ "$1" -ef "${BASH_SOURCE[0]}" ]] && return 0
+    head -n 3 "$1" 2>/dev/null | grep -q "^# stillrunning .* wrapper" && return 0
+    return 1
+}
+__stillrunning_real() {
+    local tool="$1" dir candidate self_dir
+    self_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd -P)"
+    local IFS=:
+    for dir in $PATH; do
+        [[ -z "$dir" ]] && continue
+        [[ "$(cd "$dir" 2>/dev/null && pwd -P)" == "$self_dir" ]] && continue
+        candidate="$dir/$tool"
+        if [[ -f "$candidate" && -x "$candidate" ]] && ! __stillrunning_is_wrapper "$candidate"; then
+            printf '%s' "$candidate"
+            return 0
+        fi
     done
-    for pkg in "${packages[@]}"; do
+    return 1
+}
+__stillrunning_run_pip() {
+    local real py
+    if [[ -n "${VIRTUAL_ENV:-}" ]]; then
+        if [[ -x "$VIRTUAL_ENV/bin/$__sr_tool" ]] && ! __stillrunning_is_wrapper "$VIRTUAL_ENV/bin/$__sr_tool"; then
+            exec "$VIRTUAL_ENV/bin/$__sr_tool" "$@"
+        fi
+        if [[ -x "$VIRTUAL_ENV/bin/python" ]]; then
+            exec "$VIRTUAL_ENV/bin/python" -m pip "$@"
+        fi
+    fi
+    if real="$(__stillrunning_real "$__sr_tool")"; then
+        exec "$real" "$@"
+    fi
+    for py in python3 python; do
+        if real="$(__stillrunning_real "$py")"; then
+            exec "$real" -m pip "$@"
+        fi
+    done
+    echo "stillrunning: cannot find the real $__sr_tool — it is not in an active virtual environment or anywhere on PATH (other than this wrapper), and no python was found to run 'python -m pip'. Nothing was run." >&2
+    exit 127
+}
+__stillrunning_run_tool() {
+    local real
+    if real="$(__stillrunning_real "$__sr_tool")"; then
+        exec "$real" "$@"
+    fi
+    echo "stillrunning: cannot find the real $__sr_tool anywhere on PATH (other than this wrapper). Nothing was run." >&2
+    exit 127
+}
+'''
+
+_WRAPPER_SCRIPT_PIP = '''#!/bin/bash
+# stillrunning pip wrapper — checks packages before install
+set -e
+__sr_tool="pip"
+
+''' + _WRAPPER_VERDICT_FN + _WRAPPER_RESOLVE_FN + '''
+# `install` may follow global flags (pip -q install x), so look at every argument.
+sub_idx=0
+n=0
+for arg in "$@"; do
+    n=$((n + 1))
+    if [[ "$arg" == "install" || "$arg" == "download" || "$arg" == "wheel" ]]; then
+        sub_idx=$n
+        break
+    fi
+done
+if (( sub_idx > 0 )); then
+    packages=()
+    skip=""
+    not_latest=()
+    if [[ -n "${PIP_INDEX_URL:-}${PIP_EXTRA_INDEX_URL:-}${PIP_FIND_LINKS:-}" ]]; then
+        __stillrunning_verdict "this install" index || exit 1
+    fi
+    # --pre or a constraints file changes which version an unpinned name gets.
+    if [[ -n "${PIP_PRE:-}${PIP_CONSTRAINT:-}" ]]; then
+        not_latest=(--not-latest)
+    fi
+    for arg in "${@:$((sub_idx + 1))}"; do
+        case "$arg" in
+            --pre|-c|-c?*|--constraint|--constraint=*) not_latest=(--not-latest) ;;
+        esac
+    done
+    for arg in "${@:$((sub_idx + 1))}"; do
+        if [[ -n "$skip" ]]; then
+            kind="$skip"
+            skip=""
+            if [[ "$kind" == "req" ]]; then
+                pkg="$arg"
+                rc=0
+                stillrunning scan-manifest "$arg" >/dev/null 2>&1 || rc=$?
+                __stillrunning_verdict "$pkg" "$rc" || exit 1
+            elif [[ "$kind" == "edit" && ( "$arg" == *://* || "$arg" == git+* ) ]]; then
+                __stillrunning_verdict "$arg" url || exit 1
+            fi
+            continue
+        fi
+        case "$arg" in
+            -r|--requirement) skip="req"; continue ;;
+            -e|--editable) skip="edit"; continue ;;
+            -i|--index-url|--extra-index-url|-f|--find-links)
+                __stillrunning_verdict "this install" index || exit 1
+                skip="val"; continue ;;
+            --index-url=*|--extra-index-url=*|--find-links=*)
+                __stillrunning_verdict "this install" index || exit 1
+                continue ;;
+            --requirement=*)
+                pkg="${arg#*=}"
+                rc=0
+                stillrunning scan-manifest "$pkg" >/dev/null 2>&1 || rc=$?
+                __stillrunning_verdict "$pkg" "$rc" || exit 1
+                continue ;;
+            -c|--constraint|-t|--target|--prefix|--root|--python|--platform|--python-version|--implementation|--abi|--src|--upgrade-strategy|-C|--config-settings|--global-option|--no-binary|--only-binary|--progress-bar|--report|--cert|--client-cert|--proxy|--retries|--timeout|--trusted-host|--cache-dir|--log|--use-feature|--use-deprecated|--exists-action|--root-user-action|--keyring-provider|--hash|-d|--dest|-w|--wheel-dir)
+                skip="val"; continue ;;
+            --index|--default-index)
+                __stillrunning_verdict "this install" index || exit 1
+                skip="val"; continue ;;
+            --index=*|--default-index=*)
+                __stillrunning_verdict "this install" index || exit 1
+                continue ;;
+            --requirements=*|-r?*)
+                # value attached to the flag: -rreq.txt, -r=req.txt
+                if [[ "$arg" == --* ]]; then pkg="${arg#*=}"; else pkg="${arg#-r}"; pkg="${pkg#=}"; fi
+                rc=0
+                stillrunning scan-manifest "$pkg" >/dev/null 2>&1 || rc=$?
+                __stillrunning_verdict "$pkg" "$rc" || exit 1
+                continue ;;
+            -i?*|-f?*)
+                __stillrunning_verdict "this install" index || exit 1
+                continue ;;
+            --editable=*|-e?*)
+                if [[ "$arg" == --* ]]; then pkg="${arg#*=}"; else pkg="${arg#-e}"; pkg="${pkg#=}"; fi
+                if [[ "$pkg" == *://* || "$pkg" == git+* ]]; then
+                    __stillrunning_verdict "$pkg" url || exit 1
+                fi
+                continue ;;
+            -*) continue ;;
+            *://*|git+*)
+                __stillrunning_verdict "$arg" url || exit 1
+                continue ;;
+            .*|/*|~*|*/*|*.whl|*.tar.gz|*.zip) continue ;;  # local path: nothing to look up
+        esac
+        pkg="${arg%%[]<>=!~;@ []*}"       # name only, for messages
+        [[ -n "$pkg" ]] && packages+=("$arg")   # full spec: an exact pin is checked as that version
+    done
+    for spec in "${packages[@]}"; do
+        pkg="${spec%%[]<>=!~;@ []*}"
         rc=0
-        stillrunning scan "$pkg" >/dev/null 2>&1 || rc=$?
+        stillrunning scan "$spec" "${not_latest[@]}" >/dev/null 2>&1 || rc=$?
         __stillrunning_verdict "$pkg" "$rc" || exit 1
     done
-    exec /usr/bin/pip "$subcmd" "$@"
-else
-    exec /usr/bin/pip "$@"
 fi
+__stillrunning_run_pip "$@"
 '''
 
 _WRAPPER_SCRIPT_NPM = '''#!/bin/bash
 # stillrunning npm wrapper — checks packages before install
 set -e
+__sr_tool="npm"
 
-# v2.13.7: only a real verdict blocks. 10 = BLOCKED, 11 = SUSPICIOUS. 0 / 13 /
-# 3 (not on the registry — pip/npm will report it) continue. Anything else
-# means the check could NOT run (1 error/offline/stale, 12 quota, 127 CLI
-# missing): warn loudly and allow, unless STILLRUNNING_FAIL_CLOSED=1.
-__stillrunning_verdict() {
-    local pkg="$1" rc="$2"
-    case "$rc" in
-        0|13) return 0 ;;
-        3) echo "stillrunning: note — '$pkg' is not on the public registry (typo? private index?)." >&2; return 0 ;;
-        10) echo "stillrunning: BLOCKED '$pkg' — known malicious. See https://stillrunning.io/blocked?pkg=$pkg" >&2; return 1 ;;
-        11) echo "stillrunning: BLOCKED '$pkg' — suspicious. Review: https://stillrunning.io/blocked?pkg=$pkg" >&2; return 1 ;;
-        12) why="daily scan quota exhausted" ;;
-        127) why="the stillrunning CLI is not installed or not on PATH" ;;
-        *) why="the check could not run (offline or server error, exit $rc)" ;;
+''' + _WRAPPER_VERDICT_FN + _WRAPPER_RESOLVE_FN + '''
+# `install` may follow global flags (npm --silent install x), so look at every argument.
+sub_idx=0
+n=0
+for arg in "$@"; do
+    n=$((n + 1))
+    case "$arg" in
+        install|i|add|update|up|upgrade|install-test|it|link|ln)
+            sub_idx=$n
+            break ;;
     esac
-    if [[ "${STILLRUNNING_FAIL_CLOSED:-0}" == "1" ]]; then
-        echo "stillrunning: install of '$pkg' stopped — $why (STILLRUNNING_FAIL_CLOSED=1)." >&2
-        return 1
-    fi
-    echo "stillrunning: WARNING — '$pkg' was NOT checked: $why. Installing anyway (set STILLRUNNING_FAIL_CLOSED=1 to stop instead)." >&2
-    return 0
-}
-if [[ "$1" == "install" || "$1" == "i" || "$1" == "add" ]]; then
-    subcmd="$1"
-    shift
+done
+if (( sub_idx > 0 )); then
     packages=()
+    skip=""
+    not_latest=()
+    if [[ -n "${NPM_CONFIG_TAG:-}${npm_config_tag:-}${NPM_CONFIG_BEFORE:-}${npm_config_before:-}" ]]; then
+        not_latest=(--not-latest)
+    fi
     for arg in "$@"; do
-        [[ "$arg" == -* ]] && continue
-        pkg="${arg%%@*}"
-        [[ "$arg" == @* ]] && pkg="$arg"
-        [[ -n "$pkg" ]] && packages+=("$pkg")
+        case "$arg" in
+            --tag|--tag=*|--before|--before=*) not_latest=(--not-latest) ;;
+        esac
     done
-    for pkg in "${packages[@]}"; do
-        if [[ "$pkg" == @anthropic-ai/* ]]; then
-            continue   # trusted scope, skip scan
+    if [[ -n "${NPM_CONFIG_REGISTRY:-}${npm_config_registry:-}" ]]; then
+        __stillrunning_verdict "this install" index || exit 1
+    fi
+    for arg in "$@"; do
+        if [[ "$arg" == "--registry" || "$arg" == --registry=* ]]; then
+            __stillrunning_verdict "this install" index || exit 1
+        fi
+    done
+    for arg in "${@:$((sub_idx + 1))}"; do
+        if [[ -n "$skip" ]]; then
+            skip=""
+            continue
+        fi
+        case "$arg" in
+            --registry|--prefix|-C|-w|--workspace|--tag|--cache|--userconfig|--loglevel|--omit|--include|--install-strategy|--otp)
+                skip="val"; continue ;;
+            -*) continue ;;
+            *://*|git+*|git@*|github:*|gitlab:*|bitbucket:*|gist:*)
+                __stillrunning_verdict "$arg" url || exit 1
+                continue ;;
+            .*|/*|~*|file:*) continue ;;  # local path: nothing to look up
+        esac
+        arg="${arg#npm:}"
+        [[ "$arg" == *@npm:* ]] && arg="${arg#*@npm:}"
+        if [[ "$arg" == @* ]]; then
+            rest="${arg#@}"
+            pkg="@${rest%%@*}"
+        else
+            pkg="${arg%%@*}"
+            if [[ "$pkg" == */* ]]; then
+                __stillrunning_verdict "$arg" url || exit 1   # user/repo shorthand
+                continue
+            fi
+        fi
+        [[ -n "$pkg" ]] && packages+=("$arg")   # full spec: an exact pin is checked as that version
+    done
+    for spec in "${packages[@]}"; do
+        if [[ "$spec" == @* ]]; then
+            rest="${spec#@}"
+            pkg="@${rest%%@*}"
+        else
+            pkg="${spec%%@*}"
         fi
         rc=0
-        stillrunning scan "$pkg" --npm >/dev/null 2>&1 || rc=$?
+        stillrunning scan "$spec" --npm "${not_latest[@]}" >/dev/null 2>&1 || rc=$?
         __stillrunning_verdict "$pkg" "$rc" || exit 1
     done
-    exec /usr/bin/npm "$subcmd" "$@"
-else
-    exec /usr/bin/npm "$@"
 fi
+__stillrunning_run_tool "$@"
 '''
 
 _ACTIVATE_SCRIPT = '''#!/bin/bash
-# stillrunning shell hooks — auto-loaded on shell init
+# stillrunning shell hooks — auto-loaded on shell init (bash and zsh)
 # Remove with: stillrunning shell-uninstall
 
 export STILLRUNNING_SHELL_ACTIVE=1
-export PATH="$HOME/.stillrunning/bin:$PATH"
+# Once only: a shell that sources its rc file twice must not grow PATH.
+case ":$PATH:" in
+    *":$HOME/.stillrunning/bin:"*) ;;
+    *) export PATH="$HOME/.stillrunning/bin:$PATH" ;;
+esac
 
-# python -m pip intercept
-function python3() {
-    if [[ "$1" == "-m" && "$2" == "pip" ]]; then
-        shift 2
-        "$HOME/.stillrunning/bin/pip" "$@"
-    else
-        /usr/bin/python3 "$@"
-    fi
-}
-export -f python3
+# Functions, not only PATH: activating a virtual environment afterwards puts
+# its bin/ ahead of ours on PATH, and `pip install` would then skip the check.
+# The wrapper itself runs the environment's own pip (see __stillrunning_run_pip).
+function pip() { "$HOME/.stillrunning/bin/pip" "$@"; }
+function pip3() { "$HOME/.stillrunning/bin/pip3" "$@"; }
+function npm() { "$HOME/.stillrunning/bin/npm" "$@"; }
 
-function python() {
-    if [[ "$1" == "-m" && "$2" == "pip" ]]; then
-        shift 2
-        "$HOME/.stillrunning/bin/pip" "$@"
-    else
-        /usr/bin/python3 "$@"
+# python -m pip intercept. Everything else runs the python the shell would
+# have run anyway (`command` skips this function, so a venv's python stays
+# the venv's python — never a fixed /usr/bin path).
+# Interpreter flags may come first (python3 -W ignore -m pip install x).
+function __stillrunning_python() {
+    local tool="$1"
+    shift
+    local idx=0 n=0 skip=0 a
+    for a in "$@"; do
+        n=$((n + 1))
+        if [[ "$skip" == "1" ]]; then skip=0; continue; fi
+        case "$a" in
+            -m) idx=$n; break ;;
+            -W|-X) skip=1 ;;
+            -c) break ;;
+            -*) ;;
+            *) break ;;
+        esac
+    done
+    if [[ "$idx" -gt 0 ]]; then
+        local rest=("${@:$((idx + 1))}")
+        if [[ "${rest[@]:0:1}" == "pip" ]]; then
+            "$HOME/.stillrunning/bin/pip" "${rest[@]:1}"
+            return $?
+        fi
     fi
+    command "$tool" "$@"
 }
-export -f python
+
+function python3() { __stillrunning_python python3 "$@"; }
+
+function python() { __stillrunning_python python "$@"; }
+
+# bash can hand functions to the scripts it starts; zsh has no `export -f`.
+if [[ -n "${BASH_VERSION:-}" ]]; then
+    export -f pip pip3 npm python3 python __stillrunning_python
+fi
 
 # Source conda hook if present
 [[ -f "$HOME/.stillrunning/conda_hook.sh" ]] && source "$HOME/.stillrunning/conda_hook.sh"
@@ -2970,25 +3276,7 @@ export -f python
 
 _CONDA_ACTIVATE_SCRIPT = '''#!/bin/bash
 # stillrunning conda hook — wraps conda install
-__stillrunning_verdict() {
-    local pkg="$1" rc="$2"
-    case "$rc" in
-        0|13) return 0 ;;
-        3) echo "stillrunning: note — '$pkg' is not on the public registry (typo? private index?)." >&2; return 0 ;;
-        10) echo "stillrunning: BLOCKED '$pkg' — known malicious. See https://stillrunning.io/blocked?pkg=$pkg" >&2; return 1 ;;
-        11) echo "stillrunning: BLOCKED '$pkg' — suspicious. Review: https://stillrunning.io/blocked?pkg=$pkg" >&2; return 1 ;;
-        12) why="daily scan quota exhausted" ;;
-        127) why="the stillrunning CLI is not installed or not on PATH" ;;
-        *) why="the check could not run (offline or server error, exit $rc)" ;;
-    esac
-    if [[ "${STILLRUNNING_FAIL_CLOSED:-0}" == "1" ]]; then
-        echo "stillrunning: install of '$pkg' stopped — $why (STILLRUNNING_FAIL_CLOSED=1)." >&2
-        return 1
-    fi
-    echo "stillrunning: WARNING — '$pkg' was NOT checked: $why. Installing anyway (set STILLRUNNING_FAIL_CLOSED=1 to stop instead)." >&2
-    return 0
-}
-
+''' + _WRAPPER_VERDICT_FN + '''
 # Auto-installed by stillrunning shell-install
 
 _original_conda=$(which -a conda 2>/dev/null | grep -v stillrunning | head -1)
@@ -3018,8 +3306,19 @@ export -f conda
 '''
 
 
+def _venv_uninstall_silent() -> None:
+    """Remove the sitecustomize block shell-install added, without output."""
+    import contextlib
+    import io
+    with contextlib.redirect_stdout(io.StringIO()):
+        _venv_uninstall()
+
+
 def _shell_install() -> int:
     """Install shell hooks for auto-activation."""
+    if _unsupported_os("shell", "What works on Windows today: stillrunning --hook-claude-code "
+                                "(checks every install Claude Code runs) and stillrunning scan <package>."):
+        return 1
     sr_dir = Path.home() / ".stillrunning"
     bin_dir = sr_dir / "bin"
 
@@ -3034,7 +3333,7 @@ def _shell_install() -> int:
 
         pip_wrapper.write_text(_WRAPPER_SCRIPT_PIP)
         pip_wrapper.chmod(0o755)
-        pip3_wrapper.write_text(_WRAPPER_SCRIPT_PIP.replace("/usr/bin/pip", "/usr/bin/pip3"))
+        pip3_wrapper.write_text(_WRAPPER_SCRIPT_PIP.replace('__sr_tool="pip"', '__sr_tool="pip3"'))
         pip3_wrapper.chmod(0o755)
         npm_wrapper.write_text(_WRAPPER_SCRIPT_NPM)
         npm_wrapper.chmod(0o755)
@@ -3058,7 +3357,7 @@ def _shell_install() -> int:
         if (home / ".profile").exists():
             rc_files.append(home / ".profile")
 
-        source_line = f'\n{_SHELL_ACTIVATE_MARKER}\nsource "$HOME/.stillrunning/activate.sh"\n{_SHELL_ACTIVATE_END}\n'
+        source_line = _SHELL_RC_BLOCK
 
         updated = []
         for rc_file in rc_files:
@@ -3090,7 +3389,8 @@ def _shell_install() -> int:
             print(f"Updated: {', '.join(updated)}")
             print()
         print("stillrunning hooks now active in all new shells.")
-        print("Open a new terminal or run: source ~/.bashrc")
+        print("Open a new terminal, or run: source ~/.stillrunning/activate.sh")
+        print("(bash and zsh. Other shells such as fish are not covered yet.)")
         print()
         print("Verify with: stillrunning status")
         return 0
@@ -3111,10 +3411,13 @@ def _shell_uninstall() -> int:
             script_path = bin_dir / script
             if script_path.exists():
                 script_path.unlink()
+        if bin_dir.is_dir() and not any(bin_dir.iterdir()):
+            bin_dir.rmdir()
 
-        activate_path = sr_dir / "activate.sh"
-        if activate_path.exists():
-            activate_path.unlink()
+        for name in ("activate.sh", "conda_hook.sh"):
+            leftover = sr_dir / name
+            if leftover.exists():
+                leftover.unlink()
 
         # Clean up rc files
         home = Path.home()
@@ -3125,6 +3428,20 @@ def _shell_uninstall() -> int:
 
             content = rc_file.read_text()
             if _SHELL_ACTIVATE_MARKER not in content:
+                continue
+
+            # The exact text install appended → the file is byte for byte
+            # what it was (and is removed if install created it).
+            exact = next((b for b in (_SHELL_RC_BLOCK, _SHELL_RC_BLOCK_LEGACY) if b in content), None)
+            if exact is not None:
+                restored = content.replace(exact, "", 1)
+                if restored == "":
+                    rc_file.unlink()
+                else:
+                    tmp_path = rc_file.with_name(rc_file.name + ".stillrunning-tmp")
+                    tmp_path.write_text(restored)
+                    shutil.copymode(rc_file, tmp_path)
+                    tmp_path.replace(rc_file)
                 continue
 
             # Remove the stillrunning block
@@ -3146,8 +3463,10 @@ def _shell_uninstall() -> int:
             tmp_path.write_text(new_content)
             tmp_path.replace(rc_file)
 
+        _venv_uninstall_silent()
         print("stillrunning shell hooks removed.")
-        print("Open a new terminal for changes to take effect.")
+        print("Open a new terminal for changes to take effect (this one still has the")
+        print("pip / npm functions loaded; they stop working here, so open a new one).")
         return 0
 
     except Exception as e:
@@ -3156,347 +3475,73 @@ def _shell_uninstall() -> int:
 
 
 def _status() -> int:
-    """Show status of all stillrunning protection layers."""
+    """Show every protection layer as ON / OFF / NOT VERIFIED, with the reason."""
+    from . import layers as layers_mod
     print("stillrunning protection status")
     print("=" * 40)
     print()
-
-    # Shell hooks
-    shell_active = os.environ.get("STILLRUNNING_SHELL_ACTIVE") == "1"
-    shell_installed = (Path.home() / ".stillrunning" / "activate.sh").exists()
-    if shell_active:
-        print("[OK] Shell hooks: ACTIVE")
-    elif shell_installed:
-        print("[--] Shell hooks: installed but not active (open new terminal)")
-    else:
-        print("[  ] Shell hooks: not installed (stillrunning shell-install)")
-
-    # Venv hook
+    print(layers_mod.render(layers_mod.protection_layers()))
+    print()
     try:
         import site
-        user_site = Path(site.getusersitepackages())
-        sitecustomize = user_site / "sitecustomize.py"
+        sitecustomize = Path(site.getusersitepackages()) / "sitecustomize.py"
         if sitecustomize.exists() and _SITECUSTOMIZE_MARKER in sitecustomize.read_text():
-            print("[OK] Venv persistence: ACTIVE")
+            print("[ON] Venv persistence (keeps the import checks on inside virtualenvs)")
         else:
-            print("[  ] Venv persistence: not installed (stillrunning venv-install)")
-    except Exception:
-        print("[  ] Venv persistence: unknown")
-
-    # Claude Code hook
-    hooks_file = Path.home() / ".claude" / "hooks.json"
-    if hooks_file.exists():
-        try:
-            with open(hooks_file) as f:
-                hooks = json.load(f)
-            if any("stillrunning" in str(h) for h in hooks.get("hooks", [])):
-                print("[OK] Claude Code hook: ACTIVE")
-            else:
-                print("[  ] Claude Code hook: not installed (stillrunning --hook-claude-code)")
-        except Exception:
-            print("[  ] Claude Code hook: unknown")
-    else:
-        print("[  ] Claude Code hook: not installed (stillrunning --hook-claude-code)")
-
-    # Import hook (.pth)
-    try:
-        import site
-        user_site = Path(site.getusersitepackages())
-        pth_file = user_site / "stillrunning.pth"
-        if pth_file.exists():
-            print("[OK] Import hook (.pth): ACTIVE")
-        else:
-            print("[  ] Import hook (.pth): not installed (stillrunning --install-hook)")
-    except Exception:
-        print("[  ] Import hook (.pth): unknown")
-
+            print("[OFF] Venv persistence (optional): stillrunning venv-install")
+    except Exception as e:
+        print(f"[NOT VERIFIED] Venv persistence: could not check ({type(e).__name__})")
     print()
     return 0
 
 
-def _is_locally_blocked(pkg_name: str, ecosystem: str = "pip") -> tuple[bool, str]:
-    """Check if package is in local blocklist (hardcoded or threat feed file).
-
-    Returns (is_blocked, reason).
-    """
-    # Hardcoded known-bad packages (high-confidence, never changes)
-    KNOWN_BAD = {
-        "logutilkit", "apachelicense", "fluxhttp", "license-utils-kit", "logkitx",
-        "pino-debugger", "dev-log-core", "logger-base", "axois",
-        "plain-crypto-js", "termncolor", "colorinal",
-    }
-
-    def _norm(name: str) -> str:
-        return name.lower().replace("-", "_")
-
-    pkg_lower = _norm(pkg_name)
-
-    if pkg_lower in {_norm(k) for k in KNOWN_BAD}:
-        return True, "Known malicious package (hardcoded blocklist)"
-
-    # Check known_bad_packages.json (threat feed)
-    try:
-        kb_path = Path.home() / "my-app" / "known_bad_packages.json"
-        if not kb_path.exists():
-            kb_path = Path.home() / ".stillrunning" / "known_bad_packages.json"
-        if kb_path.exists():
-            with open(kb_path) as f:
-                known_bad = json.load(f)
-            eco_bad = known_bad.get(ecosystem, {})
-            if pkg_lower in eco_bad or pkg_name in eco_bad or pkg_name.lower() in eco_bad:
-                return True, "Known malicious package (threat feed)"
-    except Exception:
-        pass
-
-    return False, ""
-
-
 def _run_claude_code_hook() -> None:
-    """Run as Claude Code PreToolUse hook. Branded messages, proper exit codes."""
-    import re
-    debug = os.environ.get("STILLRUNNING_DEBUG", "").lower() in ("1", "true", "yes")
+    """Run as the Claude Code PreToolUse hook (reads the tool call on stdin)."""
+    from . import claude_hook
+    claude_hook.main()
 
-    def _debug(msg: str):
-        if debug:
-            sys.stderr.write(f"[stillrunning debug] {msg}\n")
 
+def _install_claude_code_hook(statusline: bool = False) -> None:
+    """Register the PreToolUse hook in ~/.claude/settings.json."""
+    from . import claude_hook
     try:
-        stdin_data = sys.stdin.read()
-        if not stdin_data.strip():
-            _debug("empty stdin, allowing")
-            sys.exit(0)
-
-        data = json.loads(stdin_data)
-        tool_name = data.get("tool_name", "")
-        tool_input = data.get("tool_input", {})
-
-        if tool_name != "Bash":
-            _debug(f"tool={tool_name}, not Bash, allowing")
-            sys.exit(0)
-
-        command = tool_input.get("command", "")
-        if not command:
-            _debug("empty command, allowing")
-            sys.exit(0)
-
-        _debug(f"checking command: {command[:100]}")
-
-        # Extract package names from pip/npm install commands
-        packages = []
-
-        pip_match = re.search(r'pip3?\s+install\s+([^\s|&;]+(?:\s+[^\s|&;-][^\s|&;]*)*)', command)
-        if pip_match:
-            pkg_str = pip_match.group(1)
-            for pkg in pkg_str.split():
-                if pkg.startswith('-'):
-                    continue
-                pkg_name = re.split(r'[=<>!\[]', pkg)[0]
-                if pkg_name:
-                    packages.append(("pip", pkg_name.lower()))
-
-        npm_match = re.search(r'npm\s+(?:install|i|add)\s+([^\s|&;]+(?:\s+[^\s|&;-][^\s|&;]*)*)', command)
-        if npm_match:
-            pkg_str = npm_match.group(1)
-            for pkg in pkg_str.split():
-                if pkg.startswith('-'):
-                    continue
-                pkg_name = pkg.split('@')[0] if not pkg.startswith('@') else pkg
-                if pkg_name:
-                    packages.append(("npm", pkg_name.lower()))
-
-        if not packages:
-            _debug("no packages found in command, allowing")
-            sys.exit(0)
-
-        _debug(f"found packages: {packages}")
-
-        token = _get_customer_token()
-        for pkg_type, pkg_name in packages:
-            # Check local allowlist first
-            if _is_package_allowed(pkg_name):
-                _debug(f"{pkg_name} in local allowlist, allowing")
-                continue
-
-            try:
-                _debug(f"checking {pkg_name} against API...")
-                url = f"https://stillrunning.io/api/check-package?name={pkg_name}&ecosystem={pkg_type}"
-                headers = {"User-Agent": f"stillrunning-hook/{VERSION}"}
-                if token:
-                    headers["Authorization"] = f"Bearer {token}"
-                req = urllib.request.Request(url, headers=headers)
-                with urllib.request.urlopen(req, timeout=10) as resp:
-                    result = json.loads(resp.read().decode())
-
-                verdict = result.get("verdict", result.get("status", "UNKNOWN"))
-                reason = result.get("reason", "")
-                _debug(f"{pkg_name}: verdict={verdict}, reason={reason}")
-
-                if verdict == "DANGEROUS":
-                    reason_text = reason or "Known malicious package"
-                    sys.stderr.write(f"\n🤖 stillrunning blocked {pkg_type} install of {pkg_name}\n")
-                    sys.stderr.write(f"   reason: {reason_text}\n")
-                    sys.stderr.write(f"   details: https://stillrunning.io/blocked?pkg={pkg_name}\n")
-                    sys.stderr.write(f"   override: stillrunning allow {pkg_name} --once\n\n")
-                    sys.exit(2)
-
-                elif verdict == "SUSPICIOUS":
-                    reason_text = reason or "Package flagged as suspicious"
-                    # Non-strict mode: warn but allow
-                    sys.stderr.write(f"\n🤖 stillrunning: {pkg_name} looks suspicious — proceeding\n")
-                    sys.stderr.write(f"   reason: {reason_text}\n")
-                    sys.stderr.write(f"   details: https://stillrunning.io/check?pkg={pkg_name}\n\n")
-                    # exit 0 = allow with warning
-
-            except urllib.error.HTTPError as e:
-                if e.code == 429:
-                    # Rate limited - check local blocklist first, then BLOCK (fail-closed)
-                    is_blocked, reason = _is_locally_blocked(pkg_name, pkg_type)
-                    if is_blocked:
-                        sys.stderr.write(f"\n🤖 stillrunning blocked {pkg_type} install of {pkg_name}\n")
-                        sys.stderr.write(f"   reason: {reason}\n")
-                        sys.stderr.write(f"   details: https://stillrunning.io/blocked?pkg={pkg_name}\n\n")
-                        sys.exit(2)
-                    else:
-                        # Not in local blocklist, but can't verify with API - block to be safe
-                        sys.stderr.write(f"\n🤖 stillrunning blocked {pkg_name} (scan limit reached)\n")
-                        sys.stderr.write(f"   Free tier can't verify this package. Options:\n")
-                        sys.stderr.write(f"   • Get API token: https://stillrunning.io/pricing\n")
-                        sys.stderr.write(f"   • One-time allow: stillrunning allow {pkg_name} --once\n\n")
-                        sys.exit(2)
-                else:
-                    # Other HTTP errors - check local blocklist, then block unknown
-                    is_blocked, reason = _is_locally_blocked(pkg_name, pkg_type)
-                    if is_blocked:
-                        sys.stderr.write(f"\n🤖 stillrunning blocked {pkg_type} install of {pkg_name}\n")
-                        sys.stderr.write(f"   reason: {reason}\n")
-                        sys.exit(2)
-                    else:
-                        sys.stderr.write(f"\n🤖 stillrunning blocked {pkg_name} (API error {e.code})\n")
-                        sys.stderr.write(f"   Can't verify safety. Use: stillrunning allow {pkg_name} --once\n\n")
-                        sys.exit(2)
-            except urllib.error.URLError as e:
-                # Network error - check local blocklist, then block unknown
-                _debug(f"URL error: {e}")
-                is_blocked, reason = _is_locally_blocked(pkg_name, pkg_type)
-                if is_blocked:
-                    sys.stderr.write(f"\n🤖 stillrunning blocked {pkg_type} install of {pkg_name}\n")
-                    sys.stderr.write(f"   reason: {reason}\n")
-                    sys.exit(2)
-                else:
-                    sys.stderr.write(f"\n🤖 stillrunning blocked {pkg_name} (can't reach API)\n")
-                    sys.stderr.write(f"   Can't verify safety. Use: stillrunning allow {pkg_name} --once\n\n")
-                    sys.exit(2)
-            except Exception as e:
-                # Unknown error - check local blocklist, then block unknown
-                _debug(f"exception: {e}")
-                is_blocked, reason = _is_locally_blocked(pkg_name, pkg_type)
-                if is_blocked:
-                    sys.stderr.write(f"\n🤖 stillrunning blocked {pkg_type} install of {pkg_name}\n")
-                    sys.stderr.write(f"   reason: {reason}\n")
-                    sys.exit(2)
-                else:
-                    sys.stderr.write(f"\n🤖 stillrunning blocked {pkg_name} (check failed)\n")
-                    sys.stderr.write(f"   Can't verify safety. Use: stillrunning allow {pkg_name} --once\n\n")
-                    sys.exit(2)
-
-        sys.exit(0)
-
-    except json.JSONDecodeError:
-        # Invalid JSON from Claude Code - this shouldn't happen, block to be safe
-        sys.stderr.write("🤖 stillrunning blocked (invalid hook input)\n")
-        sys.stderr.write("   Report: https://github.com/johhnyg/stillrunning/issues\n")
-        sys.exit(2)
-    except Exception as e:
-        # Unknown error in hook - block to be safe
-        if debug:
-            sys.stderr.write(f"🤖 stillrunning blocked (hook error: {e})\n")
-        else:
-            sys.stderr.write("🤖 stillrunning blocked (hook error)\n")
-        sys.exit(2)
-
-
-def _install_claude_code_hook() -> None:
-    """Install Claude Code PreToolUse hook to ~/.claude/hooks.json."""
-    hooks_dir = Path.home() / ".claude"
-    hooks_file = hooks_dir / "hooks.json"
-
-    hooks_dir.mkdir(parents=True, exist_ok=True)
-
-    existing_hooks = {"hooks": []}
-    if hooks_file.exists():
-        try:
-            with open(hooks_file) as f:
-                existing_hooks = json.load(f)
-        except Exception:
-            pass
-
-    hooks_list = existing_hooks.get("hooks", [])
-    sr_hook = {
-        "matcher": {
-            "tool_name": "Bash",
-            "command_pattern": "(pip3?|npm)\\s+(install|i|add)"
-        },
-        "hooks": [{
-            "type": "preToolUse",
-            "command": "stillrunning hook"
-        }]
-    }
-
-    # Remove any existing stillrunning hook
-    hooks_list = [h for h in hooks_list if "stillrunning" not in str(h.get("hooks", []))]
-    hooks_list.append(sr_hook)
-
-    existing_hooks["hooks"] = hooks_list
-
-    tmp_file = hooks_file.with_suffix(".tmp")
-    with open(tmp_file, "w") as f:
-        json.dump(existing_hooks, f, indent=2)
-    tmp_file.replace(hooks_file)
-
-    print("Claude Code hook installed!")
-    print(f"  File: {hooks_file}")
-    print("\nAll pip/npm install commands will now be checked.")
-    print("DANGEROUS packages will be blocked. SUSPICIOUS packages will warn.")
+        messages = claude_hook.install(statusline=statusline)
+    except (claude_hook.InstallError, OSError) as e:
+        print(f"Claude Code hook NOT installed: {e}")
+        sys.exit(1)
+    for message in messages:
+        print(message)
+    print()
+    print("Every pip / npm / uv / yarn / pnpm install Claude Code runs is now looked up first.")
+    print("You will see one line per package, for example:")
+    print("  " + claude_hook.status_line("ok", "requests 2.32.3 (pip)", "no known threat", 140))
+    print("Known-malicious packages are blocked; anything that cannot be checked asks you first.")
+    print("Report card: stillrunning shield")
+    if not statusline:
+        print("Optional status line with today's counts: stillrunning --hook-claude-code --statusline")
+    print("Remove: stillrunning --uninstall-hook-claude-code")
 
 
 def _uninstall_claude_code_hook() -> None:
-    """Remove Claude Code PreToolUse hook."""
-    hooks_file = Path.home() / ".claude" / "hooks.json"
-
-    if not hooks_file.exists():
-        print("No hooks.json found.")
-        return
-
+    """Remove the hook (and our status line, if we installed it)."""
+    from . import claude_hook
     try:
-        with open(hooks_file) as f:
-            existing_hooks = json.load(f)
-    except Exception:
-        print("Could not read hooks.json")
-        return
-
-    hooks_list = existing_hooks.get("hooks", [])
-    original_len = len(hooks_list)
-    hooks_list = [h for h in hooks_list if "stillrunning" not in str(h.get("hooks", []))]
-
-    if len(hooks_list) == original_len:
-        print("No stillrunning hook found to remove.")
-        return
-
-    existing_hooks["hooks"] = hooks_list
-
-    tmp_file = hooks_file.with_suffix(".tmp")
-    with open(tmp_file, "w") as f:
-        json.dump(existing_hooks, f, indent=2)
-    tmp_file.replace(hooks_file)
-
-    print("Claude Code hook removed.")
+        messages = claude_hook.uninstall()
+    except (claude_hook.InstallError, OSError) as e:
+        print(f"Claude Code hook not removed: {e}")
+        sys.exit(1)
+    for message in messages:
+        print(message)
 
 
 def main_cli() -> None:
     """Entry point for the stillrunning command."""
     # Fire-and-forget CLI telemetry (non-blocking)
-    from .heartbeat import send_cli_ping
-    send_cli_ping(VERSION, " ".join(sys.argv[1:3]))
+    # The Claude Code hook and status line run on every tool call / redraw:
+    # they must stay fast and make no network call of their own.
+    if sys.argv[1:2] not in (["hook"], ["statusline"], ["shield"]):
+        from .heartbeat import send_cli_ping
+        send_cli_ping(VERSION, " ".join(sys.argv[1:3]))
 
     import argparse
     parser = argparse.ArgumentParser(
@@ -3518,6 +3563,15 @@ def main_cli() -> None:
         "--doctor", action="store_true",
         help="Run comprehensive health check on the agent"
     )
+    parser.add_argument(
+        "--diagnose", action="store_true",
+        help="Same as --doctor"
+    )
+    parser.add_argument(
+        "--reconfigure", action="store_true",
+        help="Run the setup wizard again (same as --setup)"
+    )
+    parser.add_argument("--version", action="version", version=f"stillrunning {VERSION}")
     parser.add_argument(
         "--token",
         help="Your customer API token (for --add-server)"
@@ -3556,6 +3610,11 @@ def main_cli() -> None:
         "--uninstall-hook-claude-code", action="store_true",
         help="Remove Claude Code PreToolUse hook"
     )
+    parser.add_argument(
+        "--statusline", action="store_true",
+        help="With --hook-claude-code: also add the shield status line "
+             "(never replaces a status line you already have)"
+    )
 
     # SESSION 91: Whitelist subcommand
     subparsers = parser.add_subparsers(dest="command")
@@ -3569,6 +3628,30 @@ def main_cli() -> None:
 
     # SESSION 97: Hook subcommand for Claude Code PreToolUse
     subparsers.add_parser("hook", help="Run as Claude Code PreToolUse hook (reads stdin)")
+    subparsers.add_parser("statusline", help="Print the Claude Code status line")
+    shield_parser = subparsers.add_parser(
+        "shield", help="Report card: what the Claude Code hook checked, blocked and why")
+    shield_parser.add_argument("--json", action="store_true",
+                               help="Print the report as JSON (stable schema, see shield.py)")
+    shield_parser.add_argument("-n", "--last", type=int, default=8,
+                               help="How many recent decisions to show (default 8)")
+
+    remember_parser = subparsers.add_parser(
+        "remember", help="Don't ask again for one exact command (last | <id> | --list)")
+    remember_parser.add_argument("which", nargs="?", help="'last' or the id shown in the panel")
+    remember_parser.add_argument("--list", action="store_true", help="Show remembered commands")
+    remember_parser.add_argument("--json", action="store_true", help="Print as JSON")
+    forget_parser = subparsers.add_parser("forget", help="Stop remembering a command (<id> | --all)")
+    forget_parser.add_argument("which", nargs="?", help="The id from `stillrunning remember --list`")
+    forget_parser.add_argument("--all", action="store_true", help="Forget every remembered command")
+    forget_parser.add_argument("--json", action="store_true", help="Print as JSON")
+
+    panel_parser = subparsers.add_parser(
+        "panel", help="Data for the Claude Code side panel: protection state and a project scan")
+    panel_parser.add_argument("--json", action="store_true", help="Print as JSON")
+    panel_parser.add_argument("--scan", action="store_true",
+                              help="Check this project's and this machine's packages now (network)")
+    panel_parser.add_argument("--cwd", default=None, help="Project folder (default: current)")
 
     # SESSION 98: Allow subcommand with --once support
     allow_parser = subparsers.add_parser("allow", help="Allow a blocked package")
@@ -3576,8 +3659,11 @@ def main_cli() -> None:
     allow_parser.add_argument("--once", action="store_true", help="Single-use override")
 
     # v2.3.0: Scan subcommand — check if a package is safe
-    scan_parser = subparsers.add_parser("scan", help="Check if a package is safe to install")
+    scan_parser = subparsers.add_parser("scan", help="Look a package up in the blocklist before installing (name, name==version, or name@version with --npm)")
     scan_parser.add_argument("package", help="Package name to scan")
+    scan_parser.add_argument("--not-latest", action="store_true", dest="not_latest",
+                             help="The install uses a flag that changes which version resolves "
+                                  "(--pre, a constraints file, --tag): do not assume the latest version")
     scan_parser.add_argument("--npm", action="store_true",
                              help="Scan an npm package (default: PyPI). Used by the npm wrapper.")
 
@@ -3612,6 +3698,25 @@ def main_cli() -> None:
     if args.command == "hook":
         _run_claude_code_hook()
         return
+    if args.command == "statusline":
+        from . import statusline
+        print(statusline.render())
+        return
+    if args.command == "shield":
+        from . import shield
+        sys.exit(shield.main((["--json"] if args.json else []) + ["-n", str(args.last)]))
+
+    if args.command in ("remember", "forget"):
+        from . import remembered
+        extra = ([args.which] if args.which else []) + (["--json"] if args.json else [])
+        extra += ["--list"] if getattr(args, "list", False) else []
+        extra += ["--all"] if getattr(args, "all", False) else []
+        sys.exit(remembered.main([args.command] + extra))
+
+    if args.command == "panel":
+        from . import panel
+        sys.exit(panel.main((["--json"] if args.json else []) + (["--scan"] if args.scan else [])
+                            + (["--cwd", args.cwd] if args.cwd else [])))
 
     # SESSION 98: Handle allow subcommand
     if args.command == "allow":
@@ -3620,7 +3725,8 @@ def main_cli() -> None:
 
     # v2.3.0: Handle scan subcommand (v2.13.2: --npm)
     if args.command == "scan":
-        sys.exit(_scan_package(args.package, npm=args.npm))
+        sys.exit(_scan_package(args.package, npm=args.npm,
+                               not_latest=getattr(args, "not_latest", False)))
 
     # v2.4.0: Handle scan-manifest subcommand
     if args.command == "scan-manifest":
@@ -3642,7 +3748,7 @@ def main_cli() -> None:
 
     # SESSION 97: Handle Claude Code hook install/uninstall
     if args.hook_claude_code:
-        _install_claude_code_hook()
+        _install_claude_code_hook(statusline=args.statusline)
         return
     elif args.uninstall_hook_claude_code:
         _uninstall_claude_code_hook()
@@ -3671,8 +3777,8 @@ def main_cli() -> None:
         print(f"Package '{args.block}' is now blocked.")
         return
 
-    if args.doctor:
-        run_doctor()
+    if args.doctor or args.diagnose:
+        sys.exit(run_doctor())
     elif args.add_server:
         if not args.token:
             print("Error: --token required with --add-server")
@@ -3683,7 +3789,7 @@ def main_cli() -> None:
             print("Usage: stillrunning --add-server --token YOUR_TOKEN --name my-server")
             return
         _add_server_to_account(args.token, args.name)
-    elif args.setup or args.autonomous:
+    elif args.setup or args.autonomous or args.reconfigure:
         run_setup_wizard(autonomous=args.autonomous)
     else:
         # First-run detection: no config → run setup wizard

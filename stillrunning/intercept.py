@@ -13,6 +13,7 @@ v2.4.0: Added support for poetry, pdm, pipenv, conda, pixi, bun, pnpm.
         Added manifest file parsing for requirements.txt, pyproject.toml, etc.
 """
 
+from stillrunning.apibase import api_base, api_url
 import json
 import os
 import subprocess
@@ -169,9 +170,12 @@ def _fetch_threat_rules_from_api():
 
     if not token:
         return None
+    from stillrunning.apibase import token_allowed
+    if not token_allowed():      # the account token only goes to the default server
+        return None
 
     try:
-        url = "https://stillrunning.io/api/threats/rules"
+        url = api_url("/api/threats/rules")
         req = urllib.request.Request(url, headers={"Authorization": f"Bearer {token}"})
         with urllib.request.urlopen(req, timeout=10) as resp:
             if resp.status == 200:
@@ -251,6 +255,9 @@ def send_telegram_alert(package: str, reason: str):
 
 
 def _get_token() -> str:
+    from stillrunning.apibase import token_allowed
+    if not token_allowed():      # the account token only goes to the default server
+        return ""
     config_file = Path(__file__).parent / "stillrunning.yaml"
     if config_file.exists():
         try:
@@ -284,7 +291,7 @@ def call_ai_scan(package: str, ecosystem: str = "pip") -> tuple[str, str] | None
         return None
 
     try:
-        url = "https://stillrunning.io/api/scan"
+        url = api_url("/api/scan")
         payload = json.dumps({
             "token": token,
             "package": package,
@@ -324,54 +331,53 @@ def call_ai_scan(package: str, ecosystem: str = "pip") -> tuple[str, str] | None
         return None
 
 
-def check_pypi_package(package: str, version: str = None) -> tuple[str, str]:
-    known_bad = get_known_bad_pip()
-    if package.lower() in known_bad:
-        return "BLOCKED", f"Package '{package}' is in known-malicious list"
-
+def _engine_verdict(ecosystem: str, package: str, version: str = None) -> tuple[str, str]:
+    """One package through the same engine as the Claude Code hook and
+    `stillrunning scan`. → ("BLOCKED" | "WARN" | "OK", plain reason).
+    "OK" means "not on the blocklist" — it is not a statement that the package
+    is harmless. Anything that could not be checked is WARN, never OK."""
+    from . import claude_hook as ch
+    exact = version if version and ch._SAFE_VERSION.match(str(version)) else None
+    pkg = {"eco": ecosystem, "name": package.strip().lower(), "version": exact}
     try:
-        url = f"https://pypi.org/pypi/{package}/json"
-        req = urllib.request.Request(url, headers={"User-Agent": "stillrunning/2.4.0"})
-        with urllib.request.urlopen(req, timeout=15) as resp:
-            json.loads(resp.read().decode())
+        outcome = ch.lookup(pkg, token=ch.resolve_token()[0])
+    except Exception as exc:
+        print(f"[stillrunning] WARNING: lookup for {package} failed ({type(exc).__name__}: {exc})",
+              file=sys.stderr)
+        return "WARN", f"'{package}' was NOT checked (lookup failed)"
+    status = outcome.get("status")
+    registry = ch.REGISTRY_NAME.get(ecosystem, "the public registry")
+    if status == "blocked":
+        advisory = outcome.get("advisory")
+        return "BLOCKED", (f"Package '{package}' is in known-malicious list"
+                           + (f" ({advisory})" if advisory else ""))
+    if status == "override_blocked":
+        return "WARN", (f"'{package}' is ON THE BLOCKLIST and only a local override on this "
+                        f"machine allows it — continue only if you added that override yourself")
+    if status == "suspicious":
+        return "WARN", f"'{package}' is on an older watch list with no public report behind it"
+    if status == "not_found":
+        return "WARN", f"Package '{package}' not found on {registry}"
+    if status in ("ok", "override"):
+        return "OK", "Not on the blocklist (this is not a guarantee)"
+    why = ch.CHECK_FAILED_WHY.get(outcome.get("why", "server"), ch.CHECK_FAILED_WHY["server"])
+    return "WARN", f"'{package}' was NOT checked — {why}"
 
-        ai_result = call_ai_scan(package, "pip")
-        if ai_result:
-            return ai_result
 
-        return "CLEAN", "Package verified"
-
-    except urllib.error.HTTPError as e:
-        if e.code == 404:
-            return "WARN", f"Package '{package}' not found on PyPI"
-        return "WARN", f"PyPI check failed: HTTP {e.code}"
-    except Exception as e:
-        return "WARN", f"PyPI check failed: {e}"
+def check_pypi_package(package: str, version: str = None) -> tuple[str, str]:
+    status, reason = _engine_verdict("pip", package, version)
+    if status != "OK":
+        return status, reason
+    ai_result = call_ai_scan(package, "pip")     # paid tier only; None otherwise
+    return ai_result if ai_result else (status, reason)
 
 
 def check_npm_package(package: str, version: str = None) -> tuple[str, str]:
-    known_bad = get_known_bad_npm()
-    if package.lower() in known_bad:
-        return "BLOCKED", f"Package '{package}' is in known-malicious list"
-
-    try:
-        url = f"https://registry.npmjs.org/{package}"
-        req = urllib.request.Request(url, headers={"User-Agent": "stillrunning/2.4.0"})
-        with urllib.request.urlopen(req, timeout=15) as resp:
-            json.loads(resp.read().decode())
-
-        ai_result = call_ai_scan(package, "npm")
-        if ai_result:
-            return ai_result
-
-        return "CLEAN", "Package verified"
-
-    except urllib.error.HTTPError as e:
-        if e.code == 404:
-            return "WARN", f"Package '{package}' not found on npm"
-        return "WARN", f"npm check failed: HTTP {e.code}"
-    except Exception as e:
-        return "WARN", f"npm check failed: {e}"
+    status, reason = _engine_verdict("npm", package, version)
+    if status != "OK":
+        return status, reason
+    ai_result = call_ai_scan(package, "npm")     # paid tier only; None otherwise
+    return ai_result if ai_result else (status, reason)
 
 
 # ─── Main Logic ──────────────────────────────────────────────────────────────

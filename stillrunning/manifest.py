@@ -91,10 +91,12 @@ def _parse_pyproject_toml(path: Path) -> list[PackageSpec]:
         return packages
 
     try:
-        import tomli
+        try:
+            import tomllib as tomli          # Python 3.11+
+        except ImportError:
+            import tomli
         data = tomli.loads(content)
     except ImportError:
-        import re
         deps = re.findall(r'dependencies\s*=\s*\[(.*?)\]', content, re.DOTALL)
         for dep_block in deps:
             for match in re.findall(r'"([^"]+)"', dep_block):
@@ -188,7 +190,10 @@ def _parse_package_json(path: Path) -> list[PackageSpec]:
             elif name.startswith("git") or "github" in str(deps[name]):
                 packages.append(PackageSpec(name=name, ecosystem="npm", is_git=True))
             else:
-                packages.append(PackageSpec(name=name.lower(), ecosystem="npm"))
+                # keep the spec: an exact pin ("1.14.1") must be checked as that
+                # version, not as whatever is latest today
+                spec = deps[name] if isinstance(deps[name], str) else None
+                packages.append(PackageSpec(name=name.lower(), version=spec, ecosystem="npm"))
 
     return packages
 
@@ -222,11 +227,14 @@ def _parse_pnpm_lock_yaml(path: Path) -> list[PackageSpec]:
         return packages
 
     for line in content.splitlines():
-        match = re.match(r"^\s+'?/?([^@:]+)@", line)
+        # '/@scope/name@1.2.3(peer...)': or  name@1.2.3:  — scoped names and
+        # the locked version are both kept
+        match = re.match(r"^\s+'?/?((?:@[^/@\s']+/)?[^@:\s'/]+)@(\d[^:('\s]*)?", line)
         if match:
             name = match.group(1).strip()
             if name and not name.startswith("."):
-                packages.append(PackageSpec(name=name.lower(), ecosystem="npm"))
+                packages.append(PackageSpec(name=name.lower(), ecosystem="npm",
+                                            version=match.group(2)))
 
     return packages
 
@@ -305,39 +313,69 @@ def _parse_pixi_toml(path: Path) -> list[PackageSpec]:
     return packages
 
 
-def parse_manifest(path: Path) -> list[PackageSpec]:
-    """
-    Detect manifest file type and extract package specs.
+def _parse_toml_lock(path: Path) -> list[PackageSpec]:
+    """poetry.lock / uv.lock: every [[package]] block has name and version.
+    Read as text — no TOML parser is needed for these two keys."""
+    packages = []
+    try:
+        content = path.read_text(encoding="utf-8", errors="ignore")
+    except OSError:
+        return packages
+    for block in re.split(r"^\[\[package\]\]\s*$", content, flags=re.M)[1:]:
+        name = re.search(r'^name\s*=\s*"([^"]+)"', block, re.M)
+        version = re.search(r'^version\s*=\s*"([^"]+)"', block, re.M)
+        if name:
+            packages.append(PackageSpec(name=name.group(1).lower(),
+                                        version=f"=={version.group(1)}" if version else None))
+    return packages
 
-    Args:
-        path: Path to the manifest file
 
-    Returns:
-        List of PackageSpec objects
-    """
-    if not path.exists():
-        return []
+_REQUIREMENTS_LIKE = re.compile(r"(requirements|constraints).*\.(txt|in)$|\.(txt|in)$")
 
+
+def manifest_kind(path: Path) -> Optional[str]:
+    """Which parser reads this file, or None when no parser does. `pip -r`
+    accepts any file name, so any .txt / .in file is read as a requirements
+    file."""
     name = path.name.lower()
+    exact = {
+        "pyproject.toml": "pyproject", "pipfile": "pipfile", "package.json": "package_json",
+        "package-lock.json": "package_lock", "npm-shrinkwrap.json": "package_lock",
+        "pnpm-lock.yaml": "pnpm_lock", "environment.yml": "conda", "environment.yaml": "conda",
+        "pixi.toml": "pixi", "poetry.lock": "toml_lock", "uv.lock": "toml_lock",
+    }
+    if name in exact:
+        return exact[name]
+    if _REQUIREMENTS_LIKE.search(name):
+        return "requirements"
+    return None
 
-    if name == "requirements.txt" or name == "requirements.in" or name.endswith("-requirements.txt"):
-        return _parse_requirements_txt(path)
-    elif name == "pyproject.toml":
-        return _parse_pyproject_toml(path)
-    elif name == "pipfile":
-        return _parse_pipfile(path)
-    elif name == "package.json":
-        return _parse_package_json(path)
-    elif name == "package-lock.json":
-        return _parse_package_lock_json(path)
-    elif name == "pnpm-lock.yaml":
-        return _parse_pnpm_lock_yaml(path)
-    elif name == "environment.yml" or name == "environment.yaml":
-        return _parse_environment_yml(path)
-    elif name == "pixi.toml":
-        return _parse_pixi_toml(path)
-    else:
-        return []
+
+_PARSERS = {
+    "requirements": _parse_requirements_txt, "pyproject": _parse_pyproject_toml,
+    "pipfile": _parse_pipfile, "package_json": _parse_package_json,
+    "package_lock": _parse_package_lock_json, "pnpm_lock": _parse_pnpm_lock_yaml,
+    "conda": _parse_environment_yml, "pixi": _parse_pixi_toml, "toml_lock": _parse_toml_lock,
+}
+
+
+def parse_manifest(path: Path) -> list[PackageSpec]:
+    """Detect the manifest type and extract package specs. An unknown file
+    type gives [] here; callers that must tell "no packages" from "cannot
+    read this kind of file" use parse_manifest_strict()."""
+    return parse_manifest_strict(path) or []
+
+
+def parse_manifest_strict(path: Path) -> Optional[list[PackageSpec]]:
+    """Like parse_manifest, but None when the file is missing or of a kind no
+    parser reads — so "nothing was checked" is never mistaken for "nothing
+    to check"."""
+    if not path.exists():
+        return None
+    kind = manifest_kind(path)
+    if kind is None:
+        return None
+    return _PARSERS[kind](path)
 
 
 def check_manifest(path: Path, check_fn=None) -> ManifestCheckResult:

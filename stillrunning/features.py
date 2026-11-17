@@ -12,6 +12,7 @@ Tiers:
 - Enterprise ($499/mo): everything + unlimited scans, SIEM, SSO, compliance
 """
 
+from stillrunning.apibase import api_base, api_url
 import json
 import time
 import urllib.request
@@ -21,7 +22,7 @@ from pathlib import Path
 CACHE_FILE = Path.home() / ".stillrunning_token_cache.json"
 CACHE_TTL = 3600  # 1 hour
 OFFLINE_GRACE_PERIOD = 86400  # 24 hours - use stale cache if API unreachable
-API_URL = "https://stillrunning.io/api/validate-token"
+API_URL = api_url("/api/validate-token")
 
 # Feature definitions by tier
 TIER_FEATURES = {
@@ -62,6 +63,9 @@ def _save_cache(data: dict):
 
 def _call_validate_api(token: str) -> dict:
     """Call stillrunning.io/api/validate-token."""
+    from stillrunning.apibase import token_allowed
+    if not token_allowed():      # the account token only goes to the default server
+        return {"valid": False, "offline": True}
     try:
         # SECURITY FIX: Send token in header instead of URL query string
         req = urllib.request.Request(

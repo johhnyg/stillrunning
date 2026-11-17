@@ -1,5 +1,109 @@
 # Changelog
 
+### Third review fixes (unreleased)
+- "Don't ask again for this exact command" is switched off (`REMEMBER_ENABLED = False`);
+  `stillrunning remember` refuses. The code and its tests stay for a redesign.
+- Hook: a wrapper flag takes a value only for its own wrapper (`sudo -n pip …` is read);
+  requirements files resolve against the folder the install runs in (`cd app && …`), and
+  a folder decided at run time asks; shells fed by stdin, process substitution, variables
+  holding a command, `trap`, `env -S`, scripts written and run in one command, ANSI-C
+  strings and decode-then-run pipes are read or put to the user.
+- Self-protection: every spelling of stillrunning's own CLI and modules, program text that
+  writes to the protected places, links into them, `find … -delete` and `git clean` above
+  them. `git add/diff/log` on a settings file and `cd $VAR && …` no longer ask.
+- Stored command text: credentials in `-u`, headers, quoted values and known token shapes
+  are masked; the state folder is owner-only.
+
+## Unreleased (Session 135 — security audit, not yet published)
+
+### Fixed
+- **Claude Code hook never ran, and would not have blocked if it had.** It was
+  written to `~/.claude/hooks.json`, a file Claude Code does not read, and it
+  only acted on the verdict `DANGEROUS`, which the API does not send (it sends
+  `BLOCKED`). It is now a `PreToolUse` hook in `~/.claude/settings.json`; every
+  verdict maps explicitly (BLOCKED / DANGEROUS / SUSPICIOUS deny, a completed
+  lookup with no match shows "no known threat", anything else asks).
+- **Hook parser.** Finds every install in a compound command, flags anywhere,
+  `python -m pip`, uv, pipx, poetry, pdm, yarn, pnpm, bun, npx / dlx, `-r`
+  files, scoped npm names. URL / VCS installs, custom indexes and anything it
+  cannot parse are put to the user.
+- **Wrappers** no longer `exec /usr/bin/pip`: the real tool is resolved at run
+  time (active venv first, then PATH, then `python -m pip`), never the wrapper
+  itself. `install` is detected after global flags. The `python` shell
+  function no longer forces `/usr/bin/python3` inside a venv.
+- **Unverified needs approval by default** (hook: ask; wrappers: prompt, or
+  stop when nobody is at the keyboard), including "not on the registry".
+  Opt out with `STILLRUNNING_ALLOW_UNVERIFIED=1`.
+- **Honest status.** `status`, `--doctor` and the end of `--setup` report each
+  layer as ON / OFF / NOT VERIFIED with the reason and next step; `--doctor`
+  exits 1 when nothing checks installs. One token precedence for every
+  command. The per-command "Import hook installed" line is gone. `status`
+  looked for `stillrunning.pth`; the file is `stillrunning-hook.pth`.
+
+- **End-to-end pass (new-user walkthrough).**
+  - `npm install axios` / `pip install litellm` were blocked outright: the
+    blocklist entry names a few hijacked releases and the command named no
+    version. The hook, `scan` and the wrappers now look up the version the
+    install would fetch and check exactly that; if it cannot be worked out,
+    the user is asked.
+  - `scan`, `scan-manifest` and the wrappers run on the same engine as the
+    Claude Code hook: when the free allowance is used up they fall back to
+    the unmetered blocklist route instead of stopping every install, and
+    `scan name==version` / `name@version` checks that version.
+  - `scan-manifest` read only files literally named `requirements.txt`, so
+    `pip install -r anything-else.txt` passed with "No packages found". Any
+    `.txt` / `.in` file is read as a requirements file; `poetry.lock`,
+    `uv.lock` and `npm-shrinkwrap.json` are read; lockfile pins are checked
+    as pinned; an unreadable kind of file is an error (exit 2), not a pass.
+    It no longer prints "CLEAN". The `pyproject.toml` crash with `tomli`
+    installed is fixed.
+  - Terminal wrappers: activating a virtual environment after the shell
+    started put the venv's `pip` first and skipped the check. `pip`, `pip3`
+    and `npm` are now shell functions as well. The rc-file line is plain
+    POSIX and does nothing in `sh`/`dash` or when `~/.stillrunning` is gone.
+  - Uninstall: `--uninstall-hook-claude-code` puts `settings.json` back byte
+    for byte when nothing else changed it; `shell-uninstall` does the same
+    for rc files and removes every file `shell-install` wrote. The
+    `--install-hook` `.pth` line no longer breaks Python start-up after
+    `pip uninstall stillrunning`.
+  - `STILLRUNNING_API_BASE` points the client at another server.
+  - Windows / macOS: `shell-install` (Windows) and the process monitor
+    (anything but Linux) say "not supported yet" and exit.
+  - README: the MCP config snippet used a file and a `type` Claude Code does
+    not read.
+
+- **Independent review fixes.**
+  - Version-specific blocklist entries: only an exact pin (`==X`, `===X`,
+    `@X`, `@vX`) is looked up as that version. A range, wildcard, dist-tag,
+    `--pre` or a constraints file used to be answered for "the latest
+    version" and could pass while the listed version installed; these now ask
+    and name the listed versions. Another spelling of a listed version
+    (`==1.14.1.0`) is blocked. The same package at two versions in one
+    command is two lookups.
+  - Hook parser: backslash-newline, quoted or escaped program names
+    (`p\ip`, `p""ip`), `python -W x -m pip`, `npm update|up|link|install-test`,
+    `yarn up|upgrade`, `pnpm up|update`, `corepack <pm>`, `pipenv install`,
+    `easy_install`, `eval`, and `yarn workspace <name> add` are parsed. A
+    program only known at run time (`$PIP install x`, `$(…) install x`) and
+    an install from a local file that is not there are put to the user.
+    Redirections (`2>&1`, `>file`) are no longer read as package names.
+  - Self-protection: any command naming `~/.stillrunning`, a Claude Code
+    settings file, the hook script or a `STILLRUNNING_*` variable asks, and
+    the hook now also covers Write / Edit / MultiEdit / NotebookEdit aimed at
+    those files (re-run `stillrunning --hook-claude-code`). A local override
+    no longer silently allows a package that is on the blocklist.
+  - `STILLRUNNING_API_BASE` is accepted for this machine only, and the
+    account token is not sent to it.
+  - Wrappers: `-rfile`, `-r=file`, `-ihttps://…`, `-f…`, `--index=` are read;
+    `npm update|up|link` are checked; `python -W x -m pip` reaches the
+    wrapper; `STILLRUNNING_ALLOW_UNVERIFIED=1` never applies to a listed
+    package (new exit code 14: "needs a person").
+
+### Added
+- Plain-language explanations and per-check evidence on every hook decision,
+  a local decisions log, `stillrunning shield` (`--json`), an optional status
+  line, `--version`, `--diagnose`, `--reconfigure`.
+
 ## 2.13.7 — October 21, 2026 (Session 129)
 
 **Import-time protection works again; `scan`, the import hook and the wrappers no longer report CLEAN on a failure**

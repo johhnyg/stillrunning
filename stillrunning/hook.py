@@ -17,6 +17,7 @@ Always-on:
     stillrunning --install-hook  # Creates .pth file in site-packages
 """
 
+from stillrunning.apibase import api_base, api_url
 import importlib.abc
 import importlib.machinery
 import importlib.util
@@ -44,6 +45,7 @@ FALLBACK_DB_PATH = DB_PATH  # Same location now
 
 # Config file for token
 CONFIG_PATH = _STILLRUNNING_DIR / "stillrunning.yaml"
+PTH_NAME = "stillrunning-hook.pth"   # same constant as layers.PTH_NAME (status looks for this)
 ENV_PATH = _STILLRUNNING_DIR / ".env"
 
 # Cache for instant lookups (populated from SQLite)
@@ -259,32 +261,10 @@ def _clear_flagged(name: str):
 # ─── Background Scanning ─────────────────────────────────────────────────────
 
 def _get_api_token() -> Optional[str]:
-    """Get stillrunning API token from the environment, config or .env."""
-    if os.environ.get("STILLRUNNING_TOKEN"):
-        return os.environ["STILLRUNNING_TOKEN"].strip()
-    # Try config file
-    if CONFIG_PATH.exists():
-        try:
-            import yaml
-            with open(CONFIG_PATH) as f:
-                config = yaml.safe_load(f) or {}
-            token = config.get("token")
-            if token:
-                return token
-        except Exception:
-            pass
-
-    # Try .env file
-    if ENV_PATH.exists():
-        try:
-            with open(ENV_PATH) as f:
-                for line in f:
-                    if line.strip().startswith("STILLRUNNING_TOKEN="):
-                        return line.split("=", 1)[1].strip().strip('"').strip("'")
-        except Exception:
-            pass
-
-    return None
+    """The API token, by the one precedence every command uses
+    (see claude_hook.resolve_token)."""
+    from .claude_hook import resolve_token
+    return resolve_token()[0]
 
 
 def _background_scan(package_name: str):
@@ -305,7 +285,8 @@ def _background_scan(package_name: str):
                 # Never spend the anonymous per-IP quota on imports: the
                 # pip/npm wrappers need it for install-time checks.
                 _warn_once("no_token", "import-time checks are OFF — no API token. Set "
-                           "STILLRUNNING_TOKEN or add `token:` to ~/.stillrunning/stillrunning.yaml.")
+                           "STILLRUNNING_TOKEN or add a token to "
+                           "~/.stillrunning/config.json.")
                 return
             dist = _distribution_for(package_name)
             if dist is None:
@@ -315,7 +296,7 @@ def _background_scan(package_name: str):
 
             # v2.13.7: /api/check-package is GET-only; the old POST got HTTP 405
             # on every call, so import-time scanning never worked.
-            url = "https://stillrunning.io/api/check-package?" + urllib.parse.urlencode(
+            url = api_url("/api/check-package?") + urllib.parse.urlencode(
                 {"name": dist, "ecosystem": "pip", "source": "import_hook"})
             headers = {"User-Agent": "stillrunning-hook/2.1"}
             if token:
@@ -604,7 +585,12 @@ def install():
     sys.meta_path.insert(0, _finder_instance)
     _hook_installed = True
 
-    print("[stillrunning] Import hook installed", file=sys.stderr)
+    # Not announced: this runs on every `import stillrunning` (so on every
+    # CLI command), and "installed" read as "you are protected" even when
+    # import-time checks were off for lack of a token. `stillrunning status`
+    # reports the real state.
+    if os.environ.get("STILLRUNNING_DEBUG", "").lower() in ("1", "true", "yes"):
+        print("[stillrunning] import finder active for this process", file=sys.stderr)
 
 
 def uninstall():
@@ -631,6 +617,17 @@ def is_installed() -> bool:
 
 # ─── .pth File Support ───────────────────────────────────────────────────────
 
+# One line, because site.py only executes .pth lines that start with "import".
+# It checks that the package still exists first: `pip uninstall stillrunning`
+# does not remove this file (pip did not create it), and a bare
+# `import stillrunning.hook` then printed a traceback at every Python start.
+# (Both lookups: an uninstall can leave an empty `stillrunning/` directory
+# behind — config written by --setup, __pycache__ — which still resolves as a
+# package but has no hook module.)
+PTH_LINE = ("import importlib.util as _sr_u; _sr_u.find_spec('stillrunning') "
+            "and _sr_u.find_spec('stillrunning.hook') and __import__('stillrunning.hook')")
+
+
 def install_pth():
     """Install .pth file for always-on import protection."""
     import site
@@ -647,11 +644,11 @@ def install_pth():
         site_packages = site.getusersitepackages()
         os.makedirs(site_packages, exist_ok=True)
 
-    pth_path = os.path.join(site_packages, "stillrunning-hook.pth")
+    pth_path = os.path.join(site_packages, PTH_NAME)
 
     # Write .pth file that imports the hook
     with open(pth_path, "w") as f:
-        f.write("import stillrunning.hook\n")
+        f.write(PTH_LINE + "\n")
 
     print(f"[stillrunning] Installed .pth file: {pth_path}")
     return pth_path
@@ -662,7 +659,7 @@ def uninstall_pth():
     import site
 
     for path in site.getsitepackages() + [site.getusersitepackages()]:
-        pth_path = os.path.join(path, "stillrunning-hook.pth")
+        pth_path = os.path.join(path, PTH_NAME)
         if os.path.exists(pth_path):
             os.remove(pth_path)
             print(f"[stillrunning] Removed .pth file: {pth_path}")

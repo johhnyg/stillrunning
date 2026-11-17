@@ -8,6 +8,7 @@ No personal data is collected. Only: hashed machine ID, step name,
 timestamp, and agent version.
 """
 
+from stillrunning.apibase import api_base, api_url
 import hashlib
 import json
 import os
@@ -19,7 +20,7 @@ from datetime import datetime, timezone
 
 __version__ = "2.2.2"
 
-FUNNEL_URL = "https://stillrunning.io/api/setup-funnel"
+FUNNEL_URL = api_url("/api/setup-funnel")
 _funnel_enabled = True
 _machine_id_hash = None
 

@@ -760,6 +760,13 @@ def main_loop():
     """Main daemon loop."""
     global _known_pids, _started_at
 
+    if not sys.platform.startswith("linux"):
+        name = {"win32": "Windows", "cygwin": "Windows", "darwin": "macOS"}.get(sys.platform, sys.platform)
+        print(f"stillrunning-guard is not supported on {name} yet (it watches processes through "
+              "/proc, which exists only on Linux). Package checks work here: stillrunning scan "
+              "<package>, stillrunning --hook-claude-code.")
+        sys.exit(1)
+
     _started_at = time.time()
     last_status_write = 0
 
