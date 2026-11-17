@@ -15,7 +15,8 @@ right after the name and is never dropped when space is short.
 
 Then one segment for known vulnerabilities (CVE monitoring), read from
 ~/.stillrunning/cve_state.json (written by `stillrunning cve --refresh`;
-no file = the feature is not set up = no segment):
+no file = the feature is not set up = no segment), for the project folder
+Claude Code names on stdin (else the current folder):
     CVEs: clear · feed 3h ago                      green  (proof only)
     CVEs: 2 affected (1 critical) · feed 3h ago    red when any is critical,
                                                    amber otherwise
@@ -45,45 +46,123 @@ def _age(seconds):
 
 
 CVE_FRESH_S = 24 * 3600
+CVE_FUTURE_S = 120
+_SEVERITIES = ("LOW", "MODERATE", "HIGH", "CRITICAL", "MALICIOUS")
+_PART_KINDS = ("project file", "installed", "search")
+_ALNUM = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
 
 
-def cve_segment(path=None, now=None):
-    """→ (state, detail, freshness, compact detail)."""
+def _chars(text, extra, first=_ALNUM, most=214):
+    return (isinstance(text, str) and 0 < len(text) <= most and text[0] in first
+            and all(c in _ALNUM + extra for c in text))
+
+
+def _int(value):
+    return isinstance(value, int) and not isinstance(value, bool) and value >= 0
+
+
+def _num(value):
+    return isinstance(value, (int, float)) and not isinstance(value, bool)
+
+
+def _vuln_ok(v):
+    if not isinstance(v, dict):
+        return False
+    vid = v.get("id")
+    head = vid.split("-", 1)[0] if isinstance(vid, str) else ""
+    return (_chars(vid, "-._:", first="ABCDEFGHIJKLMNOPQRSTUVWXYZ", most=77) and "-" in vid
+            and _chars(head, "", first="ABCDEFGHIJKLMNOPQRSTUVWXYZ", most=16)
+            and (v.get("severity") is None or v.get("severity") in _SEVERITIES))
+
+
+def _affected_ok(a):
+    return (isinstance(a, dict) and a.get("eco") in ("pip", "npm")
+            and _chars(a.get("name"), "._~-@/", first=_ALNUM + "@")
+            and _chars(a.get("version"), "._+!-", most=64)
+            and isinstance(a.get("vulns"), list) and a["vulns"]
+            and all(_vuln_ok(v) for v in a["vulns"]))
+
+
+def _part_ok(p):
+    return (isinstance(p, dict) and _chars(p.get("part"), " ._/@+-", most=120)
+            and p.get("kind") in _PART_KINDS and _int(p.get("resolved"))
+            and _int(p.get("unresolved"))
+            and (p.get("why") is None or isinstance(p.get("why"), str)))
+
+
+def cve_segment(path=None, now=None, cwd=None):
+    """→ (state, detail, freshness, compact detail) for the folder `cwd`, or
+    None when CVE monitoring is not set up (no state file). The state comes
+    from the saved details, never from the saved summary alone; anything odd
+    is UNKNOWN."""
     path = path or os.path.join(os.path.expanduser("~"), ".stillrunning", "cve_state.json")
     now = time.time() if now is None else now
+    root = os.path.realpath(cwd or os.getcwd())
+    unreadable = ("UNKNOWN", "unknown", "state unreadable", "unknown")
     try:
         with open(path, encoding="utf-8") as handle:
             doc = json.load(handle)
     except FileNotFoundError:
         return None                 # CVE monitoring not set up: no segment
     except (OSError, ValueError):
-        return "UNKNOWN", "unknown", "state unreadable", "unknown"
+        return unreadable
+    if not (isinstance(doc, dict) and doc.get("schema") == 2
+            and isinstance(doc.get("projects"), dict)):
+        return unreadable
+    entry = doc["projects"].get(root)
+    if not isinstance(entry, dict) or entry.get("root") != root:
+        return "UNKNOWN", "unknown", "checked for another folder", "unknown"
     try:
-        summary = doc["summary"]
-        affected, critical = summary["affected_packages"], summary["critical"]
-        worst = summary.get("worst")
-        for n in (affected, critical):
-            if isinstance(n, bool) or not isinstance(n, int) or n < 0:
-                raise TypeError
-        feed = doc.get("feed_updated_at")
-        if feed is not None and (isinstance(feed, bool) or not isinstance(feed, (int, float))):
+        inv, chk, summary = entry["inventory"], entry["check"], entry["summary"]
+        affected, parts = entry["affected"], inv["parts"]
+        failures, resolved, not_checked = chk["failures"], inv["resolved"], chk["not_checked"]
+        feed, refreshed = entry.get("feed_updated_at"), entry.get("refreshed_at")
+        if not (entry.get("schema") == 2 and isinstance(summary, dict)
+                and isinstance(affected, list) and isinstance(parts, list)
+                and isinstance(failures, list) and _int(resolved) and _int(not_checked)
+                and (feed is None or _num(feed)) and _num(refreshed)):
             raise TypeError
-        complete = summary["inventory_complete"] is True and summary["check_complete"] is True
     except (KeyError, TypeError, AttributeError):
-        return "UNKNOWN", "unknown", "state unreadable", "unknown"
+        return unreadable
+    good = [a for a in affected if _affected_ok(a)]
+    counts = {"affected_packages": len(good),
+              "critical": sum(1 for a in good if any(v.get("severity") == "CRITICAL"
+                                                     for v in a["vulns"])),
+              "malicious": sum(1 for a in good if any(v.get("severity") == "MALICIOUS"
+                                                      for v in a["vulns"]))}
+    inv_body = (bool(parts) and all(_part_ok(p) for p in parts)
+                and sum(p["unresolved"] for p in parts) == 0)
+    chk_body = not_checked == 0 and not failures
+    consistent = (len(good) == len(affected) and all(_part_ok(p) for p in parts)
+                  and all(isinstance(f, str) for f in failures)
+                  and (inv.get("complete") is True) == inv_body
+                  and (chk.get("complete") is True) == chk_body
+                  and all(summary.get(k) == n for k, n in counts.items())
+                  and summary.get("inventory_complete") is inv_body
+                  and summary.get("check_complete") is chk_body)
+    if not consistent:
+        return "UNKNOWN", "unknown", "state inconsistent", "unknown"
+    if any(t is not None and t > now + CVE_FUTURE_S for t in (feed, refreshed)):
+        return "UNKNOWN", "unknown", "feed time in the future", "unknown"
     if feed is None:
         fresh, stale = "feed unreachable", True
     else:
         age = max(0.0, now - feed)
         stale = age > CVE_FRESH_S
         fresh = f"feed {int(age // 3600)}h old" if stale else "feed " + _age(age)
-    if affected:
-        sev = (f"{critical} critical" if critical else
-               "worst " + (worst.lower() if worst in ("LOW", "MODERATE", "HIGH") else "unknown"))
-        return ("AFFECTED_CRITICAL" if critical else "AFFECTED",
-                f"{affected} affected ({sev})", fresh, "affected")
-    if stale or not complete:
-        detail = "unknown" if complete or stale else "unknown (not all checked)"
+    if counts["affected_packages"]:
+        bits = [f"{counts[k]} {k}" for k in ("critical", "malicious") if counts[k]]
+        if not bits:
+            worst = max((v.get("severity") for a in good for v in a["vulns"]),
+                        key=lambda w: _SEVERITIES.index(w) + 1 if w else 0)
+            bits = ["worst " + (worst.lower() if worst else "unknown")]
+        red = counts["critical"] or counts["malicious"]
+        return ("AFFECTED_CRITICAL" if red else "AFFECTED",
+                f"{counts['affected_packages']} affected ({', '.join(bits)})", fresh, "affected")
+    if resolved == 0:
+        return "UNKNOWN", "unknown (nothing to check)", fresh, "unknown"
+    if stale or not inv_body or not chk_body:
+        detail = "unknown" if stale or (inv_body and chk_body) else "unknown (not all checked)"
         return "UNKNOWN", detail, fresh, "unknown"
     return "CLEAR", "clear", fresh, "clear"
 
@@ -97,7 +176,7 @@ def _cve_pieces(segment, color):
     CLEAR; red when a critical is among the affected; amber otherwise."""
     state, detail, fresh, compact = segment
     code = {"CLEAR": "32", "AFFECTED_CRITICAL": "1;31"}.get(state, "33")
-    old = any(word in fresh for word in ("old", "unreach", "unreadable"))
+    old = state != "CLEAR" and not fresh.endswith("ago")
     return (_piece("CVEs: " + detail, code, color), _piece("CVEs: " + compact, code, color),
             _piece(fresh, "33" if old else "", color))
 
@@ -111,7 +190,7 @@ def _width():
     return cols if cols >= 20 else None
 
 
-def render(path=None, now=None, color=None, width=None, cve_path=None):
+def render(path=None, now=None, color=None, width=None, cve_path=None, cwd=None):
     path = path or os.path.join(os.path.expanduser("~"), ".stillrunning", "hook_stats.json")
     now = time.time() if now is None else now
     color = (not os.environ.get("NO_COLOR")) if color is None else color
@@ -128,7 +207,7 @@ def render(path=None, now=None, color=None, width=None, cve_path=None):
         feed_age = data.get("feed_age_h")
         feed_seen = float(data.get("feed_seen_ts", 0))
     except (OSError, ValueError, TypeError, AttributeError):
-        segment = cve_segment(cve_path, now)
+        segment = cve_segment(cve_path, now, cwd)
         if not segment:
             return FALLBACK
         cve, _, age = _cve_pieces(segment, color)
@@ -159,7 +238,7 @@ def render(path=None, now=None, color=None, width=None, cve_path=None):
     if not counts:
         counts.append(piece("nothing to check yet"))
 
-    segment = cve_segment(cve_path, now)
+    segment = cve_segment(cve_path, now, cwd)
     cve_full, cve_short, cve_age = _cve_pieces(segment, color) if segment else ((), (), ())
 
     def build(kept, cve):
@@ -184,8 +263,24 @@ def render(path=None, now=None, color=None, width=None, cve_path=None):
     return text
 
 
+def _cwd_from_stdin():
+    """Claude Code hands the status line a JSON object on stdin that names the
+    project folder; the CVE segment answers for that folder."""
+    try:
+        if sys.stdin is None or sys.stdin.isatty():
+            return None
+        data = json.loads(sys.stdin.read(200_000) or "{}")
+        space = data.get("workspace") if isinstance(data.get("workspace"), dict) else {}
+        for value in (space.get("project_dir"), space.get("current_dir"), data.get("cwd")):
+            if isinstance(value, str) and value.startswith("/"):
+                return value
+    except (OSError, ValueError, AttributeError):
+        return None
+    return None
+
+
 if __name__ == "__main__":
     try:
-        sys.stdout.write(render() + "\n")
+        sys.stdout.write(render(cwd=_cwd_from_stdin()) + "\n")
     except Exception:  # a status line must never print a traceback into the UI
         sys.stdout.write(FALLBACK + "\n")

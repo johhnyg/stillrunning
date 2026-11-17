@@ -202,9 +202,15 @@ the same folder pins it).
 
 | State | Colour | Means |
 |---|---|---|
-| CLEAR | green | every part resolved, feed refreshed within 24 h, and no known vulnerability for those versions |
-| AFFECTED | red with a critical, amber otherwise | at least one package has a known vulnerability (count, worst severity, how many critical) |
-| UNKNOWN | amber | never refreshed, feed unreachable or older than 24 h, part of the inventory unresolved, or the check failed part-way. This is the default |
+| CLEAR | green | checked for this very folder, at least one package found and every part resolved, the whole search done, feed refreshed within 24 h, the check complete, and no known vulnerability for those versions |
+| AFFECTED | red with a critical or a package OSV lists as malicious, amber otherwise | at least one package has a known vulnerability (count, worst severity, how many critical / malicious) |
+| UNKNOWN | amber | never refreshed for this folder (or saved for another one), feed unreachable, older than 24 h or dated in the future, nothing found to check, part of the inventory unresolved or the search cut short, the check failed part-way, or the saved state unreadable or not adding up. This is the default |
+
+The state is saved per project folder; every surface answers for its own
+folder (the status line for the folder Claude Code names, the panel and the
+CLI for `--cwd` or the current folder). A package OSV lists as malicious
+(`MAL-` records) shows as AFFECTED with severity "malicious" and "remove it";
+the blocklist is what refuses it at install time.
 
 If some packages are affected and part is unresolved, AFFECTED wins and the
 report says what was not checked.
@@ -228,12 +234,16 @@ fetches anything. `stillrunning shield` prints one CVE line.
 
 **At install time:** when Claude Code is about to install a package whose
 version (the exact pin, or the version an unpinned install would fetch) has a
-known **critical** vulnerability, the hook holds the install for your
-approval and names the id, the severity and the first fixed version. If the
-vulnerability check cannot finish (OSV.dev unreachable or slow, or the version
-cannot be worked out while some version is critical), it holds too and says
-that it was the vulnerability check that could not run. Non-critical
-vulnerabilities never hold; they add a "not held" line. A blocklisted package
+known **critical** vulnerability, or a known vulnerability whose severity
+could not be determined (no GitHub Advisory word and no CVSS v3 score), the
+hook holds the install for your approval and names the id and the first fixed
+version. When the command names a range, a tag or `--pre`, or the version it
+would fetch cannot be worked out, and some version of the package has such a
+vulnerability, it holds and says that versions it could install are affected.
+These holds are not waved through by `STILLRUNNING_ALLOW_UNVERIFIED=1`. If the
+vulnerability check cannot finish (OSV.dev unreachable or slow), it holds too
+and says that it was the vulnerability check that could not run. HIGH,
+MODERATE and LOW vulnerabilities never hold; they add a "not held" line. A blocklisted package
 is still refused. The check runs alongside the blocklist lookup within the
 same time limit and uses the saved state when it has that exact version and
 is under 24 h old. Switch it off with `STILLRUNNING_CVE_CHECK=0` in the
@@ -259,17 +269,21 @@ can do.
   that could be resolved. A range without a lockfile, an unreadable file, a
   local or git dependency, conda/pixi packages, old-style `.egg-info` packages
   in a project virtualenv and npm packages installed but not in a lockfile are
-  not checked; the state reads UNKNOWN when any part is unresolved. Severity
-  is the GitHub Advisory word, else the CVSS v3 score; a record with only a
-  CVSS v4 vector has unknown severity and never holds an install.
+  not checked; the state reads UNKNOWN when any part is unresolved. The
+  project search reads at most 40 dependency files, two folders deep; when
+  more exist the state reads UNKNOWN and says so. Severity is the GitHub
+  Advisory word, else the CVSS v3 score; a record with only a CVSS v4 vector
+  (or no score) has unknown severity, and an install of a version with such a
+  record is held.
 - **The install-time CVE hold** runs in the Claude Code hook only, not in the
   terminal wrappers. An install that names a range, a tag or `--pre` is held
   when any version of that package has a critical vulnerability, because the
   version it would fetch cannot be worked out. `STILLRUNNING_ALLOW_UNVERIFIED=1`
-  lets a "could not run" hold through (with a warning) but never a critical
-  one. The status line shows the CVE segment only after the first
-  `stillrunning cve --refresh`; before that, `stillrunning cve` and the panel
-  say UNKNOWN.
+  lets a "could not run" hold through (with a warning), never a hold for a
+  known critical or unknown-severity vulnerability. The status line shows the
+  CVE segment only after the first `stillrunning cve --refresh` on this
+  machine; in a folder that was never refreshed it reads "unknown · checked
+  for another folder".
 - **What the hook does not see.** It reads the text of the command Claude
   Code is about to run, nothing else. It does not see an install started from
   inside a program (a Python or Node script, a here-document handed to

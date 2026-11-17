@@ -3,26 +3,31 @@ machine already use. Its job is to shorten the time to patch known bugs in
 honest packages. It does not detect malware (the blocklist does that) and it
 does not stop attacks; it covers only what OSV.dev knows.
 
-    stillrunning cve                 human report from the saved state (no network)
-    stillrunning cve --json          the same as JSON, stable schema (no network)
-    stillrunning cve --refresh       inventory + OSV.dev check, saves the state
-    stillrunning cve --schedule      one crontab line: --refresh every 6 hours
-    stillrunning cve --unschedule    remove that line
+    stillrunning cve [--cwd DIR]            report from the saved state (no network)
+    stillrunning cve --json [--cwd DIR]     the same as JSON, stable schema (no network)
+    stillrunning cve --refresh [--cwd DIR]  inventory + OSV.dev check, saves the state
+    stillrunning cve --schedule [--cwd DIR] one crontab line: --refresh every 6 hours
+    stillrunning cve --unschedule           remove that line
+
+The state is kept per project folder (~/.stillrunning/cve_state.json,
+{"schema": 2, "projects": {"/abs/folder": {...}}}). Every reader answers for
+one folder and uses only that folder's entry.
 
 States (green only with positive proof):
-    CLEAR     inventory fully resolved, feed refreshed within 24 h, zero known
-              vulnerabilities for the resolved versions
-    AFFECTED  at least one resolved package has a known vulnerability
-    UNKNOWN   anything else: never refreshed, feed unreachable or stale,
-              inventory not fully resolved, the check failed part-way,
-              or the saved state cannot be read
+    CLEAR     this folder's entry, inventory fully resolved and not empty,
+              feed refreshed within 24 h (and not in the future), the check
+              complete, zero known vulnerabilities, and the saved summary
+              agreeing with the saved details
+    AFFECTED  at least one resolved package has a known vulnerability, or is
+              listed by OSV as malicious (severity "MALICIOUS")
+    UNKNOWN   anything else (the default)
 
-`--json` shape (schema 1; fields are only ever added):
+`--json` shape (schema 1 of the output; fields are only ever added):
     {"schema": 1, "generated_at": ts, "state": "CLEAR"|"AFFECTED"|"UNKNOWN",
      "reasons": [str], "root": str|null, "refreshed_at": ts|null,
      "feed_updated_at": ts|null, "feed_age_hours": float|null,
      "newest_modified": str|null,
-     "counts": {"affected_packages", "critical", "worst", "resolved",
+     "counts": {"affected_packages", "critical", "malicious", "worst", "resolved",
                 "unresolved", "not_checked"},
      "inventory": [{"part", "kind", "resolved", "unresolved", "why"}],
      "affected": [{"eco", "name", "version", "where": [str],
@@ -38,17 +43,24 @@ from pathlib import Path
 
 from . import claude_hook, osv, panel
 
-SCHEMA = 1
+SCHEMA = 1                 # of the --json output
+FILE_SCHEMA = 2            # of cve_state.json
 FRESH_S = 24 * 3600
+FUTURE_SLACK_S = 120
+KEEP_PROJECTS = 20
 REFRESH_BUDGET_S = 150.0
 DETAIL_WORKERS = 8
 STATE_WORDS = ("CLEAR", "AFFECTED", "UNKNOWN")
+SEVERITY_WORDS = osv.SEVERITIES + ("MALICIOUS",)
+PART_KINDS = ("project file", "installed", "search")
 CRON_MARK = "# stillrunning-cve (added by: stillrunning cve --schedule)"
 LOCKFILES = {"package-lock.json": "npm", "npm-shrinkwrap.json": "npm", "pnpm-lock.yaml": "npm",
              "poetry.lock": "pip", "uv.lock": "pip"}
 NO_FEED_KINDS = {"conda", "pixi"}
+MAL_TODO = "listed as malicious — remove it (the blocklist refuses it)"
 _SAFE_PLACE = re.compile(r"^[A-Za-z0-9 ._/@+-]{1,120}$")
-_SAFE_WHY = re.compile(r"^[A-Za-z0-9 ._/()+;,-]{1,200}$")
+_SAFE_ROOT = re.compile(r"^/[A-Za-z0-9 ._/@+-]{0,400}$")
+_SAFE_WHY = re.compile(r"^[A-Za-z0-9 ._/()+;,-]{1,300}$")
 
 
 def state_path():
@@ -59,15 +71,26 @@ def vulns_cache_path():
     return os.path.join(claude_hook._state_dir(), "cve_vulns.json")
 
 
+def _sendable(eco, name, version):
+    """Can OSV.dev be asked about exactly this package and version?"""
+    return (eco in osv.ECOSYSTEM and bool(version)
+            and bool(osv.SAFE_NAME.match(claude_hook.normalize(eco, name)))
+            and bool(osv.SAFE_VERSION.match(version)))
+
+
 # ─────────────────────────────── inventory ───────────────────────────────
 def inventory(root):
-    """→ {"packages": [resolved {eco,name,version,where,place}], "parts": [...],
+    """→ {"packages": [resolved {eco,name,version,place}], "parts": [...],
     "complete": bool}. Every part says how many packages were resolved to one
-    exact version and, when not all, why."""
+    exact version OSV.dev can be asked about and, when not all, why."""
     from .manifest import manifest_kind
     root = os.path.realpath(root)
-    rows, project = panel.project_packages(root)
+    search = []
+    rows, project = panel.project_packages(root, search)
     parts, resolved = [], []
+    if search:
+        parts.append({"part": "project search", "kind": "search", "resolved": 0,
+                      "unresolved": len(search), "why": "; ".join(search)})
     # exact versions each lockfile gives, by folder and ecosystem
     locked = {}
     for p in project:
@@ -82,26 +105,27 @@ def inventory(root):
             part["unresolved"], part["why"] = max(1, row.get("packages", 0)), "could not be read"
             continue
         if kind in NO_FEED_KINDS:
-            part["unresolved"] = row.get("packages", 0)
+            part["unresolved"] = max(1, row.get("packages", 0))
             part["why"] = "conda/pixi packages are not checked here"
             continue
-        loose = []
+        loose, unsendable = [], []
         for p in (x for x in project if x["file"] == rel):
-            if not panel._NAME_OK.match(p["name"]):
-                loose.append(p["name"])
-                continue
             version = p["version"] or locked.get((str(Path(rel).parent), p["eco"]), {}).get(p["name"])
-            if version:
+            if not version or not panel._NAME_OK.match(p["name"]):
+                loose.append(p["name"])
+            elif not _sendable(p["eco"], p["name"], version):
+                unsendable.append(p["name"])
+            else:
                 part["resolved"] += 1
                 resolved.append({"eco": p["eco"], "name": p["name"], "version": version,
                                  "place": rel})
-            else:
-                loose.append(p["name"])
         others = row.get("not_registry", 0)
-        part["unresolved"] = len(loose) + others
+        part["unresolved"] = len(loose) + len(unsendable) + others
         reasons = []
         if loose:
             reasons.append(f"{len(loose)} without one exact version and no lockfile")
+        if unsendable:
+            reasons.append(f"{len(unsendable)} with a name or version that cannot be sent to OSV.dev")
         if others:
             reasons.append(f"{others} from a local path, web address or git")
         part["why"] = "; ".join(reasons) or None
@@ -115,20 +139,25 @@ def inventory(root):
         items = places.get(place, [])
         part = {"part": place, "kind": "installed", "resolved": 0, "unresolved": 0, "why": None}
         loose = [p for p in items if not p["version"] or not panel._NAME_OK.match(p["name"])]
-        part["resolved"] = len(items) - len(loose)
-        part["unresolved"] = len(loose)
+        unsendable = [p for p in items if p not in loose
+                      and not _sendable("pip", p["name"], p["version"])]
+        good = [p for p in items if p not in loose and p not in unsendable]
+        part["resolved"] = len(good)
+        part["unresolved"] = len(loose) + len(unsendable)
         whys = [x["why"] for x in problems if x["place"] == place]
         if loose:
             whys.append(f"{len(loose)} without a plain version number")
+        if unsendable:
+            whys.append(f"{len(unsendable)} with a name or version that cannot be sent to OSV.dev")
         if whys:
             part["unresolved"] = max(part["unresolved"], 1)
             part["why"] = "; ".join(whys)
         parts.append(part)
         resolved += [{"eco": "pip", "name": p["name"], "version": p["version"],
                       "place": "installed" if place == "this machine" else f"installed in {place}"}
-                     for p in items if p not in loose]
+                     for p in good]
     return {"packages": resolved, "parts": parts,
-            "complete": all(p["unresolved"] == 0 for p in parts)}
+            "complete": bool(parts) and all(p["unresolved"] == 0 for p in parts)}
 
 
 # ─────────────────────────────── refresh ───────────────────────────────
@@ -230,7 +259,12 @@ def check(packages, now=None, budget_s=REFRESH_BUDGET_S, query_batch=None, get_v
             s = osv.summarize(entry["raw"], eco, name, version)
             if s:
                 summaries.append(s)
-        out.append(osv.cluster(summaries, version))
+        # OSV MAL- records are the blocklist's job at install time, but a package
+        # already here that OSV lists as malicious must never read clear
+        mal = sorted(vid for vid, _ in hits if vid.startswith("MAL-"))
+        listed = [{"id": mal[0], "ids": mal[:12], "severity": "MALICIOUS", "fixed": None}] \
+            if mal else []
+        out.append(listed + osv.cluster(summaries, version))
     return items, out, failures, newest, cache
 
 
@@ -245,11 +279,15 @@ def _slim(raw):
 
 
 def refresh(root, now=None, **kw):
-    """Inventory, check, save. The only function here that uses the network."""
+    """Inventory, check, save this folder's entry. The only function here that
+    uses the network."""
     now = time.time() if now is None else now
+    root = os.path.realpath(root)
     inv = inventory(root)
     cache = _load_json(vulns_cache_path()) or {}
     items, clusters, failures, newest, cache = check(inv["packages"], now=now, cache=cache, **kw)
+    dropped = len({(p["eco"], claude_hook.normalize(p["eco"], p["name"]), p["version"])
+                   for p in inv["packages"]}) - len(items)
     where = {}
     for p in inv["packages"]:
         key = (p["eco"], claude_hook.normalize(p["eco"], p["name"]), p["version"])
@@ -260,53 +298,75 @@ def refresh(root, now=None, **kw):
     for item, found in zip(items, clusters):
         if found is None:
             continue
-        results[f"{item[0]}:{item[1]}@{item[2]}"] = found
+        results[f"{item[0]}:{item[1]}@{item[2]}"] = [c for c in found if c["severity"] != "MALICIOUS"]
         if found:
             affected.append({"eco": item[0], "name": item[1], "version": item[2],
                              "where": where.get(item, [])[:6], "vulns": found[:20]})
     affected.sort(key=lambda a: (-osv.RANK[osv.worst(a["vulns"])], a["name"]))
-    not_checked = sum(1 for c in clusters if c is None)
-    answered = any(c is not None for c in clusters) or not items
-    doc = {
-        "schema": SCHEMA, "root": os.path.realpath(root), "refreshed_at": now,
+    not_checked = sum(1 for c in clusters if c is None) + max(0, dropped)
+    answered = any(c is not None for c in clusters)
+    entry = {
+        "schema": FILE_SCHEMA, "root": root, "refreshed_at": now,
         "feed_updated_at": now if answered else None,
         "newest_modified": newest,
         "inventory": {"parts": inv["parts"], "complete": inv["complete"],
-                      "resolved": len(items), "unresolved": sum(p["unresolved"] for p in inv["parts"])},
+                      "resolved": len(items),
+                      "unresolved": sum(p["unresolved"] for p in inv["parts"])},
         "check": {"complete": not failures and not_checked == 0, "not_checked": not_checked,
-                  "failures": [osv.WHY.get(f, f) for f in failures]},
+                  "failures": [osv.WHY.get(f, osv.WHY["garbage"]) for f in failures]},
         "affected": affected, "results": results,
     }
-    doc["summary"] = _summary(doc)
+    entry["summary"] = _summary(entry)
+    doc = _load_json(state_path())
+    projects = doc.get("projects") if isinstance(doc, dict) and doc.get("schema") == FILE_SCHEMA \
+        and isinstance(doc.get("projects"), dict) else {}
+    projects[root] = entry
+    keep = sorted(projects, key=lambda k: _num((projects[k] or {}).get("refreshed_at")
+                                              if isinstance(projects[k], dict) else 0) or 0)
+    for old in keep[:-KEEP_PROJECTS]:
+        del projects[old]
     try:
-        _save(state_path(), doc)
+        _save(state_path(), {"schema": FILE_SCHEMA, "projects": projects})
         _save(vulns_cache_path(), {k: v for k, v in cache.items() if isinstance(v, dict)})
     except OSError as exc:
         claude_hook._warn(f"cve: could not save the state ({type(exc).__name__})")
-    return doc
+    return entry
 
 
-def _summary(doc):
-    """The few numbers the status line reads (it cannot import this module)."""
-    affected = doc.get("affected") or []
-    crit = sum(1 for a in affected if any(v["severity"] == "CRITICAL" for v in a["vulns"]))
-    return {"affected_packages": len(affected), "critical": crit,
-            "worst": osv.worst([v for a in affected for v in a["vulns"]]),
-            "inventory_complete": bool(doc["inventory"]["complete"]),
-            "check_complete": bool(doc["check"]["complete"])}
+def _counts(affected):
+    def has(a, word):
+        return any(v["severity"] == word for v in a["vulns"])
+    return {"affected_packages": len(affected),
+            "critical": sum(1 for a in affected if has(a, "CRITICAL")),
+            "malicious": sum(1 for a in affected if has(a, "MALICIOUS")),
+            "worst": osv.worst([v for a in affected for v in a["vulns"]])}
+
+
+def _summary(entry):
+    """What the saved details add up to. Readers recompute it from the details
+    and treat any disagreement as UNKNOWN."""
+    return dict(_counts(entry["affected"]),
+                inventory_complete=entry["inventory"]["complete"] is True,
+                check_complete=entry["check"]["complete"] is True)
 
 
 # ─────────────────────────────── state ───────────────────────────────
 def _clean_vuln(v):
     if not isinstance(v, dict) or not osv.SAFE_ID.match(str(v.get("id") or "")):
         return None
-    sev = v.get("severity") if v.get("severity") in osv.SEVERITIES else None
+    if v.get("severity") is not None and v.get("severity") not in SEVERITY_WORDS:
+        return None
+    sev = v.get("severity")
     fixed = v.get("fixed") if isinstance(v.get("fixed"), str) and osv.SAFE_VERSION.match(
         v["fixed"]) else None
     ids = [i for i in v.get("ids") or [] if isinstance(i, str) and osv.SAFE_ID.match(i)][:12]
-    return {"id": v["id"], "ids": ids, "severity": sev, "fixed": fixed,
-            "todo": f"upgrade to {fixed}" if fixed else "no fixed version is known yet; "
-                    "check whether you use the affected feature"}
+    if sev == "MALICIOUS":
+        todo = MAL_TODO
+    elif fixed:
+        todo = f"upgrade to {fixed}"
+    else:
+        todo = "no fixed version is known yet; check whether you use the affected feature"
+    return {"id": v["id"], "ids": ids, "severity": sev, "fixed": fixed, "todo": todo}
 
 
 def _clean_affected(a):
@@ -315,92 +375,167 @@ def _clean_affected(a):
     name, version = str(a.get("name") or ""), str(a.get("version") or "")
     if not osv.SAFE_NAME.match(name) or not osv.SAFE_VERSION.match(version):
         return None
-    vulns = [c for c in (_clean_vuln(v) for v in a.get("vulns") or []) if c]
-    if not vulns:
+    raw = a.get("vulns") if isinstance(a.get("vulns"), list) else []
+    vulns = [c for c in (_clean_vuln(v) for v in raw) if c]
+    if not vulns or len(vulns) != len(raw):
         return None
     where = [w for w in a.get("where") or [] if isinstance(w, str) and _SAFE_PLACE.match(w)][:6]
     return {"eco": a["eco"], "name": name, "version": version, "where": where, "vulns": vulns}
+
+
+def _clean_part(p):
+    if not isinstance(p, dict) or not isinstance(p.get("part"), str) \
+            or not _SAFE_PLACE.match(p["part"]) or p.get("kind") not in PART_KINDS:
+        return None
+    nums = [p.get("resolved"), p.get("unresolved")]
+    if any(isinstance(n, bool) or not isinstance(n, int) or n < 0 for n in nums):
+        return None
+    why = p.get("why")
+    if why is not None and not (isinstance(why, str) and _SAFE_WHY.match(why)):
+        return None
+    return {"part": p["part"], "kind": p["kind"], "resolved": nums[0], "unresolved": nums[1],
+            "why": why}
 
 
 def _num(value):
     return float(value) if isinstance(value, (int, float)) and not isinstance(value, bool) else None
 
 
-def evaluate(doc, now=None, malformed=False):
-    """The saved state → what every surface shows. One rule (mirrored in
-    statusline.py, which must stay stdlib-only)."""
-    now = time.time() if now is None else now
-    out = {"schema": SCHEMA, "generated_at": now, "state": "UNKNOWN", "reasons": [],
-           "root": None, "refreshed_at": None, "feed_updated_at": None, "feed_age_hours": None,
-           "newest_modified": None,
-           "counts": {"affected_packages": 0, "critical": 0, "worst": None, "resolved": 0,
-                      "unresolved": 0, "not_checked": 0},
-           "inventory": [], "affected": [], "failures": []}
-    if malformed:
-        out["reasons"].append("The saved CVE state could not be read. Run: stillrunning cve --refresh")
+def _blank(now):
+    return {"schema": SCHEMA, "generated_at": now, "state": "UNKNOWN", "reasons": [],
+            "root": None, "refreshed_at": None, "feed_updated_at": None, "feed_age_hours": None,
+            "newest_modified": None,
+            "counts": {"affected_packages": 0, "critical": 0, "malicious": 0, "worst": None,
+                       "resolved": 0, "unresolved": 0, "not_checked": 0},
+            "inventory": [], "affected": [], "failures": []}
+
+
+def evaluate_for(entry, now, root):
+    """One folder's saved entry → what every surface shows. The state comes
+    from the details, never from the saved summary (mirrored in
+    statusline.py, which must stay stdlib-only; a test keeps them in step)."""
+    out = _blank(now)
+    reasons = out["reasons"]
+    root = os.path.realpath(root)
+    if not isinstance(entry, dict):
+        reasons.append("This folder has not been checked yet. Run: stillrunning cve --refresh")
         return out
-    if doc is None:
-        out["reasons"].append("Never refreshed. Run: stillrunning cve --refresh")
+    saved_root = entry.get("root")
+    if saved_root != root or not _SAFE_ROOT.match(root):
+        reasons.append("The saved CVE state was checked for another folder. "
+                       "Run: stillrunning cve --refresh")
         return out
+    out["root"] = root
     try:
-        summary = doc["summary"]
-        inv, chk = doc["inventory"], doc["check"]
-        if not (isinstance(summary, dict) and isinstance(inv, dict) and isinstance(chk, dict)
-                and doc.get("schema") == SCHEMA):
+        inv, chk, summary = entry["inventory"], entry["check"], entry["summary"]
+        if not (isinstance(inv, dict) and isinstance(chk, dict) and isinstance(summary, dict)
+                and entry.get("schema") == FILE_SCHEMA):
             raise TypeError
-        affected = [c for c in (_clean_affected(a) for a in doc.get("affected") or []) if c]
-        feed = _num(doc.get("feed_updated_at"))
-        root = doc.get("root") if isinstance(doc.get("root"), str) else None
-        parts = []
-        for p in inv.get("parts") or []:
-            if isinstance(p, dict) and isinstance(p.get("part"), str) and _SAFE_PLACE.match(p["part"]):
-                parts.append({"part": p["part"], "kind": str(p.get("kind"))[:20],
-                              "resolved": int(p.get("resolved") or 0),
-                              "unresolved": int(p.get("unresolved") or 0),
-                              "why": p["why"] if isinstance(p.get("why"), str)
-                              and _SAFE_WHY.match(p["why"]) else
-                              (None if not p.get("why") else "not resolved")})
-        failures = [f for f in chk.get("failures") or [] if f in osv.WHY.values()]
-        inv_complete = summary.get("inventory_complete") is True
-        chk_complete = summary.get("check_complete") is True
+        raw_affected = entry.get("affected")
+        raw_parts = inv.get("parts")
+        failures = chk.get("failures")
+        if not (isinstance(raw_affected, list) and isinstance(raw_parts, list)
+                and isinstance(failures, list)):
+            raise TypeError
+        affected = [c for c in (_clean_affected(a) for a in raw_affected) if c]
+        parts = [c for c in (_clean_part(p) for p in raw_parts) if c]
+        clean_failures = [f for f in failures if f in osv.WHY.values()]
+        resolved, not_checked = inv.get("resolved"), chk.get("not_checked")
+        for n in (resolved, not_checked):
+            if isinstance(n, bool) or not isinstance(n, int) or n < 0:
+                raise TypeError
+        feed, refreshed = entry.get("feed_updated_at"), entry.get("refreshed_at")
+        if (feed is not None and _num(feed) is None) or _num(refreshed) is None:
+            raise TypeError
     except (KeyError, TypeError, ValueError, AttributeError):
-        return evaluate(None, now, malformed=True)
-    out.update(root=root, refreshed_at=_num(doc.get("refreshed_at")), feed_updated_at=feed,
-               newest_modified=doc.get("newest_modified") if isinstance(doc.get(
-                   "newest_modified"), str) and osv.SAFE_TIME.match(doc["newest_modified"]) else None,
-               inventory=parts, affected=affected, failures=failures)
-    crit = sum(1 for a in affected if any(v["severity"] == "CRITICAL" for v in a["vulns"]))
-    out["counts"] = {"affected_packages": len(affected), "critical": crit,
-                     "worst": osv.worst([v for a in affected for v in a["vulns"]]),
-                     "resolved": int(_num(inv.get("resolved")) or 0),
-                     "unresolved": sum(p["unresolved"] for p in parts),
-                     "not_checked": int(_num(chk.get("not_checked")) or 0)}
+        reasons.append("The saved CVE state could not be read. Run: stillrunning cve --refresh")
+        out["root"] = None
+        return out
+    feed, refreshed = _num(feed), _num(refreshed)
+    counts = _counts(affected)
+    unresolved = sum(p["unresolved"] for p in parts)
+    inv_body = bool(parts) and unresolved == 0
+    chk_body = not_checked == 0 and not failures
+    consistent = (len(affected) == len(raw_affected) and len(parts) == len(raw_parts)
+                  and len(clean_failures) == len(failures)
+                  and (inv.get("complete") is True) == inv_body
+                  and (chk.get("complete") is True) == chk_body
+                  and all(summary.get(k) == counts[k] for k in counts)
+                  and summary.get("inventory_complete") is inv_body
+                  and summary.get("check_complete") is chk_body)
+    modified = entry.get("newest_modified")
+    out.update(refreshed_at=refreshed, feed_updated_at=feed,
+               newest_modified=modified if isinstance(modified, str)
+               and osv.SAFE_TIME.match(modified) else None,
+               inventory=parts, affected=affected, failures=clean_failures)
+    out["counts"] = dict(counts, resolved=resolved, unresolved=unresolved, not_checked=not_checked)
+    blocking = []
+    if not consistent:
+        blocking.append("The saved CVE state is inconsistent (its summary and details "
+                        "disagree). Run: stillrunning cve --refresh")
+    if any(t is not None and t > now + FUTURE_SLACK_S for t in (feed, refreshed)):
+        blocking.append("The saved time is in the future, so its age cannot be trusted.")
     age = None if feed is None else max(0.0, now - feed)
     out["feed_age_hours"] = None if age is None else round(age / 3600, 1)
-    reasons = out["reasons"]
     if feed is None:
         reasons.append("The feed could not be reached at the last refresh.")
     elif age > FRESH_S:
         reasons.append(f"The feed is {int(age // 3600)}h old (older than 24h).")
-    if not inv_complete:
-        reasons.append(f"{out['counts']['unresolved']} package(s) could not be resolved to one "
+    if not inv_body:
+        reasons.append(f"{unresolved} package(s) or place(s) could not be resolved to one "
                        "exact version, so they were not checked.")
-    if not chk_complete:
-        n = out["counts"]["not_checked"]
-        reasons.append("The check did not finish" + (f": {n} package(s) not checked." if n else "."))
-    if affected:
+    if not chk_body:
+        reasons.append("The check did not finish" +
+                       (f": {not_checked} package(s) not checked." if not_checked else "."))
+    for p in parts:
+        if p["kind"] == "search" and p["why"]:
+            reasons.append(f"The project search was cut short: {p['why']}.")
+    if resolved == 0:
+        reasons.append("Nothing to check was found in this folder or this Python environment.")
+    reasons[:0] = blocking
+    if blocking:
+        out["state"] = "UNKNOWN"
+    elif affected:
         out["state"] = "AFFECTED"
     elif not reasons:
         out["state"] = "CLEAR"
     return out
 
 
-def load(now=None):
+def evaluate(entry, now=None, malformed=False, root=None):
+    """Kept for callers that hold an entry: the folder is the entry's own."""
+    now = time.time() if now is None else now
+    if malformed:
+        out = _blank(now)
+        out["reasons"].append("The saved CVE state could not be read. Run: stillrunning cve --refresh")
+        return out
+    if entry is None:
+        out = _blank(now)
+        out["reasons"].append("Never refreshed. Run: stillrunning cve --refresh")
+        return out
+    return evaluate_for(entry, now, root or str((entry or {}).get("root") or "/"))
+
+
+def load(now=None, root=None):
+    """What to show for one folder (default: the current one). Local only."""
+    now = time.time() if now is None else now
+    root = os.path.realpath(root or os.getcwd())
     path = state_path()
     if not os.path.exists(path):
         return evaluate(None, now)
     doc = _load_json(path)
-    return evaluate(doc, now, malformed=doc is None)
+    if not (isinstance(doc, dict) and doc.get("schema") == FILE_SCHEMA
+            and isinstance(doc.get("projects"), dict)):
+        return evaluate(None, now, malformed=True)
+    entry = doc["projects"].get(root)
+    if entry is None and doc["projects"]:
+        out = _blank(now)
+        out["reasons"].append("The saved CVE state was checked for another folder. "
+                              "Run: stillrunning cve --refresh")
+        return out
+    if entry is None:
+        return evaluate(None, now)
+    return evaluate_for(entry, now, root)
 
 
 def relative(seconds):
@@ -417,14 +552,19 @@ def relative(seconds):
 def headline(data):
     """One line, e.g. "CVEs · 2 affected deps (1 critical) · feed updated 3h ago"."""
     c, feed = data["counts"], data["feed_updated_at"]
-    fresh = ("feed updated " + relative(max(0.0, data["generated_at"] - feed))
-             if feed is not None else
-             "feed never refreshed" if data["refreshed_at"] is None else "feed unreachable")
+    if any("another folder" in r for r in data["reasons"]):
+        fresh = "checked for another folder"
+    elif any("in the future" in r for r in data["reasons"]):
+        fresh = "feed time in the future"
+    elif feed is not None:
+        fresh = "feed updated " + relative(max(0.0, data["generated_at"] - feed))
+    else:
+        fresh = "feed never refreshed" if data["refreshed_at"] is None else "feed unreachable"
     if data["state"] == "AFFECTED":
         n = c["affected_packages"]
-        detail = (f"{n} affected dep{'s' if n != 1 else ''} "
-                  + (f"({c['critical']} critical)" if c["critical"]
-                     else f"(worst {(c['worst'] or 'unknown').lower()})"))
+        bits = [f"{c[k]} {k}" for k in ("critical", "malicious") if c.get(k)]
+        detail = (f"{n} affected dep{'s' if n != 1 else ''} ("
+                  + (", ".join(bits) or f"worst {(c['worst'] or 'unknown').lower()}") + ")")
     elif data["state"] == "CLEAR":
         detail = "clear"
     else:
@@ -435,13 +575,15 @@ def headline(data):
 def render(data):
     out = ["Known vulnerabilities (CVE monitoring, OSV.dev)", "", headline(data)]
     out += [f"  ! {r}" for r in data["reasons"]]
-    if data["root"]:
+    if data["root"] and _SAFE_ROOT.match(data["root"]):
         out.append(f"Project: {data['root']}")
     if data["newest_modified"]:
         out.append(f"Newest advisory change seen: {data['newest_modified']}")
     if data["inventory"]:
         out += ["", "Inventory (exact versions):"]
         for p in data["inventory"]:
+            if p["kind"] not in PART_KINDS or not _SAFE_PLACE.match(p["part"]):
+                continue
             extra = f", {p['unresolved']} not resolved ({p['why']})" if p["unresolved"] else ""
             out.append(f"  {p['part']} [{p['kind']}]: {p['resolved']} resolved{extra}")
     if data["affected"]:
@@ -527,7 +669,7 @@ def main(argv=None):
         return schedule(args.cwd or os.getcwd(), remove=args.unschedule)
     if args.refresh:
         refresh(args.cwd or os.getcwd())
-    data = load()
+    data = load(root=args.cwd or os.getcwd())
     if args.json:
         print(json.dumps(data))
     else:

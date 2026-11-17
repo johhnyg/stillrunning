@@ -16,7 +16,14 @@ check, not attack prevention.
 - Status line: one CVE segment (after the first refresh); counts drop before
   either freshness. `stillrunning shield`: one CVE line.
 - `panel.installed_packages` reports places it could not list; manifest rows
-  count local / URL / git entries.
+  count local / URL / git entries; `find_manifests(root, report)` says when its
+  limits left a dependency file unread.
+- Review round 1 (no false green): the state is kept per project folder and
+  every reader answers for its own folder; future-dated feed times, an empty
+  inventory, a cut-short search, packages OSV cannot be asked about and a
+  summary that disagrees with the details all read UNKNOWN; OSV `MAL-` records
+  show as AFFECTED ("malicious"); unknown-severity vulnerabilities and
+  critical-in-range installs hold and cannot be waved through.
 
 ## Security audit release — committed 2026-11-17 (`7fd5832`), not yet published to PyPI
 

@@ -83,25 +83,55 @@ def protection():
 
 # ------------------------------------------------------------ what to check
 
-def find_manifests(root):
-    """Dependency files in the project, at most two folders deep."""
+MAX_SEARCH_DIRS = 5000
+
+
+def _is_manifest(path):
     from .manifest import manifest_kind
+    kind = manifest_kind(path)
+    # `pip -r` reads any .txt, but a project scan only trusts the usual names
+    return kind is not None and not (kind == "requirements" and "requirement" not in
+                                     path.name.lower() and "constraint" not in path.name.lower())
+
+
+def find_manifests(root, report=None):
+    """Dependency files in the project, at most two folders deep and at most
+    MAX_MANIFESTS of them. With `report` (a list), the search goes on past
+    those limits only to find out whether anything was left out, and appends
+    one plain sentence per limit that left a dependency file unread."""
     root = Path(root)
-    found = []
+    found, seen_dirs = [], 0
+    deeper = more = False
     for folder, dirs, files in os.walk(root):
         depth = len(Path(folder).relative_to(root).parts)
-        dirs[:] = [] if depth >= 2 else sorted(d for d in dirs if d not in _SKIP_DIRS
-                                               and not d.startswith("."))
+        seen_dirs += 1
+        keep = sorted(d for d in dirs if d not in _SKIP_DIRS and not d.startswith("."))
+        if report is None:
+            dirs[:] = [] if depth >= 2 else keep
+        else:
+            dirs[:] = keep
+            if seen_dirs > MAX_SEARCH_DIRS:
+                report.append(f"the folder tree is larger than {MAX_SEARCH_DIRS} folders; "
+                              "the rest was not searched for dependency files")
+                break
         for name in sorted(files):
             path = Path(folder) / name
-            kind = manifest_kind(path)
-            # `pip -r` reads any .txt, but a project scan only trusts the usual names
-            if kind is None or (kind == "requirements" and "requirement" not in name.lower()
-                                and "constraint" not in name.lower()):
+            if not _is_manifest(path):
                 continue
-            found.append(path)
-            if len(found) >= MAX_MANIFESTS:
-                return found
+            if depth > 2:
+                deeper = True
+            elif len(found) >= MAX_MANIFESTS:
+                more = True
+            else:
+                found.append(path)
+                if len(found) >= MAX_MANIFESTS and report is None:
+                    return found
+    if report is not None:
+        if more:
+            report.append(f"more than {MAX_MANIFESTS} dependency files; the rest were "
+                          "not searched")
+        if deeper:
+            report.append("dependency files more than two folders deep were not searched")
     return found
 
 
@@ -118,12 +148,13 @@ def _exact(version):
     return text
 
 
-def project_packages(root):
+def project_packages(root, search_report=None):
     """→ (manifest rows, packages). A file that cannot be parsed is reported,
-    not skipped silently."""
+    not skipped silently. `search_report` (a list) receives what the search
+    left out (see find_manifests)."""
     from .manifest import parse_manifest_strict
     rows, packages = [], []
-    for path in find_manifests(root):
+    for path in find_manifests(root, search_report):
         rel = str(path.relative_to(root))
         try:
             specs = parse_manifest_strict(path)

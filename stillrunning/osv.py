@@ -25,7 +25,7 @@ USER_AGENT = "stillrunning-cve/1"
 ECOSYSTEM = {"pip": "PyPI", "npm": "npm"}
 BATCH_MAX = 1000
 SEVERITIES = ("LOW", "MODERATE", "HIGH", "CRITICAL")
-RANK = {None: 0, "LOW": 1, "MODERATE": 2, "HIGH": 3, "CRITICAL": 4}
+RANK = {None: 0, "LOW": 1, "MODERATE": 2, "HIGH": 3, "CRITICAL": 4, "MALICIOUS": 5}
 
 SAFE_ID = re.compile(r"^[A-Z][A-Z0-9]{1,15}-[A-Za-z0-9][A-Za-z0-9._:-]{1,60}$")
 SAFE_VERSION = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._+!-]{0,63}$")
