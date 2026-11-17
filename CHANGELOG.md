@@ -1,6 +1,18 @@
 # Changelog
 
-## Unreleased — local verdict cache (Claude Code hook)
+## 2.14.0 — built 2026-11-17, not yet published to PyPI (PyPI: 2.13.7)
+
+Contains everything below down to and including "security audit release":
+the local verdict cache, CVE monitoring, and the Claude Code hook.
+
+### Docs (2026-11-17)
+- README reorganised for a first-time user: what it does, a 2-minute start
+  with example output, what you'll see, when it asks you, CVEs, turning
+  things off, privacy, troubleshooting; reference material below. Privacy now
+  also lists the setup wizard's step pings (`STILLRUNNING_NO_FUNNEL=1`); the
+  `--no-telemetry` flag it used to mention does not exist.
+
+### Local verdict cache (Claude Code hook)
 
 - New `stillrunning/verdict_cache.py`: `~/.stillrunning/verdicts.db` (SQLite,
   0600 in a 0700 folder). An exact release that passed both checks (blocklist
@@ -12,8 +24,9 @@
   instead of asking. Counted as no known threat; the evidence says it came from
   the cache.
 - The hash comes only from `--hash=` pins on exact requirements-file lines, and
-  only for `pip install` and `uv pip install` / `uv pip sync` with hash checking
-  on (not `--no-verify-hashes`, `--no-require-hashes`, `UV_NO_VERIFY_HASHES`).
+  only for `pip install` (`python -m pip install`). uv installs never carry a
+  cache hash: uv can switch hash checking off from a config file the hook does
+  not read (an earlier draft allowed `uv pip install` / `uv pip sync`).
   No hash → the cache does not apply. Comments are cut at `#` after any
   whitespace, like pip.
 - A `verdicts.db` or folder another account could write, or an unreadable
@@ -31,7 +44,7 @@
   No network calls. `stillrunning shield` shows the number of unexpired verdicts
   (text only; the `--json` keys are unchanged).
 
-## Unreleased — known vulnerabilities (CVE monitoring)
+### Known vulnerabilities (CVE monitoring)
 
 Shortens the time to patch known bugs in packages already in use. Not a malware
 check, not attack prevention.
@@ -56,9 +69,9 @@ check, not attack prevention.
   show as AFFECTED ("malicious"); unknown-severity vulnerabilities and
   critical-in-range installs hold and cannot be waved through.
 
-## 2.14.0 — security audit release (built 2026-11-17, not yet published to PyPI)
+### Security audit release
 
-Everything below under "unreleased" ships together. Six rounds of independent
+Everything below under "unreleased" ships together in 2.14.0. Six rounds of independent
 adversarial review; the sixth approved with conditions, recorded under
 "Known limitations" in README.md.
 
@@ -91,7 +104,7 @@ adversarial review; the sixth approved with conditions, recorded under
 - Stored command text: credentials in `-u`, headers, quoted values and known token shapes
   are masked; the state folder is owner-only.
 
-## Unreleased (Session 135 — security audit, not yet published)
+### Session 135 security audit fixes (in 2.14.0)
 
 ### Fixed
 - **Claude Code hook never ran, and would not have blocked if it had.** It was

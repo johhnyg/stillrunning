@@ -1,25 +1,191 @@
 # stillrunning
 
-> Checks the packages you and your AI coding agent install against a list of
-> about 236,000 packages publicly reported as malicious (OSV and other public
-> advisories), before they install. It blocks what is on the list and asks you
-> about what it cannot check. It does not catch a malicious package nobody has
-> reported yet.
+**What it does.** Before you or your AI coding agent install a Python or
+JavaScript package, stillrunning looks its name up in a list of about 236,000
+packages that have been publicly reported as malicious. A listed package is
+refused; anything it could not check is put to you. It does not catch a
+malicious package nobody has reported yet.
 
 [![PyPI version](https://img.shields.io/pypi/v/stillrunning)](https://pypi.org/project/stillrunning/)
 ![Protected by stillrunning](https://stillrunning.io/badge/protected)
 ![Python](https://img.shields.io/badge/python-3.8+-green)
 ![License](https://img.shields.io/badge/license-MIT-blue)
 
-## What's new (security audit release, November 2026)
+> This README describes version 2.14.0, which is not on PyPI yet (PyPI has
+> 2.13.7). Tested on Linux.
 
-- **Claude Code hook** that looks up every package a command would install,
-  with a one-line answer and a plain-English reason for each
-- **Fail-closed by design** (below): what cannot be checked is put to you
-- **Report card** (`stillrunning shield`), **status line**, and side-panel data
-  (`stillrunning panel`)
-- Six rounds of independent adversarial review before release; what they
-  found is listed under "What it catches" and "Known limitations"
+Words used below:
+- **blocklist** — the list of packages security researchers have reported as
+  malicious.
+- **typosquat** (look-alike) — a package named one letter off a popular one
+  (`reqeusts`), published hoping someone mistypes.
+- **CVE** — a public record of a known bug (vulnerability) in an honest
+  package, usually fixed in a later version.
+- **hash-pinned** — a requirements line that also gives the file's checksum
+  (`--hash=sha256:…`), so the installer refuses any other file.
+
+## Get started in 2 minutes
+
+```bash
+pip install stillrunning
+stillrunning --hook-claude-code   # check every install Claude Code runs (no account needed)
+stillrunning status               # each protection layer: ON / OFF / NOT VERIFIED, and why
+```
+
+`stillrunning status` should now show `[ON] Claude Code hook`. Start a new
+Claude Code session. From then on, every install it runs gets one line per
+package, for example:
+
+```
+🛡 stillrunning ✓ requests (pip) — no known threat · 180 ms
+🛡 stillrunning ✗ BLOCKED reqeusts (pip) — known malicious package · MAL-2024-1234
+🛡 stillrunning ⚠ some-new-name (pip) — unverified: not on PyPI — approval needed
+```
+
+✓ goes ahead. ✗ is refused. ⚠ means it could not be checked, so Claude Code
+asks you before running the command. (The advisory id above is an example.)
+
+**Undo it:** `stillrunning --uninstall-hook-claude-code` puts your Claude Code
+settings file back exactly as it was. Then `pip uninstall stillrunning` if you
+want it gone completely (see "Troubleshooting" for a clean removal).
+
+Without an account you are on the free tier: a limited number of lookups per
+day. After that a listed package is still refused, and every other install
+is asked about instead of passed.
+
+## What you'll see while you work
+
+- **One line per package** on every install Claude Code runs (above), with a
+  short plain-English reason underneath when something was refused or asked.
+- **A status line** in Claude Code, if you turn it on:
+  `stillrunning --hook-claude-code --statusline`. It never replaces a status
+  line you already have. Once CVE checks have run it adds a segment such as
+  `CVEs: 2 affected (1 critical) · feed 3h ago`.
+- **A report card:** `stillrunning shield` shows what the hook checked,
+  blocked and why, with recent decisions (`-n 20` for more, `--json` for
+  tools).
+- **Side panel data:** `stillrunning panel` prints what a Claude Code side
+  panel shows (protection state, project packages). You do not need it to be
+  protected.
+
+## When it asks you
+
+Asking means "I could not be sure, you decide". Claude Code shows its usual
+approval prompt. What each kind of ask means:
+
+| You see | What it means | What to do |
+|---|---|---|
+| `unverified: not on PyPI` / `not on npm` | No package by that name exists on the public registry. Often a typo or a name an AI made up. | Check the spelling. Do not approve a name you did not expect. |
+| `unverified: could not be looked up` | The lookup did not finish: offline, stillrunning.io unreachable, or today's free allowance used up. | Approve only if you know the package. Retry later, or get a token. |
+| A range or tag (`pkg>=1.0`, `pkg@latest`) for a package with some listed versions | Some versions are reported malicious; the hook does not work out which version the installer would pick. | Pin an exact version that is not listed. |
+| A critical or unknown-severity vulnerability | That version has a known critical bug (CVE), or one whose severity is unknown. The line names the id and the first fixed version. | Install the fixed version instead. |
+| `vulnerability check could not run` | OSV.dev could not be reached in time. | Approve only if you know the version is fine, or retry. |
+| A custom index, a web address, a git URL or a local file | The source is not the public registry, so the list does not apply. | Approve only sources you trust. |
+| A change to stillrunning's own files or settings, or to where packages download from | Protects the protection: writes to `~/.stillrunning`, Claude Code `settings.json`, stillrunning's code, `STILLRUNNING_*` variables, `pip config`, `.npmrc` and similar. | Approve if you meant to do it. |
+| conda, mamba, pixi, cargo, gem, go, `curl … \| sh` | There is no threat list for these here; nothing was checked. | Your call. |
+
+Lockfile installs (`npm ci`, `uv sync`, `poetry install`) are not asked about;
+the hook adds a note that the lockfile's packages were not looked up.
+`STILLRUNNING_HOOK_STRICT=1` refuses instead of asking.
+
+## Known vulnerabilities (CVEs)
+
+Separate from the blocklist: this checks the packages you already use against
+known bugs (CVE / GHSA records from [OSV.dev](https://osv.dev)), so you hear
+about a fix sooner. It does not detect malware.
+
+```bash
+stillrunning cve --refresh          # check this project and this Python now
+stillrunning cve --schedule         # also refresh every 6 hours (adds one crontab line)
+stillrunning cve                    # show the last result (no network)
+```
+
+Run them in the project folder (or add `--cwd DIR`). `stillrunning cve
+--unschedule` removes the crontab line and nothing else.
+
+What the answer means:
+- **CLEAR** (green) — everything found in this folder was checked in the last
+  24 hours and none of those versions has a known vulnerability.
+- **AFFECTED** (red for critical or malicious, amber otherwise) — at least one
+  package has a known vulnerability. The report lists package, version, id,
+  severity and the first fixed version.
+- **UNKNOWN** (amber, the default) — it cannot say: never refreshed for this
+  folder, the feed is older than 24 hours or unreachable, or part of the
+  project could not be resolved to exact versions. It says which.
+
+When AFFECTED: upgrade each listed package to at least its first fixed
+version (or remove it if marked "malicious"), then `stillrunning cve
+--refresh`. If you cannot upgrade yet, note why; it will stay AFFECTED.
+
+Separately, during installs the Claude Code hook holds a version with a
+**critical** or unknown-severity vulnerability for your approval. High,
+moderate and low ones are shown but not held. Details: "CVE monitoring — in
+detail" below.
+
+## Turning things off
+
+| To turn off | Do this |
+|---|---|
+| The Claude Code hook | `stillrunning --uninstall-hook-claude-code` |
+| The terminal wrappers | `stillrunning shell-uninstall` (then open a new shell) |
+| Import-time checks | `stillrunning --uninstall-hook` |
+| Venv persistence | `stillrunning venv-uninstall` |
+| The 6-hourly CVE refresh | `stillrunning cve --unschedule` |
+| The install-time CVE hold | `STILLRUNNING_CVE_CHECK=0` in the environment Claude Code runs in |
+| The local verdict cache | `STILLRUNNING_CACHE=0` |
+| Heartbeats (usage pings) | `STILLRUNNING_NO_TELEMETRY=1` |
+| Setup-wizard step pings | `STILLRUNNING_NO_FUNNEL=1` |
+
+## Privacy: what leaves your machine
+
+- **Lookups** send the package name, ecosystem and (when given) version to
+  stillrunning.io — never file contents. Without an account no token is sent.
+  Other words in an install command that could be package names (an option's
+  value, such as a folder name) are sent the same way.
+- **CVE checks** send package names, ecosystems (PyPI / npm) and versions to
+  api.osv.dev, with the User-Agent `stillrunning-cve/1`. Never file contents,
+  paths or your token.
+- **Heartbeats** contain: command name, version, OS, an anonymous id,
+  timestamp. No code or file paths. Turn off with `STILLRUNNING_NO_TELEMETRY=1`.
+- **Setup-wizard steps** (`stillrunning --setup`): which step was reached, a
+  hashed machine id, the version and time. Turn off with
+  `STILLRUNNING_NO_FUNNEL=1`.
+- **Stays on your machine:** the hook's decision log
+  (`~/.stillrunning/hook_decisions.jsonl`), the CVE state
+  (`~/.stillrunning/cve_state.json`) and the local verdict cache
+  (`~/.stillrunning/verdicts.db`), all readable only by you.
+
+## Troubleshooting
+
+- **`stillrunning status` says OFF for the Claude Code hook.** Run
+  `stillrunning --hook-claude-code` again (also after every upgrade), then
+  start a new Claude Code session. `stillrunning --doctor` gives more detail.
+- **Everything says "could not be looked up".** You are offline, stillrunning.io
+  is unreachable, or today's free allowance is used up (the reason line says
+  which). After the free allowance, listed packages are still refused; the
+  rest are asked about, not passed, until lookups work again (tomorrow, or with
+  a token: https://stillrunning.io/pricing).
+- **CVE says UNKNOWN.** Usually it was never refreshed for this folder
+  ("checked for another folder"), or the last refresh is over 24 hours old.
+  Run `stillrunning cve --refresh` in the project folder, and
+  `stillrunning cve --schedule` to keep it fresh.
+- **The hook asks before a command that touches its own files.** That is on
+  purpose: anything that edits `~/.stillrunning`, Claude Code settings or
+  stillrunning itself could switch the protection off. Approve it if you meant it.
+- **Remove it cleanly:**
+  ```bash
+  stillrunning --uninstall-hook-claude-code   # restores settings.json byte for byte
+  stillrunning shell-uninstall                # if you installed the wrappers
+  stillrunning --uninstall-hook               # if you turned on import-time checks
+  stillrunning cve --unschedule               # if you scheduled CVE refreshes
+  pip uninstall stillrunning
+  ```
+  Your local data is in `~/.stillrunning`; delete that folder too if you want
+  nothing left.
+
+---
+
+# Reference
 
 ## The principle: fail closed
 
@@ -36,9 +202,8 @@
 
 ## What it catches
 
-What the hook recognises as an install and looks up, including the
-spellings that independent reviewers used to try to get a blocked package
-past it (each one is now a test):
+What the hook recognises as an install and looks up, including unusual
+spellings (each one is a test):
 
 | You or your agent types | What happens |
 |---|---|
@@ -73,53 +238,17 @@ past it (each one is now a test):
 | bun | Intercepted |
 | pnpm | Intercepted |
 | requirements.txt | Scanned |
-| import statement | Blocked (via hook) |
+| import statement | Blocked by the import hook (`stillrunning --install-hook`, needs a token) |
 
-## Quick start
+## Other ways to use it
 
-```bash
-pip install stillrunning
-stillrunning --setup              # setup wizard; ends by listing what is and is not protected
-stillrunning --hook-claude-code   # look up every install Claude Code runs (works without an account)
-stillrunning status               # each protection layer: ON / OFF / NOT VERIFIED, and why
-stillrunning scan <package>       # One-shot scan
-```
-
-Nothing is checked until a layer in `stillrunning status` says ON. Without an
-account you are on the anonymous free tier: a limited number of lookups per
-day, after which each install asks you first instead of being looked up.
-
-### Run, restart, remove
-
-- **Turn on / update the Claude Code hook:** `stillrunning --hook-claude-code`
-  (add `--statusline` for the status line). Run it again after upgrading
-  stillrunning; it replaces its own entry and leaves your other settings alone.
-  New Claude Code sessions pick it up; restart a running one to be sure.
-- **Check it is working:** `stillrunning status` (each layer ON / OFF / NOT
-  VERIFIED, and why) and `stillrunning --doctor`.
-- **See what it did:** `stillrunning shield`.
-- **Terminal wrappers** (outside Claude Code): `stillrunning shell-install`,
-  then open a new shell.
-- **Remove:** `stillrunning --uninstall-hook-claude-code` restores your
-  settings file byte for byte; `stillrunning shell-uninstall` removes the
-  wrappers; then `pip uninstall stillrunning`.
-
-## Import protection
-
-```python
-import stillrunning.hook  # Blocks malicious imports at runtime
-```
-
-## AI agent integrations
-
-- **Claude Code:** the hook below — every install is looked up before it runs.
+- **Claude Code:** the hook (above, and in detail below).
 - **Other agents and plain terminals** (Cursor, Aider, a CI job): the terminal
-  wrappers (`stillrunning shell-install`) and the MCP tool. Weaker: see
-  "Known limitations".
+  wrappers (`stillrunning shell-install`, bash and zsh) and the MCP tool. These
+  are weaker: see "Known limitations".
+- Setup notes: [stillrunning.io/agent-setup](https://stillrunning.io/agent-setup)
 
-Setup: [stillrunning.io/agent-setup](https://stillrunning.io/agent-setup)
-
-### Claude Code hook
+### The Claude Code hook in detail
 
 ```bash
 stillrunning --hook-claude-code                # registers a PreToolUse hook in ~/.claude/settings.json
@@ -181,7 +310,69 @@ so this adds no questions. Two limits to that:
   there. Any other value (`-t vendor`, `-w web`) is asked about by name, which
   means that one word is sent to stillrunning.io like any package name.
 
-## Known vulnerabilities (CVE monitoring)
+### Import protection
+
+```python
+import stillrunning.hook  # checks imported packages against the blocklist at import time
+```
+
+`stillrunning --install-hook` turns this on for every Python start (needs a token).
+
+### Claude Code MCP server
+
+```bash
+claude mcp add --transport http stillrunning https://stillrunning.io/mcp
+```
+
+Or put this in a project's `.mcp.json`:
+
+```json
+{
+  "mcpServers": {
+    "stillrunning": {
+      "type": "http",
+      "url": "https://stillrunning.io/mcp"
+    }
+  }
+}
+```
+
+The server offers one tool, `check_package` (PyPI packages only). It answers
+BLOCKED, SUSPICIOUS or UNKNOWN; UNKNOWN means "not on the list", not "harmless".
+The MCP server only answers when the model asks it; the hook above is what
+stops an install.
+
+### GitHub Actions
+
+Add supply chain security to your CI/CD pipeline:
+
+```yaml
+# .github/workflows/security.yml
+name: Security Scan
+on: [push, pull_request]
+
+jobs:
+  stillrunning:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: johhnyg/stillrunning@v1
+        with:
+          requirements: requirements.txt
+          # Optional: fail on suspicious packages too
+          # fail-on-suspicious: true
+```
+
+For npm projects:
+
+```yaml
+      - uses: johhnyg/stillrunning@v1
+        with:
+          package-json: package.json
+          package-lock: package-lock.json
+```
+
+## CVE monitoring — in detail
 
 **What it is:** a check of the packages you already use against known
 vulnerabilities (bugs in honest packages, published as CVE / GHSA records), so
@@ -319,9 +510,7 @@ and set aside as `verdicts.db.corrupt` on the next write.
 
 ## Known limitations
 
-What it does not cover, stated plainly. These were either found by the
-independent reviews and accepted, or are outside what a command-reading hook
-can do.
+What it does not cover, stated plainly.
 
 - **The CVE state file is trusted as written.** Every reader checks that it is internally consistent (totals, completeness, folder, times), but someone who can already write to `~/.stillrunning` can write a consistent file that reads CLEAR. Only a signature would stop that.
 - **The local verdict cache can be one day behind the blocklist.** A package
@@ -414,85 +603,13 @@ can do.
 - **The GitHub Action** checks Python requirements; for npm it reports the
   scan as incomplete rather than checking scoped names.
 
-### Claude Code MCP server
-
-```bash
-claude mcp add --transport http stillrunning https://stillrunning.io/mcp
-```
-
-Or put this in a project's `.mcp.json`:
-
-```json
-{
-  "mcpServers": {
-    "stillrunning": {
-      "type": "http",
-      "url": "https://stillrunning.io/mcp"
-    }
-  }
-}
-```
-
-The server offers one tool, `check_package` (PyPI packages only). It answers
-BLOCKED, SUSPICIOUS or UNKNOWN; UNKNOWN means "not on the list", not "harmless".
-The MCP server only answers when the model asks it; the hook above is what
-stops an install.
-
-### GitHub Actions
-
-Add supply chain security to your CI/CD pipeline:
-
-```yaml
-# .github/workflows/security.yml
-name: Security Scan
-on: [push, pull_request]
-
-jobs:
-  stillrunning:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: johhnyg/stillrunning@v1
-        with:
-          requirements: requirements.txt
-          # Optional: fail on suspicious packages too
-          # fail-on-suspicious: true
-```
-
-For npm projects:
-
-```yaml
-      - uses: johhnyg/stillrunning@v1
-        with:
-          package-json: package.json
-          package-lock: package-lock.json
-```
-
-## Security Advisories
-
-Browse the full threat database: [stillrunning.io/security-advisories](https://stillrunning.io/security-advisories)
-
-RSS feed: [stillrunning.io/security-advisories/rss.xml](https://stillrunning.io/security-advisories/rss.xml)
-
-## Privacy
-
-- **Lookups** send the package name, ecosystem and (when given) version to
-  stillrunning.io — never file contents. Without an account no token is sent.
-  Words that could be package names in an install command are sent the same
-  way (see "Known limitations").
-- **Heartbeats** contain: command name, version, OS, anonymous UUID,
-  timestamp. No code or file paths. Disable: `STILLRUNNING_NO_TELEMETRY=1` or
-  `--no-telemetry`.
-- **The hook's decision log** (`~/.stillrunning/hook_decisions.jsonl`, owner-only)
-  stays on your machine.
-- **The local verdict cache** (`~/.stillrunning/verdicts.db`, owner-only) stays
-  on your machine; it is never sent or shared.
-
 ## Configuration
 
 | Variable | Purpose |
 |----------|---------|
 | `STILLRUNNING_NO_TELEMETRY=1` | Disable heartbeat |
+| `STILLRUNNING_NO_FUNNEL=1` | Disable the setup wizard's step pings |
+| `STILLRUNNING_CVE_CHECK=0` | Turn off the Claude Code hook's install-time CVE check |
 | `BLOCKLIST_MAX_AGE_DAYS=730` | Max age for blocklist entries (default 2 years) |
 | `STILLRUNNING_TOKEN` | API token (enables import-time checks) |
 | `STILLRUNNING_API_BASE=<url>` | Point the client at a test server **on this machine** (`localhost`, `127.0.0.1` or `::1`). Any other host is refused with a warning and `https://stillrunning.io` is used. The account token is never sent to a test server |
@@ -536,9 +653,18 @@ stillrunning scan-manifest <file>   # requirements*.txt, pyproject.toml, Pipfile
                                     # package.json, package-lock.json, pnpm-lock.yaml, environment.yml
 stillrunning shell-install    # pip / npm wrappers for bash and zsh (shell-uninstall removes them)
 stillrunning --hook-claude-code     # Claude Code hook (--uninstall-hook-claude-code removes it)
-stillrunning whitelist add <pkg>    # Add to whitelist
-stillrunning whitelist list         # Show whitelist
+stillrunning whitelist add <pkg>    # Add to whitelist (whitelist remove / list)
+stillrunning cve [--refresh] [--schedule] [--unschedule] [--json] [--cwd DIR]   # known vulnerabilities (OSV.dev)
+stillrunning panel [--scan] [--json]   # data for the Claude Code side panel
+stillrunning venv-install           # keep import checks in virtualenvs (venv-uninstall removes it)
+stillrunning remember / forget      # "don't ask again" — switched off in this version (refuses)
 ```
+
+## Security Advisories
+
+Browse the full threat database: [stillrunning.io/security-advisories](https://stillrunning.io/security-advisories)
+
+RSS feed: [stillrunning.io/security-advisories/rss.xml](https://stillrunning.io/security-advisories/rss.xml)
 
 ## Pricing
 
