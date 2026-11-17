@@ -138,8 +138,11 @@ def project_packages(root):
             except (OSError, ValueError):
                 rows.append({"file": rel, "packages": 0, "unreadable": True})
                 continue
-        specs = [s for s in specs or [] if not (s.is_local or s.is_url or s.is_git)]
-        rows.append({"file": rel, "packages": len(specs), "unreadable": False})
+        every = list(specs or [])
+        specs = [s for s in every if not (s.is_local or s.is_url or s.is_git)]
+        # local paths, web addresses and git sources have no registry version
+        rows.append({"file": rel, "packages": len(specs), "unreadable": False,
+                     "not_registry": len(every) - len(specs)})
         for spec in specs:
             eco = "npm" if spec.ecosystem == "npm" else "pip"
             packages.append({"where": "project", "file": rel, "eco": eco,
@@ -148,10 +151,12 @@ def project_packages(root):
     return rows, packages
 
 
-def installed_packages(root):
+def installed_packages(root, problems=None):
     """Python packages installed for this interpreter and in the project's
-    own virtual environment."""
+    own virtual environment. A place that could not be listed is reported
+    in `problems` (a list, when given) as {"place", "why"}."""
     seen, out = set(), []
+    problems = problems if problems is not None else []
 
     def add(name, version, place):
         name = claude_hook.normalize("pip", name)
@@ -168,13 +173,24 @@ def installed_packages(root):
                 add(name, dist.version, "this machine")
     except Exception as exc:
         claude_hook._warn(f"panel: could not list installed packages ({type(exc).__name__})")
+        problems.append({"place": "this machine", "why": "could not be listed"})
     for venv in _VENV_DIRS:
-        for site in Path(root, venv).glob("lib/python*/site-packages"):
+        sites = sorted(Path(root, venv).glob("lib/python*/site-packages"))
+        if not sites and Path(root, venv, "pyvenv.cfg").is_file():
+            claude_hook._warn(f"panel: {venv} looks like a virtual environment but has no "
+                              "site-packages folder to list")
+            problems.append({"place": venv, "why": "could not be listed"})
+        for site in sites:
             try:
                 entries = os.listdir(site)
             except OSError as exc:
                 claude_hook._warn(f"panel: could not read {site} ({type(exc).__name__})")
+                problems.append({"place": venv, "why": "could not be read"})
                 continue
+            legacy = sum(1 for entry in entries if entry.endswith(".egg-info"))
+            if legacy:
+                problems.append({"place": venv, "why": f"{legacy} old-style (.egg-info) "
+                                 "package(s) not listed"})
             for entry in entries:
                 match = _DIST_INFO.match(entry)
                 if match:

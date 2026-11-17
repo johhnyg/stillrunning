@@ -3539,7 +3539,8 @@ def main_cli() -> None:
     # Fire-and-forget CLI telemetry (non-blocking)
     # The Claude Code hook and status line run on every tool call / redraw:
     # they must stay fast and make no network call of their own.
-    if sys.argv[1:2] not in (["hook"], ["statusline"], ["shield"]):
+    # `cve` talks only to api.osv.dev (and only with --refresh).
+    if sys.argv[1:2] not in (["hook"], ["statusline"], ["shield"], ["cve"]):
         from .heartbeat import send_cli_ping
         send_cli_ping(VERSION, " ".join(sys.argv[1:3]))
 
@@ -3653,6 +3654,19 @@ def main_cli() -> None:
                               help="Check this project's and this machine's packages now (network)")
     panel_parser.add_argument("--cwd", default=None, help="Project folder (default: current)")
 
+    cve_parser = subparsers.add_parser(
+        "cve", help="Known vulnerabilities in packages you already use (OSV.dev); "
+                    "shortens the time to patch, does not detect malware")
+    cve_parser.add_argument("--json", action="store_true",
+                            help="Print the saved state as JSON (local only, no network)")
+    cve_parser.add_argument("--refresh", action="store_true",
+                            help="Inventory this project and machine and check OSV.dev now")
+    cve_parser.add_argument("--schedule", action="store_true",
+                            help="Add one crontab line that runs --refresh every 6 hours")
+    cve_parser.add_argument("--unschedule", action="store_true",
+                            help="Remove that crontab line")
+    cve_parser.add_argument("--cwd", default=None, help="Project folder (default: current)")
+
     # SESSION 98: Allow subcommand with --once support
     allow_parser = subparsers.add_parser("allow", help="Allow a blocked package")
     allow_parser.add_argument("package", help="Package name to allow")
@@ -3717,6 +3731,13 @@ def main_cli() -> None:
         from . import panel
         sys.exit(panel.main((["--json"] if args.json else []) + (["--scan"] if args.scan else [])
                             + (["--cwd", args.cwd] if args.cwd else [])))
+
+    if args.command == "cve":
+        from . import cve
+        sys.exit(cve.main([flag for flag, on in (("--json", args.json), ("--refresh", args.refresh),
+                                                 ("--schedule", args.schedule),
+                                                 ("--unschedule", args.unschedule)) if on]
+                          + (["--cwd", args.cwd] if args.cwd else [])))
 
     # SESSION 98: Handle allow subcommand
     if args.command == "allow":

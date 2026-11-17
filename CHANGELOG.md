@@ -1,5 +1,23 @@
 # Changelog
 
+## Unreleased — known vulnerabilities (CVE monitoring)
+
+Shortens the time to patch known bugs in packages already in use. Not a malware
+check, not attack prevention.
+- `stillrunning cve` (`--json`, `--refresh [--cwd]`, `--schedule`, `--unschedule`):
+  inventory of this interpreter, the project's virtualenvs and its manifests and
+  lockfiles; OSV.dev `querybatch` + `vulns/{id}` (GHSA severity, else CVSS v3
+  computed from the vector); CLEAR / AFFECTED / UNKNOWN with green only on proof;
+  state in `~/.stillrunning/cve_state.json`, details cached by id+modified.
+- Claude Code hook: an install whose resolved version has a known CRITICAL
+  vulnerability is held for approval with the id, severity and fixed version;
+  a vulnerability check that cannot finish holds too. Runs alongside the
+  blocklist lookup within the same deadline. `STILLRUNNING_CVE_CHECK=0` turns it off.
+- Status line: one CVE segment (after the first refresh); counts drop before
+  either freshness. `stillrunning shield`: one CVE line.
+- `panel.installed_packages` reports places it could not list; manifest rows
+  count local / URL / git entries.
+
 ## Security audit release — committed 2026-11-17 (`7fd5832`), not yet published to PyPI
 
 Everything below under "unreleased" ships together. Six rounds of independent

@@ -742,6 +742,38 @@ EXPLANATIONS = {
         "stillrunning hit an internal error while checking this install, so nothing was "
         "checked. Approve only if you already trust every package in the command."),
 }
+# Known vulnerabilities (OSV.dev). About bugs in honest packages, never malware.
+# Same rules as EXPLANATIONS; rendered by explain() too.
+CVE_EXPLANATIONS = {
+    "cve_critical_fixed": (
+        "{name} {version} has a critical known vulnerability ({advisory}); {fixed} fixes it. "
+        "This is about a bug in an honest package, not malware. Install {fixed} or later "
+        "instead, or approve if you need this exact version."),
+    "cve_critical_nofix": (
+        "{name} {version} has a critical known vulnerability ({advisory}); no fixed version "
+        "is known yet. This is about a bug in an honest package, not malware. Approve only "
+        "if you need this package now."),
+    "cve_unchecked": (
+        "The vulnerability check could not run for `{name}`: {cve_why}. It looks up known "
+        "vulnerabilities (bugs in honest packages) and holds the install when it cannot "
+        "finish. This is separate from the malware blocklist. Approve only if you know this "
+        "version is fine."),
+    "cve_unchecked_some": (
+        "The vulnerability check could not run for `{name}`: {cve_why}. Some versions of it "
+        "have a critical known vulnerability ({advisory}). This is about a bug in an honest "
+        "package, not malware. Name an exact, fixed version, or approve if you know this one "
+        "is fine."),
+}
+CVE_WHY = {
+    "offline": "api.osv.dev could not be reached",
+    "timeout": "api.osv.dev took too long to answer",
+    "http": "api.osv.dev answered with an error",
+    "garbage": "api.osv.dev sent an answer that could not be read",
+    "budget": "the time allowed for the check ran out",
+    "version": "the version that would be installed could not be worked out",
+    "range": "the command does not name one exact version",
+    "error": "the check hit an internal error",
+}
 CHECK_FAILED_WHY = {
     "quota": "today's free lookup allowance is used up",
     "offline": "stillrunning.io could not be reached",
@@ -792,6 +824,12 @@ EVIDENCE = {
     "override_local": "A local override on this machine says to allow it",
     "version_affected": "Versions reported as malicious: {affected}",
 }
+CVE_EVIDENCE = {
+    "cve_none": "Known vulnerabilities (OSV.dev) for {version}: none",
+    "cve_found": "Known vulnerability (OSV.dev) for {version}: {advisory}, {severity}{fix}",
+    "cve_not_checked": "Known vulnerabilities (OSV.dev): not checked ({cve_why})",
+    "cve_none_any": "Known vulnerabilities (OSV.dev): none critical in any version",
+}
 GLOSSARY = {
     "blocklist": "a list of packages that security researchers have reported as malicious",
     "advisory": "a public security report describing a specific harmful package",
@@ -812,7 +850,17 @@ def _ev(check, status, key, **fields):
         fields["why"] = CHECK_FAILED_WHY.get(fields["why"], CHECK_FAILED_WHY["server"])
     if "registry" in fields:
         fields["registry"] = REGISTRY_NAME.get(fields["registry"], "the public registry")
-    return {"check": check, "status": status, "text": EVIDENCE[key].format(**fields)}
+    if "cve_why" in fields:
+        fields["cve_why"] = CVE_WHY.get(fields["cve_why"], CVE_WHY["error"])
+    if "version" in fields and not _SAFE_VERSION.match(str(fields["version"])):
+        fields["version"] = "this version"
+    if "advisory" in fields and not _SAFE_ADVISORY.match(str(fields["advisory"])):
+        fields["advisory"] = "an advisory"
+    if "severity" in fields:
+        fields["severity"] = (str(fields["severity"]).lower() if fields["severity"] in
+                              ("LOW", "MODERATE", "HIGH", "CRITICAL") else "severity unknown")
+    template = EVIDENCE.get(key) or CVE_EVIDENCE[key]
+    return {"check": check, "status": status, "text": template.format(**fields)}
 
 
 def build_evidence(pkg, outcome):
@@ -898,10 +946,17 @@ def explain(kind: str, **fields) -> str:
         elif key == "affected":
             parts = [p for p in value.split(", ") if _SAFE_VERSION.match(p)]
             value = ", ".join(parts[:8]) or "see the security report"
+        elif key == "cve_why":
+            value = CVE_WHY.get(value, CVE_WHY["error"])
+        elif key in ("version", "fixed"):
+            value = value if _SAFE_VERSION.match(value) else (
+                "this version" if key == "version" else "a later version")
+        elif key == "severity":
+            value = value.lower() if value in ("LOW", "MODERATE", "HIGH", "CRITICAL") else "unknown"
         elif not _SAFE_FIELD.match(value):
             value = "this package"
         clean[key] = value
-    return EXPLANATIONS[kind].format(**clean)
+    return (EXPLANATIONS.get(kind) or CVE_EXPLANATIONS[kind]).format(**clean)
 
 
 POPULAR = {
@@ -3506,6 +3561,125 @@ def lookup(pkg, token=None, timeout=8.0):
     return result
 
 
+# ─────────────────────── known vulnerabilities (OSV.dev) ───────────────────────
+CVE_CHECK_ENV = "STILLRUNNING_CVE_CHECK"
+CVE_TIMEOUT_S = 5.0
+CVE_CACHE_FRESH_S = 24 * 3600
+_OSV = []
+
+
+def cve_check_enabled():
+    """Default ON. STILLRUNNING_CVE_CHECK=0 switches the install-time check off."""
+    return os.environ.get(CVE_CHECK_ENV, "1").strip().lower() not in ("0", "false", "no", "off")
+
+
+def _osv_module():
+    """osv.py, loaded only when an install is checked (bare-script safe)."""
+    if not _OSV:
+        try:
+            from stillrunning import osv as module
+        except ImportError:
+            import importlib.util
+            path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "osv.py")
+            spec = importlib.util.spec_from_file_location("stillrunning_osv", path)
+            module = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(module)
+        _OSV.append(module)
+    return _OSV[0]
+
+
+def _cve_cached(eco, name, version, now=None):
+    """Clusters saved by `stillrunning cve --refresh` for exactly this
+    name+version, when that refresh is under 24 hours old; else None."""
+    now = time.time() if now is None else now
+    try:
+        with open(os.path.join(_state_dir(), "cve_state.json"), encoding="utf-8") as handle:
+            doc = json.load(handle)
+        feed = doc.get("feed_updated_at")
+        if (not isinstance(feed, (int, float)) or isinstance(feed, bool)
+                or not 0 <= now - feed <= CVE_CACHE_FRESH_S):
+            return None
+        found = (doc.get("results") or {}).get(f"{eco}:{normalize(eco, name)}@{version}")
+    except FileNotFoundError:
+        return None
+    except (OSError, ValueError, AttributeError) as exc:
+        _warn(f"cve_state.json unreadable ({type(exc).__name__}) — asking OSV.dev directly")
+        return None
+    if not isinstance(found, list) or not all(isinstance(c, dict) for c in found):
+        return None
+    return found
+
+
+def _cve_verdict(clusters, version, resolved=None):
+    osv = _osv_module()
+    clean = []
+    for c in clusters:
+        vid = str(c.get("id") or "")
+        if not osv.SAFE_ID.match(vid):
+            continue
+        sev = c.get("severity") if c.get("severity") in osv.SEVERITIES else None
+        fixed = c.get("fixed") if isinstance(c.get("fixed"), str) and \
+            osv.SAFE_VERSION.match(c["fixed"]) else None
+        clean.append({"id": vid, "severity": sev, "fixed": fixed})
+    out = {"version": version, "vulns": clean}
+    if resolved:
+        out["resolved_version"] = resolved
+    crit = [c for c in clean if c["severity"] == "CRITICAL"]
+    if crit:
+        return dict(out, status="critical", top=crit[0])
+    if clean:
+        return dict(out, status="noncritical", top=clean[0])
+    return dict(out, status="none")
+
+
+def cve_lookup(pkg, timeout=CVE_TIMEOUT_S, now=None, latest_fn=None):
+    """Known vulnerabilities for the version this install would fetch.
+    → {"status": critical|noncritical|none|none_any|failed, ...}.
+
+    An exact pin is checked as that version. An unpinned install is first
+    asked about every version; only when some version has a CRITICAL
+    vulnerability is the version that would be installed worked out (the
+    same registry lookup the blocklist check uses) and checked. A range, a
+    tag or a flag that changes what resolves cannot be worked out: if some
+    version is critical, the check could not run for this one."""
+    eco, version = pkg["eco"], pkg.get("version")
+    name = normalize(eco, pkg["name"])
+    osv = _osv_module()
+    latest_fn = latest_fn or _latest_version
+
+    def at(v):
+        cached = _cve_cached(eco, name, v, now)
+        if cached is not None:
+            return cached, None
+        records, why = osv.query_package(eco, name, v, timeout)
+        if why:
+            return None, why
+        return osv.cluster([osv.summarize(r, eco, name, v) for r in records], v), None
+
+    if version:
+        clusters, why = at(version)
+        if why:
+            return {"status": "failed", "why": why, "version": version}
+        return _cve_verdict(clusters, version)
+    records, why = osv.query_package(eco, name, None, timeout)
+    if why:
+        return {"status": "failed", "why": why}
+    crit = [c for c in osv.cluster([osv.summarize(r, eco, name, None) for r in records])
+            if c["severity"] == "CRITICAL"]
+    if not crit:
+        return {"status": "none_any"}
+    some = {"id": crit[0]["id"]}
+    if pkg.get("spec") or pkg.get("uncertain"):
+        return {"status": "failed", "why": "range", "some": some}
+    latest = latest_fn(eco, name, timeout)
+    if latest is None:
+        return {"status": "failed", "why": "version", "some": some}
+    clusters, why = at(latest)
+    if why:
+        return {"status": "failed", "why": why, "version": latest}
+    return _cve_verdict(clusters, latest, resolved=latest)
+
+
 # ─────────────────────────────── rendering ───────────────────────────────
 _COLORS = {"green": "\033[32m", "yellow": "\033[33m", "red": "\033[1;31m", "dim": "\033[2m"}
 
@@ -3624,10 +3798,37 @@ REMEMBER_ENABLED = False
 _REMEMBERABLE_STATUS = ("ok", "override", "not_found")
 
 
+def _safe_adv(value):
+    value = str(value or "")
+    return value if _SAFE_ADVISORY.match(value) else "an advisory"
+
+
+def _cve_report(cve, pkg):
+    """→ (kind, one evidence item) for a vulnerability-check outcome."""
+    status, version = cve.get("status"), pkg.get("version") or ""
+    if status == "critical" or status == "noncritical":
+        top = cve.get("top") or {}
+        fixed = top.get("fixed")
+        fix = f"; {fixed} fixes it" if isinstance(fixed, str) and _SAFE_VERSION.match(fixed) else ""
+        return status, _ev("vulnerability", "found", "cve_found", version=version,
+                           advisory=str(top.get("id")), severity=top.get("severity"), fix=fix)
+    if status == "none":
+        return "none", _ev("vulnerability", "nothing_found", "cve_none", version=version)
+    if status == "none_any":
+        return "none", _ev("vulnerability", "nothing_found", "cve_none_any")
+    return "failed", _ev("vulnerability", "not_checked", "cve_not_checked",
+                         cve_why=cve.get("why") or "error")
+
+
 def decide(command, cwd=None, env=None, lookup_fn=None, deadline=CHECK_DEADLINE_S, now=None,
-           shadow_fn=None):
+           shadow_fn=None, cve_fn=None):
     """→ {"action": allow|ask|deny, "lines": [user-visible], "reason": str,
-          "stats": {...}, "records": [one decision record per item]}"""
+          "stats": {...}, "records": [one decision record per item]}
+
+    Every package is also checked for known vulnerabilities (OSV.dev), in
+    parallel with the blocklist and within the same deadline, unless
+    STILLRUNNING_CVE_CHECK=0. With an injected `lookup_fn` (tests, the
+    self-test) that check runs only when `cve_fn` is injected too."""
     color = _color_enabled()
     now = time.time() if now is None else now
     lines, details, records = [], [], []
@@ -3669,7 +3870,9 @@ def decide(command, cwd=None, env=None, lookup_fn=None, deadline=CHECK_DEADLINE_
         # more unread words than will be looked up: say so instead of dropping them
         parsed["unverifiable"].append({"kind": "unparsed", "raw": shadow[0]["raw"]})
         shadow = shadow[:_SHADOW_CAP]
-    results, shadow_results = {}, {}
+    results, shadow_results, cve_results = {}, {}, {}
+    run_cve = bool(packages) and cve_check_enabled() and (cve_fn is not None or lookup_fn is None)
+    cve_texts = []
     if packages or shadow:
         from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeout
         fn = lookup_fn or (lambda pkg: lookup(pkg, token=_token()))
@@ -3700,6 +3903,19 @@ def decide(command, cwd=None, env=None, lookup_fn=None, deadline=CHECK_DEADLINE_
         pool = ThreadPoolExecutor(max_workers=min(8, len(packages) + len(shadow)))
         futures = [pool.submit(timed, pkg) for pkg in packages]
         shadow_futures = [pool.submit(timed, pkg, shadow_fn) for pkg in shadow]
+        cve_pool, cve_futures = None, []
+        if run_cve:
+            cve_call = cve_fn or cve_lookup
+
+            def cve_timed(pkg):
+                try:
+                    return cve_call(pkg)
+                except Exception as exc:  # a crash is "could not run", never a pass
+                    _warn(f"vulnerability check for {pkg['name']} crashed ({type(exc).__name__})")
+                    return {"status": "failed", "why": "error"}
+
+            cve_pool = ThreadPoolExecutor(max_workers=min(8, len(packages)))
+            cve_futures = [cve_pool.submit(cve_timed, pkg) for pkg in packages]
         for index, future in enumerate(futures):
             left = max(0.05, deadline - (time.monotonic() - started))
             try:
@@ -3712,7 +3928,16 @@ def decide(command, cwd=None, env=None, lookup_fn=None, deadline=CHECK_DEADLINE_
                 shadow_results[index] = future.result(timeout=left)
             except FutureTimeout:   # lint: allowed-silent(a shadow candidate is extra cover; no answer = nothing)
                 continue
+        for index, future in enumerate(cve_futures):
+            left = max(0.05, deadline - (time.monotonic() - started))
+            try:
+                cve_results[index] = future.result(timeout=left)
+            except FutureTimeout:
+                _warn(f"vulnerability check for {packages[index]['name']} did not finish in time")
+                cve_results[index] = {"status": "failed", "why": "budget"}
         pool.shutdown(wait=False)
+        if cve_pool is not None:
+            cve_pool.shutdown(wait=False)
 
     for index, pkg in enumerate(packages):
         outcome, ms = results[index]
@@ -3726,6 +3951,7 @@ def decide(command, cwd=None, env=None, lookup_fn=None, deadline=CHECK_DEADLINE_
         for key in ("feed_age_h", "feed_size"):
             if outcome.get(key) is not None:
                 stats[key] = outcome[key]
+        first_record = len(records)
         if status == "ok":
             stats["ok"] += 1
             lines.append(status_line("ok", _label(pkg), "no known threat", ms, color))
@@ -3793,6 +4019,46 @@ def decide(command, cwd=None, env=None, lookup_fn=None, deadline=CHECK_DEADLINE_
             if outcome.get("why") == "override_unchecked":
                 hold = True         # an override is in play: the opt-out does not apply
             escalate("ask")
+        cve = cve_results.get(index) if status not in ("blocked", "suspicious") else None
+        if isinstance(cve, dict):
+            vuln_pkg = dict(pkg, version=str(cve.get("resolved_version") or pkg.get("version") or "")
+                            or None)
+            label = _label(vuln_pkg)
+            kind, cve_ev = _cve_report(cve, vuln_pkg)
+            if len(records) > first_record:
+                records[first_record]["evidence"].append(cve_ev)
+            if kind == "critical":
+                top = cve["top"]
+                text = (explain("cve_critical_fixed", name=name, version=vuln_pkg["version"],
+                                advisory=top["id"], fixed=top["fixed"]) if top.get("fixed") else
+                        explain("cve_critical_nofix", name=name, version=vuln_pkg["version"],
+                                advisory=top["id"]))
+                lines.append(status_line("unverified", label, "critical known vulnerability · "
+                                         + _safe_adv(top["id"]) + " — approval needed",
+                                         None, color))
+                record("needs_approval", label, [cve_ev], text, vuln_pkg)
+                cve_texts.append(text)
+                hold = True         # checked and found: the unverified opt-out does not apply
+                escalate("ask")
+            elif kind == "failed":
+                some = cve.get("some") or {}
+                text = (explain("cve_unchecked_some", name=name, cve_why=cve.get("why"),
+                                advisory=some["id"]) if some.get("id") else
+                        explain("cve_unchecked", name=name, cve_why=cve.get("why")))
+                lines.append(status_line("unverified", label,
+                                         "vulnerability check could not run — approval needed",
+                                         None, color))
+                record("needs_approval", label, [cve_ev], text, vuln_pkg)
+                stats["unverified"] += 1
+                escalate("ask")
+            elif kind == "noncritical":
+                top = cve["top"]
+                fix = f" · {top['fixed']} fixes it" if top.get("fixed") and \
+                    _SAFE_VERSION.match(top["fixed"]) else ""
+                sev = (top.get("severity") or "unknown severity").lower()
+                lines.append(status_line("note", label, f"known vulnerability · "
+                                         f"{_safe_adv(top['id'])} ({sev}){fix} — not held",
+                                         None, color))
 
     # A word the parser did not read as a package, but that IS on the blocklist:
     # blocked like any other. Every other answer for such a word is dropped.
@@ -3874,7 +4140,10 @@ def decide(command, cwd=None, env=None, lookup_fn=None, deadline=CHECK_DEADLINE_
                   " Do not retry with another installer, flag or spelling; tell the user what "
                   "was blocked and why.")
     elif action == "ask":
-        reason = "stillrunning could not verify this command. " + " ".join(explanations)
+        lead = ("stillrunning is holding this install for your approval. "
+                if explanations and all(t in cve_texts for t in explanations)
+                else "stillrunning could not verify this command. ")
+        reason = lead + " ".join(explanations)
     return {"action": action, "lines": user_lines, "reason": reason, "stats": stats,
             "records": records, "protect": bool(hold), "cmd_id": cmd_id,
             "can_remember": can_remember}

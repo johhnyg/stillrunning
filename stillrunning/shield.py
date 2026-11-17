@@ -27,6 +27,8 @@ are only ever added, never renamed or removed):
       "glossary": {"<term>": "<one sentence>"}   # only terms used above
     }
 
+The text report adds one line on known vulnerabilities (`stillrunning cve`).
+
 `today` and `week` are null — not zeros — when nothing has been recorded.
 """
 import json
@@ -114,6 +116,17 @@ def collect(now=None, limit=8):
             "blocklist": blocklist, "decisions": decisions, "glossary": glossary}
 
 
+def _cve(now):
+    """One line on known vulnerabilities, from the saved state (no network)."""
+    try:
+        from . import cve
+        data = cve.load(now)
+        return {"state": data["state"], "line": cve.headline(data)}
+    except Exception as exc:     # the report card must still print
+        claude_hook._warn(f"shield: CVE state could not be read ({type(exc).__name__})")
+        return {"state": "UNKNOWN", "line": "CVEs · unknown · state unreadable"}
+
+
 def _wrap(text, indent, width):
     return textwrap.wrap(text, width=width, initial_indent=indent,
                          subsequent_indent=" " * len(indent)) or [indent.rstrip()]
@@ -125,6 +138,7 @@ def render(data, color=False, width=WIDTH):
         return f"\033[{code}m{text}\033[0m" if color else text
 
     now = data["generated_at"]
+    cve_line = _cve(now)["line"]
     out = [f"{claude_hook.SHIELD}  stillrunning shield · "
            + time.strftime("%a %d %b %Y", time.localtime(now))]
     hook = {"active": "Claude Code hook: on",
@@ -133,7 +147,7 @@ def render(data, color=False, width=WIDTH):
             "absent": "Claude Code hook: not installed — run `stillrunning --hook-claude-code`",
             "unreadable": "Claude Code hook: unknown (settings.json could not be read)"}[data["hook"]]
     if not data["has_data"]:
-        out += ["", hook, ""]
+        out += ["", hook, cve_line, ""]
         out += _wrap("No installs have been checked yet, so there is nothing to report.", "", width)
         out += _wrap("This is not a result: nothing has been looked at. Counts appear here "
                      "after the first pip or npm install that Claude Code runs with the hook on.",
@@ -162,6 +176,7 @@ def render(data, color=False, width=WIDTH):
     else:
         age_text = f"updated about {int(age)}h ago"
     out.append(row(f"blocklist: {size_text} · {age_text}"))
+    out.append(row(cve_line))
     out.append(row(hook))
     out.append("└" + "─" * (width - 2) + "┘")
 

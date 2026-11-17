@@ -181,6 +181,70 @@ so this adds no questions. Two limits to that:
   there. Any other value (`-t vendor`, `-w web`) is asked about by name, which
   means that one word is sent to stillrunning.io like any package name.
 
+## Known vulnerabilities (CVE monitoring)
+
+**What it is:** a check of the packages you already use against known
+vulnerabilities (bugs in honest packages, published as CVE / GHSA records), so
+you hear about a fix sooner and the time to patch gets shorter.
+
+**What it is not:** it does not detect malware (that is the blocklist's job)
+and it does not stop attacks. It covers only what [OSV.dev](https://osv.dev)
+knows (GitHub Advisory severities arrive through OSV). Anything it could not
+resolve to one exact version reads UNKNOWN, never clear.
+
+**What it checks:** this Python interpreter's installed packages, the
+project's virtualenvs (`.venv`, `venv`, `env`), and exact versions from the
+project's requirements files, manifests and lockfiles (a range in
+`package.json` or `pyproject.toml` counts as resolved only when a lockfile in
+the same folder pins it).
+
+**States**
+
+| State | Colour | Means |
+|---|---|---|
+| CLEAR | green | every part resolved, feed refreshed within 24 h, and no known vulnerability for those versions |
+| AFFECTED | red with a critical, amber otherwise | at least one package has a known vulnerability (count, worst severity, how many critical) |
+| UNKNOWN | amber | never refreshed, feed unreachable or older than 24 h, part of the inventory unresolved, or the check failed part-way. This is the default |
+
+If some packages are affected and part is unresolved, AFFECTED wins and the
+report says what was not checked.
+
+**Commands**
+
+```bash
+stillrunning cve                    # report from the saved state (no network)
+stillrunning cve --json             # the same as JSON, stable schema (no network)
+stillrunning cve --refresh [--cwd DIR]   # inventory + check OSV.dev now
+stillrunning cve --schedule [--cwd DIR]  # one crontab line: --refresh every 6 h (flock + timeout)
+stillrunning cve --unschedule       # remove that line; other crontab lines are never touched
+```
+
+The status line adds one segment once a refresh has run (for example
+`CVEs: 2 affected (1 critical) · feed 3h ago`); its freshness is never
+dropped. The Claude Code side panel shows one line under "Already here", a
+Details list (package, version, where, CVE/GHSA id, severity, first fixed
+version, what to do) and a "Refresh CVE data" button. Drawing the panel never
+fetches anything. `stillrunning shield` prints one CVE line.
+
+**At install time:** when Claude Code is about to install a package whose
+version (the exact pin, or the version an unpinned install would fetch) has a
+known **critical** vulnerability, the hook holds the install for your
+approval and names the id, the severity and the first fixed version. If the
+vulnerability check cannot finish (OSV.dev unreachable or slow, or the version
+cannot be worked out while some version is critical), it holds too and says
+that it was the vulnerability check that could not run. Non-critical
+vulnerabilities never hold; they add a "not held" line. A blocklisted package
+is still refused. The check runs alongside the blocklist lookup within the
+same time limit and uses the saved state when it has that exact version and
+is under 24 h old. Switch it off with `STILLRUNNING_CVE_CHECK=0` in the
+environment Claude Code runs in.
+
+**What is sent to api.osv.dev:** package names, ecosystems (PyPI / npm) and
+versions, with the User-Agent `stillrunning-cve/1`. Never file contents,
+paths or your account token. Nothing else is contacted by `--refresh`, and
+redirects are refused. Only ids, version numbers and severity words from OSV
+are shown; advisory text is not.
+
 ## Known limitations
 
 What it does not cover, stated plainly. These were either found by the
@@ -191,8 +255,21 @@ can do.
   someone has already reported as malicious. A new malicious package nobody
   has reported yet reads "no known threat". Brand-new and rarely downloaded
   packages are not flagged.
-- **Not vulnerabilities.** It does not check packages for known CVEs (bugs in
-  honest packages); that is a different feature, not in this release.
+- **Known vulnerabilities cover only what OSV.dev knows,** for the versions
+  that could be resolved. A range without a lockfile, an unreadable file, a
+  local or git dependency, conda/pixi packages, old-style `.egg-info` packages
+  in a project virtualenv and npm packages installed but not in a lockfile are
+  not checked; the state reads UNKNOWN when any part is unresolved. Severity
+  is the GitHub Advisory word, else the CVSS v3 score; a record with only a
+  CVSS v4 vector has unknown severity and never holds an install.
+- **The install-time CVE hold** runs in the Claude Code hook only, not in the
+  terminal wrappers. An install that names a range, a tag or `--pre` is held
+  when any version of that package has a critical vulnerability, because the
+  version it would fetch cannot be worked out. `STILLRUNNING_ALLOW_UNVERIFIED=1`
+  lets a "could not run" hold through (with a warning) but never a critical
+  one. The status line shows the CVE segment only after the first
+  `stillrunning cve --refresh`; before that, `stillrunning cve` and the panel
+  say UNKNOWN.
 - **What the hook does not see.** It reads the text of the command Claude
   Code is about to run, nothing else. It does not see an install started from
   inside a program (a Python or Node script, a here-document handed to
