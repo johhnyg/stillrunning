@@ -56,7 +56,7 @@ check, not attack prevention.
   show as AFFECTED ("malicious"); unknown-severity vulnerabilities and
   critical-in-range installs hold and cannot be waved through.
 
-## Security audit release — committed 2026-11-17 (`7fd5832`), not yet published to PyPI
+## 2.14.0 — security audit release (built 2026-11-17, not yet published to PyPI)
 
 Everything below under "unreleased" ships together. Six rounds of independent
 adversarial review; the sixth approved with conditions, recorded under
