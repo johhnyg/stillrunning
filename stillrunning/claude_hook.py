@@ -1262,16 +1262,30 @@ class _Result:
         self.script_text = {}         # file → literal text this command writes into it
         self.downloaded = set()       # files this command downloads
         self.shadow = []        # words the parser did not read as packages but that could be
+        self.line_hashes = None  # `--hash` pins of the requirements line being read (verdict cache)
+        self.hash_enforced = False  # the installer being parsed refuses a file that misses them
+        self.hash_off_env = False   # UV_NO_VERIFY_HASHES is in force for this command
 
     def add(self, eco, name, version, raw, spec=None):
         # The same name asked for at two versions is two lookups: the second
         # one may be the bad version.
         self.touched += 1
         key = (eco, normalize(eco, name), version, spec, bool(self.uncertain))
-        if all((p["eco"], normalize(p["eco"], p["name"]), p.get("version"), p.get("spec"),
-                bool(p.get("uncertain"))) != key for p in self.packages):
+        same = [p for p in self.packages if (p["eco"], normalize(p["eco"], p["name"]),
+                                             p.get("version"), p.get("spec"),
+                                             bool(p.get("uncertain"))) == key]
+        # a hash names the artifact only when this installer enforces it
+        hashes = self.line_hashes if self.hash_enforced else None
+        if not same:
             self.packages.append({"eco": eco, "name": name, "version": version, "raw": raw,
                                   "spec": spec, "uncertain": bool(self.uncertain)})
+            if hashes:
+                self.packages[-1]["hash"] = hashes
+        elif same[0].get("hash") != hashes:
+            # the same pin named twice with different (or missing) hashes:
+            # no one artifact is known, so the verdict cache stays out of it
+            same[0].pop("hash", None)
+            same[0]["hash_conflict"] = True
 
     def full(self, path):
         path = os.path.expanduser(path)
@@ -1630,7 +1644,7 @@ def _read_requirements(path, cwd, res, depth, read_file, raw):
 
 def _parse_requirements_text(text, base, cwd, res, depth, read_file, raw):
     for line in text.replace("\\\n", " ").splitlines():
-        line = line.split(" #", 1)[0].strip()
+        line = re.split(r"(?:^|\s)#", line, 1)[0].strip()   # pip: a comment is `#` after whitespace
         if not line or line.startswith("#"):
             continue
         if len(res.packages) > MAX_REQ_FILE_PACKAGES:
@@ -1658,7 +1672,34 @@ def _parse_requirements_text(text, base, cwd, res, depth, read_file, raw):
         elif _is_local_path(line):
             res.note("local file install — not looked up")
         else:
-            _parse_pip_requirement(re.split(r"\s--", line, 1)[0], res, raw)
+            res.line_hashes = _requirement_hashes(line)
+            try:
+                _parse_pip_requirement(re.split(r"\s--", line, 1)[0], res, raw)
+            finally:
+                res.line_hashes = None
+
+
+# Switches that turn installer hash checking off (uv). pip has none: once a
+# requirement carries --hash, `pip install` requires and checks hashes.
+_HASH_OFF_FLAGS = {"--no-verify-hashes", "--no-require-hashes"}
+_HASH_OFF_ENV = ("UV_NO_VERIFY_HASHES",)
+_REQ_HASH_OPTION = re.compile(r"(?:^|\s)--hash(?:=|\s+)(\S+)")
+_REQ_HASH_VALUE = re.compile(r"^(sha256|sha384|sha512):([0-9A-Fa-f]+)$")
+_REQ_HASH_LEN = {"sha256": 64, "sha384": 96, "sha512": 128}
+
+
+def _requirement_hashes(line):
+    """The `--hash=algo:hex` pins on one requirements line (which pip and uv
+    enforce at install time) as one canonical string, or None when there are
+    none or any is malformed. Used only as the verdict cache's artifact key."""
+    values = _REQ_HASH_OPTION.findall(line)
+    out = set()
+    for value in values:
+        match = _REQ_HASH_VALUE.match(value)
+        if not match or len(match.group(2)) != _REQ_HASH_LEN[match.group(1)]:
+            return None
+        out.add(f"{match.group(1)}:{match.group(2).lower()}")
+    return ",".join(sorted(out)) or None
 
 
 _PIP_SWITCH_LETTERS = "UqvIhVy"
@@ -2265,7 +2306,14 @@ def _dispatch_program(prog, args, res, cwd, read_file, exists, raw):
     if _PIP.match(prog):
         idx = _subcommand(args, {"install", "download", "wheel"})
         if idx is not None:
-            _parse_pip_args(args[idx + 1:], res, cwd, read_file, raw)
+            # pip install checks every file against the --hash pins once any
+            # requirement has one (implied --require-hashes); pip has no switch
+            # that turns that off. download / wheel do not install: not counted.
+            res.hash_enforced = args[idx] == "install"
+            try:
+                _parse_pip_args(args[idx + 1:], res, cwd, read_file, raw)
+            finally:
+                res.hash_enforced = False
         return
     if prog == "uv":
         idx = _subcommand(args, {"pip", "add", "tool", "run", "sync", "lock"})
@@ -2284,11 +2332,19 @@ def _dispatch_program(prog, args, res, cwd, read_file, exists, raw):
                         _parse_pip_requirement(value, res, raw)
         if sub == "pip":
             j = _subcommand(rest, {"install", "sync", "compile"})
-            if j is not None and rest[j] == "install":
-                _parse_pip_args(rest[j + 1:], res, cwd, read_file, raw, uv=True)
-            elif j is not None and rest[j] == "sync":
-                for value in [a for a in rest[j + 1:] if not a.startswith("-")]:
-                    _read_requirements(value, cwd, res, 0, read_file, raw)
+            # uv pip install / sync check --hash pins unless told not to
+            res.hash_enforced = (j is not None and rest[j] in ("install", "sync")
+                                 and not res.hash_off_env
+                                 and not any(a.split("=", 1)[0] in _HASH_OFF_FLAGS
+                                             for a in args))
+            try:
+                if j is not None and rest[j] == "install":
+                    _parse_pip_args(rest[j + 1:], res, cwd, read_file, raw, uv=True)
+                elif j is not None and rest[j] == "sync":
+                    for value in [a for a in rest[j + 1:] if not a.startswith("-")]:
+                        _read_requirements(value, cwd, res, 0, read_file, raw)
+            finally:
+                res.hash_enforced = False
         elif sub == "add":
             _parse_pip_args(rest, res, cwd, read_file, raw, uv=True)
         elif sub == "tool":
@@ -2595,6 +2651,9 @@ def _runs_stdin_as_code(tokens):
 
 def _track_env(token, env, into):
     key, value = token.split("=", 1)
+    if key in _HASH_OFF_ENV:
+        into[key] = value
+        return False
     if _is_index_env(key) or key in _VERSION_SHIFT_ENV:
         into[key] = value
         return _is_index_env(key) and value != env.get("STILLRUNNING_TRUSTED_INDEX", "")
@@ -2757,6 +2816,8 @@ def _parse_simple(tokens, res, cwd, env, read_file, exists, depth, feeds_shell=F
         token, rest = tokens[index], tokens[index + 1:]
         before = res.touched
         res.uncertain = bool(any(local_env.get(k) for k in _VERSION_SHIFT_ENV))
+        # any value counts: a set-but-"false" switch is not worth the risk
+        res.hash_off_env = any(k in local_env for k in _HASH_OFF_ENV)
         was_cwd, was_unknown = res.cwd, res.cwd_unknown
         cwd_here, unknown_here = _installer_folder(_prog_name(token), rest, cwd)
         if unknown_here:
@@ -2778,6 +2839,7 @@ def _parse_simple(tokens, res, cwd, env, read_file, exists, depth, feeds_shell=F
                 _dispatch(_prog_name(token), rest, res, cwd_here, read_file, exists, raw)
         finally:
             res.uncertain = False
+            res.hash_off_env = False
             res.cwd, res.cwd_unknown = was_cwd, was_unknown
         name = _prog_name(token)
         if via_stdin and (_PIP.match(name) or name in _KNOWN_PROGRAMS):
@@ -3306,6 +3368,24 @@ def _locally_blocked(eco, name):
     return False
 
 
+def _local_list_unreadable():
+    """True when the shipped blocklist file is there but cannot be read
+    (corrupt, too large, unreadable): `_locally_blocked` then answers False
+    without knowing, and the verdict cache must not rely on that answer."""
+    path = os.path.join(_state_dir(), "known_bad_packages.json")
+    try:
+        if not os.path.lexists(path):
+            return False
+        if os.path.getsize(path) >= 20_000_000:
+            return True
+        with open(path, encoding="utf-8") as handle:
+            data = json.load(handle)
+        return not isinstance(data, dict) or not all(isinstance(v, (dict, list))
+                                                     for v in data.values())
+    except (OSError, ValueError, UnicodeDecodeError):
+        return True
+
+
 def _api_lookup(eco, name, version, token, timeout):
     import urllib.error
     import urllib.parse
@@ -3361,7 +3441,9 @@ def _api_lookup(eco, name, version, token, timeout):
     if verdict == "UNKNOWN" and http_ok and state == "not_in_threat_database":
         return dict(extra, status="ok")
     why = {"stale_data": "stale", "unsupported_ecosystem": "ecosystem"}.get(state, "server")
-    return dict(extra, status="unverified", why=why)
+    # `answered`: the server did reply (HTTP 200) with something not mapped
+    # above — an answer not understood, which the verdict cache never covers.
+    return dict(extra, status="unverified", why=why, answered=http_ok)
 
 
 def _blocklist_only_lookup(eco, name, version, timeout, quiet=False):
@@ -3845,6 +3927,156 @@ def _cve_report(cve, pkg):
                          cve_why=cve.get("why") or "error")
 
 
+# ─────────────────────────── local verdict cache ───────────────────────────
+# stillrunning/verdict_cache.py. It may only answer for an exact, hash-pinned
+# release that passed both checks on this machine before, and only when a
+# live check could not complete now. No network; see that module.
+_VCACHE = []
+
+
+def _verdict_cache():
+    """The verdict cache module, or None when switched off or not loadable."""
+    try:
+        if not _VCACHE:
+            try:
+                from stillrunning import verdict_cache as module
+            except ImportError:
+                import importlib.util
+                path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "verdict_cache.py")
+                spec = importlib.util.spec_from_file_location("stillrunning_verdict_cache", path)
+                module = importlib.util.module_from_spec(spec)
+                spec.loader.exec_module(module)
+            _VCACHE.append(module)
+        module = _VCACHE[0]
+        return module if module.enabled() else None
+    except Exception as exc:  # no cache is the normal behaviour: every package is checked
+        _warn(f"verdict cache could not be loaded ({type(exc).__name__}) — not used")
+        return None
+
+
+def _local_cve_held(eco, name, version):
+    """Does the saved CVE state (any refresh, any age) hold this exact
+    version — a critical or unknown-severity vulnerability? Unreadable → True."""
+    key = f"{eco}:{normalize(eco, name)}@{version}"
+    try:
+        with open(os.path.join(_state_dir(), "cve_state.json"), encoding="utf-8") as handle:
+            doc = json.load(handle)
+        for entry in ((doc.get("projects") or {}) if isinstance(doc, dict) else {}).values():
+            found = (entry.get("results") or {}).get(key) if isinstance(entry, dict) else None
+            if found is None:
+                continue
+            if not isinstance(found, list) or not all(isinstance(c, dict) for c in found):
+                return True
+            if _cve_verdict(found, version)["status"] in ("critical", "unknown_severity"):
+                return True
+        return False
+    except FileNotFoundError:
+        return False
+    except Exception as exc:
+        _warn(f"cve_state.json unreadable ({type(exc).__name__}) — verdict cache not used")
+        return True
+
+
+def _cache_serve(packages, results, cve_results, cve_ran, unverifiable, protect, blocked, now):
+    """→ {package index: cached verdict} for the packages the local verdict
+    cache answers: an exact hash-pinned release, verified here before and
+    unexpired, whose live check could not complete now — and nothing else."""
+    vc = _verdict_cache()
+    if vc is None or protect or unverifiable:
+        return {}
+    if _local_list_unreadable():
+        _warn("local blocklist unreadable — verdict cache not used")
+        return {}
+    served, ttl = {}, None
+    for index, pkg in enumerate(packages):
+        if not vc.cacheable(pkg):
+            continue
+        outcome, cve = results[index][0], cve_results.get(index)
+        eco, name, version = pkg["eco"], normalize(pkg["eco"], pkg["name"]), pkg["version"]
+        if cve_ran and (cve is None or vc.cve_held(cve)):
+            continue
+        cve_could = cve_ran and vc.cve_could_not(cve)
+        cve_clear = (not cve_ran) or vc.cve_completed_clear(cve, version)
+        if not ((vc.blocklist_could_not(outcome) and (cve_could or cve_clear))
+                or (vc.blocklist_completed_clear(outcome) and cve_could)):
+            continue
+        if (eco, name) in blocked or _locally_blocked(eco, name) or _local_cve_held(eco, name, version):
+            continue
+        ttl = vc.ttl_seconds(warn=_warn) if ttl is None else ttl
+        entry = vc.find(_state_dir(), eco, name, version, pkg["hash"], now, ttl, _warn)
+        if entry:
+            served[index] = dict(entry, blocklist_live=outcome.get("status") == "ok")
+    return served
+
+
+def _cache_line(entry, now):
+    vc = _verdict_cache() or _VCACHE[0]
+    age = vc.age_text(now - entry["verified_at"])
+    if entry.get("blocklist_live"):
+        return f"no known threat (vulnerability check from this machine {age}; not re-run now)"
+    return f"no known threat (verified on this machine {age}; not re-checked now)"
+
+
+def _cache_evidence(entry, now):
+    vc = _verdict_cache() or _VCACHE[0]
+    algo, _, digest = str(entry.get("artifact") or "").partition(",")[0].partition(":")
+    redo = ("the vulnerability check" if entry.get("blocklist_live") else "the checks")
+    return {"check": "local_cache", "status": "info",
+            "text": (f"Local verdict cache: this exact version and file hash ({algo}:{digest[:12]}…) "
+                     f"had no blocklist match and no held vulnerability on this machine "
+                     f"{vc.age_text(now - entry['verified_at'])}; {redo} could not run now and "
+                     "were not repeated")}
+
+
+def _cache_update(packages, results, cve_results, cve_ran, unverifiable, protect, blocked,
+                  served, now, denied=False):
+    """After a decision: drop verdicts that a live answer contradicts, and
+    store new ones for exact hash-pinned releases that passed both checks."""
+    vc = _verdict_cache()
+    if vc is None:
+        return
+    state = _state_dir()
+    for eco, name in blocked:
+        vc.forget(state, eco, name, warn=_warn)
+    version_tag = None
+    for index, pkg in enumerate(packages):
+        outcome, cve = results[index][0], cve_results.get(index)
+        eco, name = pkg["eco"], normalize(pkg["eco"], pkg["name"])
+        if (outcome.get("status") in ("blocked", "suspicious", "override_blocked", "not_found")
+                or outcome.get("why") in NEEDS_PERSON_WHY or outcome.get("registry") is False
+                or _locally_blocked(eco, name)):
+            vc.forget(state, eco, name, warn=_warn)
+            continue
+        if vc.cve_held(cve):
+            held = cve.get("resolved_version") or cve.get("version") or pkg.get("version")
+            vc.forget(state, eco, name, held if held and not cve.get("some") else None, warn=_warn)
+            continue
+        if (index in served or protect or unverifiable or denied or not cve_ran
+                or not vc.cacheable(pkg)
+                or not vc.blocklist_completed_clear(outcome)
+                or not vc.cve_completed_clear(cve, pkg["version"])):
+            continue
+        version_tag = version_tag or vc.client_version()
+        age = outcome.get("feed_age_h")
+        vc.store(state, {
+            "eco": eco, "name": name, "version": str(pkg["version"]), "artifact": pkg["hash"],
+            "verified_at": now, "blocklist_answer": "no match (completed lookup)",
+            "blocklist_feed_age_h": float(age) if isinstance(age, (int, float))
+            and not isinstance(age, bool) else None,
+            "cve_status": cve["status"], "cve_checked_at": now, "client_version": version_tag},
+            now, _warn, ensure_dir=_private_state_dir)
+
+
+def cache_count(now=None):
+    """Unexpired verdicts in the local cache (for `stillrunning shield`);
+    None when the cache is off or unreadable."""
+    vc = _verdict_cache()
+    if vc is None:
+        return None
+    now = time.time() if now is None else now
+    return vc.count(_state_dir(), now, vc.ttl_seconds(warn=_warn), warn=_warn)
+
+
 def decide(command, cwd=None, env=None, lookup_fn=None, deadline=CHECK_DEADLINE_S, now=None,
            shadow_fn=None, cve_fn=None):
     """→ {"action": allow|ask|deny, "lines": [user-visible], "reason": str,
@@ -3964,6 +4196,17 @@ def decide(command, cwd=None, env=None, lookup_fn=None, deadline=CHECK_DEADLINE_
         if cve_pool is not None:
             cve_pool.shutdown(wait=False)
 
+    # names the live blocklist answered "listed" for, wherever they appeared
+    blocked = {(p["eco"], normalize(p["eco"], p["name"])) for i, p in enumerate(shadow)
+               if isinstance(shadow_results.get(i, ({},))[0], dict)
+               and shadow_results[i][0].get("status") == "blocked"}
+    try:
+        served = _cache_serve(packages, results, cve_results, run_cve, parsed["unverifiable"],
+                              protect, blocked, now) if packages else {}
+    except Exception as exc:  # a cache fault is "no cached verdict", never a pass
+        _warn(f"verdict cache not used ({type(exc).__name__})")
+        served = {}
+
     for index, pkg in enumerate(packages):
         outcome, ms = results[index]
         if outcome.get("resolved_version") and not pkg.get("version"):
@@ -3977,7 +4220,15 @@ def decide(command, cwd=None, env=None, lookup_fn=None, deadline=CHECK_DEADLINE_
             if outcome.get(key) is not None:
                 stats[key] = outcome[key]
         first_record = len(records)
-        if status == "ok":
+        unverified_before = stats["unverified"]
+        if index in served:
+            # the live check could not complete; this exact release passed both
+            # checks here before (local verdict cache) — counted as no known threat
+            stats["ok"] += 1
+            lines.append(status_line("ok", _label(pkg), _cache_line(served[index], now), ms, color))
+            record("no_known_threat", _label(pkg),
+                   evidence + [_cache_evidence(served[index], now)], None, pkg, ms)
+        elif status == "ok":
             stats["ok"] += 1
             lines.append(status_line("ok", _label(pkg), "no known threat", ms, color))
             record("no_known_threat", _label(pkg), evidence, None, pkg, ms)
@@ -4092,13 +4343,14 @@ def decide(command, cwd=None, env=None, lookup_fn=None, deadline=CHECK_DEADLINE_
                 cve_texts.append(text)
                 hold = True         # a known vulnerability is in reach: no opt-out
                 escalate("ask")
-            elif kind == "failed":
+            elif kind == "failed" and index not in served:
                 text = explain("cve_unchecked", name=name, cve_why=cve.get("why"))
                 lines.append(status_line("unverified", label,
                                          "vulnerability check could not run — approval needed",
                                          None, color))
                 record("needs_approval", label, [cve_ev], text, vuln_pkg)
-                stats["unverified"] += 1
+                if stats["unverified"] == unverified_before:
+                    stats["unverified"] += 1    # one package counts once, whichever checks failed
                 escalate("ask")
             elif kind == "noncritical":
                 top = cve["top"]
@@ -4157,6 +4409,14 @@ def decide(command, cwd=None, env=None, lookup_fn=None, deadline=CHECK_DEADLINE_
     for note in parsed["notes"]:
         lines.append(status_line("note", "note", note, color=color))
         record("note", note, no_name)
+
+    if packages or shadow:
+        try:
+            _cache_update(packages, [results[i] for i in range(len(packages))], cve_results,
+                          run_cve, parsed["unverifiable"], protect, blocked, served, now,
+                          denied=action == "deny")
+        except Exception as exc:  # the cache never changes a decision already made
+            _warn(f"verdict cache not updated ({type(exc).__name__})")
 
     cmd_id = command_id(command or "", cwd)
     can_remember = bool(REMEMBER_ENABLED and action == "ask" and not protect and not hold and all(

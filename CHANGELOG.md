@@ -1,5 +1,36 @@
 # Changelog
 
+## Unreleased — local verdict cache (Claude Code hook)
+
+- New `stillrunning/verdict_cache.py`: `~/.stillrunning/verdicts.db` (SQLite,
+  0600 in a 0700 folder). An exact release that passed both checks (blocklist
+  lookup completed with no match, vulnerability check completed with nothing
+  held) is stored by ecosystem + name + exact version + artifact hash.
+- When the same release + hash comes up and the live check cannot complete
+  (offline, quota, timeout, server error, OSV.dev unreachable), the hook answers
+  "✓ … — no known threat (verified on this machine 3h ago; not re-checked now)"
+  instead of asking. Counted as no known threat; the evidence says it came from
+  the cache.
+- The hash comes only from `--hash=` pins on exact requirements-file lines, and
+  only for `pip install` and `uv pip install` / `uv pip sync` with hash checking
+  on (not `--no-verify-hashes`, `--no-require-hashes`, `UV_NO_VERIFY_HASHES`).
+  No hash → the cache does not apply. Comments are cut at `#` after any
+  whitespace, like pip.
+- A `verdicts.db` or folder another account could write, or an unreadable
+  `known_bad_packages.json`, means no cached answer. Nothing is stored from a
+  command that ends in deny.
+- Fix (pre-existing): a package whose blocklist lookup and vulnerability check
+  both failed counted twice in "couldn't check"; it now counts once.
+- Never covers: a blocklist hit (local list or live; a live hit deletes the
+  record), a critical / unknown-severity vulnerability (live or `cve_state.json`),
+  a registry "no such package", an unrecognised server answer (new `answered`
+  marker on the lookup outcome), ranges / tags / `--pre` / constraints, another
+  version or hash, or any command with another hold.
+- 24 h expiry (`STILLRUNNING_CACHE_TTL_HOURS`, capped at 7 days);
+  `STILLRUNNING_CACHE=0` turns it off; a corrupt database reads as empty.
+  No network calls. `stillrunning shield` shows the number of unexpired verdicts
+  (text only; the `--json` keys are unchanged).
+
 ## Unreleased — known vulnerabilities (CVE monitoring)
 
 Shortens the time to patch known bugs in packages already in use. Not a malware

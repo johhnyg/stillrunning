@@ -127,6 +127,15 @@ def _cve(now):
         return {"state": "UNKNOWN", "line": "CVEs · unknown · state unreadable"}
 
 
+def _cached_verdicts(now):
+    """Unexpired verdicts in the local verdict cache (no network); 0 when off."""
+    try:
+        return claude_hook.cache_count(now) or 0
+    except Exception as exc:     # the report card must still print
+        claude_hook._warn(f"shield: verdict cache could not be read ({type(exc).__name__})")
+        return 0
+
+
 def _wrap(text, indent, width):
     return textwrap.wrap(text, width=width, initial_indent=indent,
                          subsequent_indent=" " * len(indent)) or [indent.rstrip()]
@@ -177,6 +186,10 @@ def render(data, color=False, width=WIDTH):
         age_text = f"updated about {int(age)}h ago"
     out.append(row(f"blocklist: {size_text} · {age_text}"))
     out.append(row(cve_line))
+    cached = _cached_verdicts(now)
+    if cached:
+        out.append(row(f"local verdict cache: {cached} verdict{'s' if cached != 1 else ''} "
+                       "(used only when a check cannot run)"))
     out.append(row(hook))
     out.append("└" + "─" * (width - 2) + "┘")
 

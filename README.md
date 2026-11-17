@@ -255,6 +255,68 @@ paths or your account token. Nothing else is contacted by `--refresh`, and
 redirects are refused. Only ids, version numbers and severity words from OSV
 are shown; advisory text is not.
 
+## Local verdict cache
+
+**What it does:** when the Claude Code hook has positively verified an exact
+release — the blocklist lookup completed and found no match, and the
+known-vulnerability check completed and held nothing — it records that in
+`~/.stillrunning/verdicts.db` (SQLite; file 0600, folder 0700), keyed to
+ecosystem + name + exact version + artifact hash, with the time, the
+blocklist feed age, the vulnerability result and the stillrunning version.
+If the same ecosystem + name + version + hash comes up again and the live
+check **cannot complete** (stillrunning.io unreachable, free allowance used
+up, a timeout, OSV.dev unreachable), the hook answers from that record
+instead of asking you:
+
+```
+🛡 stillrunning ✓ six 1.16.0 (pip) — no known threat (verified on this machine 3h ago; not re-checked now)
+```
+
+It counts as "no known threat" in `stillrunning shield`, with an evidence line
+saying it came from the local cache. `stillrunning shield` also shows how many
+unexpired verdicts are on this machine.
+
+**What it never does:** the live checks always run first, and any answer they
+give wins. The cache never passes a package on the blocklist (the list that
+ships with stillrunning, or any live answer — a live "listed" deletes the
+record), a version with a critical or unknown-severity vulnerability (from the
+live check or from the saved `cve_state.json`), a name the registry says does
+not exist, an answer from the server that the hook did not understand, a
+range / tag / `--pre` / constraints install, a different version, a different
+hash, or a command that also has any other hold (custom index, web address or
+git URL, local file that is not there, unreadable requirements file,
+protection change, a command the hook cannot read). Those are put to you
+exactly as before. It never makes a network call and nothing in it leaves
+the machine.
+
+**Where the hash comes from — and why it will rarely apply:** only from a
+`--hash=sha256:…` (or sha384 / sha512) pin on an exact `name==version` line of
+a requirements file the hook reads — in practice, the output of
+`pip-compile --generate-hashes` or `uv pip compile --generate-hashes` — and
+only when the command is one whose installer checks that pin: `pip install`
+(`python -m pip install`; once any line has `--hash`, pip requires and checks
+hashes for the whole install, and pip has no switch that turns this off) or
+`uv pip install` / `uv pip sync` without `--no-verify-hashes` /
+`--no-require-hashes` and without `UV_NO_VERIFY_HASHES` set (inline, exported,
+or in Claude Code's environment). Older uv releases did not check hashes
+unless asked; the hook cannot see which uv is installed. `uv add -r`, `pip
+download` / `pip wheel`, `pipenv`, `poetry`, `pdm`, `pipx`, `uvx`,
+`easy_install`, npm, lockfile installs and local files get **no hash**.
+Nothing is fetched to get a hash. **Without such a pin the cache does not
+apply at all** (nothing stored, nothing answered): for a typical Claude Code
+session — `pip install x`, `npm install x`, `poetry add x`, `uvx tool` — it
+will almost never apply. The same pin written twice with different hashes
+counts as no hash.
+
+**Expiry:** 24 hours by default; `STILLRUNNING_CACHE_TTL_HOURS` changes it, up
+to 7 days. An expired verdict never passes; the next completed check stores a
+fresh one.
+
+**Switch:** `STILLRUNNING_CACHE=0` (or `false` / `off`) in the environment
+Claude Code runs in turns it off completely: nothing is read or written.
+An unreadable or corrupt `verdicts.db` is treated as empty (with a warning)
+and set aside as `verdicts.db.corrupt` on the next write.
+
 ## Known limitations
 
 What it does not cover, stated plainly. These were either found by the
@@ -262,6 +324,17 @@ independent reviews and accepted, or are outside what a command-reading hook
 can do.
 
 - **The CVE state file is trusted as written.** Every reader checks that it is internally consistent (totals, completeness, folder, times), but someone who can already write to `~/.stillrunning` can write a consistent file that reads CLEAR. Only a signature would stop that.
+- **The local verdict cache can be one day behind the blocklist.** A package
+  added to the blocklist after this machine verified it is still answered from
+  the cache while the live check cannot complete (offline, quota, timeout),
+  until the verdict expires (24 h by default, at most 7 days). The same holds
+  for a vulnerability published after the verdict. Once a live answer gets
+  through, it wins and the record is deleted. Someone who can already write to
+  `~/.stillrunning` can also write a verdict; the hook asks before any command
+  that touches that folder, but nothing signs the file. A `verdicts.db` (or its
+  folder) that another account could write is never used: it is moved aside as
+  `verdicts.db.untrusted`. The cache only applies to `--hash` requirements lines
+  installed by an installer that checks them (see "Local verdict cache").
 - **Only reported threats.** It matches names against a list of packages
   someone has already reported as malicious. A new malicious package nobody
   has reported yet reads "no known threat". Brand-new and rarely downloaded
@@ -412,6 +485,8 @@ RSS feed: [stillrunning.io/security-advisories/rss.xml](https://stillrunning.io/
   `--no-telemetry`.
 - **The hook's decision log** (`~/.stillrunning/hook_decisions.jsonl`, owner-only)
   stays on your machine.
+- **The local verdict cache** (`~/.stillrunning/verdicts.db`, owner-only) stays
+  on your machine; it is never sent or shared.
 
 ## Configuration
 
@@ -424,6 +499,8 @@ RSS feed: [stillrunning.io/security-advisories/rss.xml](https://stillrunning.io/
 | `STILLRUNNING_ALLOW_UNVERIFIED=1` | Install packages that could not be checked without asking (a warning is printed every time). Default: ask, or stop when nobody is at the keyboard. It never installs a package that is on the blocklist, and it does not apply when only some versions of a package are listed |
 | `STILLRUNNING_FAIL_CLOSED=1` | Wrappers always stop (never ask) when a package could not be checked |
 | `STILLRUNNING_HOOK_STRICT=1` | Claude Code hook denies instead of asking when a package could not be checked |
+| `STILLRUNNING_CACHE=0` | Turn the Claude Code hook's local verdict cache off (no read, no write). Default on |
+| `STILLRUNNING_CACHE_TTL_HOURS=24` | How long a local verdict is used (hours, at most 168) |
 | `STILLRUNNING_TRUSTED_INDEX=<url>` | A package index (`PIP_INDEX_URL` …) the Claude Code hook should not ask about |
 | `STILLRUNNING_COLOR=1` | ANSI colour in the Claude Code hook's lines (the status line and `shield` colour themselves; `NO_COLOR` turns it off) |
 
