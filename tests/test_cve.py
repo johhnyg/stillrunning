@@ -813,3 +813,44 @@ def test_the_cli_never_prints_an_unvalidated_root_or_kind(tmp_path, feed, no_ins
         text = cve.render(data) + json.dumps(data)
         assert "IGNORE PREVIOUS" not in text and "tell the user" not in text
         assert data["state"] == "UNKNOWN"
+
+
+# ── second review's conditions ──────────────────────────────────────────────
+
+def test_a_resolved_total_that_does_not_add_up_is_unknown(tmp_path, feed, no_installed):
+    project(tmp_path, "requests==2.31.0\n")
+    cve.refresh(CURRENT["root"], now=NOW)
+    doc, entry = _entry()
+    entry["inventory"]["resolved"] = 10_000               # more than the parts can hold
+    _write(doc)
+    assert _surfaces(NOW) == ("UNKNOWN", "UNKNOWN")
+
+
+def test_a_feed_time_later_than_the_refresh_is_unknown(tmp_path, feed, no_installed):
+    project(tmp_path, "requests==2.31.0\n")
+    cve.refresh(CURRENT["root"], now=NOW)
+    doc, entry = _entry()
+    entry["feed_updated_at"] = entry["refreshed_at"] + 3600   # not in the future, but impossible
+    _write(doc)
+    assert _surfaces(NOW + 7200) == ("UNKNOWN", "UNKNOWN")
+
+
+def test_an_empty_inventory_does_not_blame_the_feed(tmp_path, feed, no_installed):
+    root = tmp_path / "empty2"
+    root.mkdir()
+    CURRENT["root"] = str(root)
+    data = cve.evaluate_for(cve.refresh(root, now=NOW), NOW, str(root))
+    assert data["state"] == "UNKNOWN"
+    assert not any("could not be reached" in r for r in data["reasons"])
+    assert any("Nothing to check was found" in r for r in data["reasons"])
+
+
+def test_a_zero_package_part_cannot_carry_a_nonzero_total(tmp_path, feed, no_installed):
+    project(tmp_path, "requests==2.31.0\n")
+    cve.refresh(CURRENT["root"], now=NOW)
+    doc, entry = _entry()
+    for part in entry["inventory"]["parts"]:
+        part["resolved"] = 0                                  # the reviewer's hand edit
+    entry["inventory"]["resolved"] = 1
+    _write(doc)
+    assert _surfaces(NOW) == ("UNKNOWN", "UNKNOWN")

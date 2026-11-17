@@ -462,7 +462,12 @@ def evaluate_for(entry, now, root):
                   and (chk.get("complete") is True) == chk_body
                   and all(summary.get(k) == counts[k] for k in counts)
                   and summary.get("inventory_complete") is inv_body
-                  and summary.get("check_complete") is chk_body)
+                  and summary.get("check_complete") is chk_body
+                  # review 2: totals must add up, and the feed time cannot
+                  # be later than the refresh that recorded it
+                  and resolved <= sum(p["resolved"] for p in parts)
+                  and (resolved == 0) == (sum(p["resolved"] for p in parts) == 0)
+                  and (feed is None or feed <= refreshed + FUTURE_SLACK_S))
     modified = entry.get("newest_modified")
     out.update(refreshed_at=refreshed, feed_updated_at=feed,
                newest_modified=modified if isinstance(modified, str)
@@ -478,7 +483,8 @@ def evaluate_for(entry, now, root):
     age = None if feed is None else max(0.0, now - feed)
     out["feed_age_hours"] = None if age is None else round(age / 3600, 1)
     if feed is None:
-        reasons.append("The feed could not be reached at the last refresh.")
+        if resolved:      # with nothing to ask about, the feed was never asked
+            reasons.append("The feed could not be reached at the last refresh.")
     elif age > FRESH_S:
         reasons.append(f"The feed is {int(age // 3600)}h old (older than 24h).")
     if not inv_body:

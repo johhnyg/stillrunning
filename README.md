@@ -261,6 +261,7 @@ What it does not cover, stated plainly. These were either found by the
 independent reviews and accepted, or are outside what a command-reading hook
 can do.
 
+- **The CVE state file is trusted as written.** Every reader checks that it is internally consistent (totals, completeness, folder, times), but someone who can already write to `~/.stillrunning` can write a consistent file that reads CLEAR. Only a signature would stop that.
 - **Only reported threats.** It matches names against a list of packages
   someone has already reported as malicious. A new malicious package nobody
   has reported yet reads "no known threat". Brand-new and rarely downloaded

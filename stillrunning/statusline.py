@@ -139,7 +139,10 @@ def cve_segment(path=None, now=None, cwd=None):
                   and (chk.get("complete") is True) == chk_body
                   and all(summary.get(k) == n for k, n in counts.items())
                   and summary.get("inventory_complete") is inv_body
-                  and summary.get("check_complete") is chk_body)
+                  and summary.get("check_complete") is chk_body
+                  and resolved <= sum(p["resolved"] for p in parts if _part_ok(p))
+                  and (resolved == 0) == (sum(p["resolved"] for p in parts if _part_ok(p)) == 0)
+                  and (feed is None or feed <= refreshed + CVE_FUTURE_S))
     if not consistent:
         return "UNKNOWN", "unknown", "state inconsistent", "unknown"
     if any(t is not None and t > now + CVE_FUTURE_S for t in (feed, refreshed)):
