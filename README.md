@@ -1,30 +1,59 @@
 # stillrunning
 
-> Supply chain security for developers and AI coding agents.
-> Active protection against 200,000+ verified malicious packages from 8 threat intelligence sources.
+> Checks the packages you and your AI coding agent install against a list of
+> about 236,000 packages publicly reported as malicious (OSV and other public
+> advisories), before they install. It blocks what is on the list and asks you
+> about what it cannot check. It does not catch a malicious package nobody has
+> reported yet.
 
 [![PyPI version](https://img.shields.io/pypi/v/stillrunning)](https://pypi.org/project/stillrunning/)
 ![Protected by stillrunning](https://stillrunning.io/badge/protected)
 ![Python](https://img.shields.io/badge/python-3.8+-green)
 ![License](https://img.shields.io/badge/license-MIT-blue)
 
-## What's new in v2.8
+## What's new (security audit release, November 2026)
 
-- **Async scan endpoint** — `POST /api/scan/async` for non-blocking scans
-- **Version-aware AI cache** — cache keyed by `(package, version)` tuple
-- **Source tracking** — every blocklist entry records where it came from
-- **OSV.dev bulk ingestion** — 222k malicious packages from PyPI and npm
-- **Registry liveness checking** — marks packages removed from registries
+- **Claude Code hook** that looks up every package a command would install,
+  with a one-line answer and a plain-English reason for each
+- **Fail-closed by design** (below): what cannot be checked is put to you
+- **Report card** (`stillrunning shield`), **status line**, and side-panel data
+  (`stillrunning panel`)
+- Six rounds of independent adversarial review before release; what they
+  found is listed under "What it catches" and "Known limitations"
 
-## What it protects against
+## The principle: fail closed
 
-| Threat Class | Example |
-|-------------|---------|
-| Typosquats | `reqeusts`, `colourma`, `djanga` |
-| Malicious packages | Pre/post-install scripts stealing credentials |
-| Prompt injection | README-based attacks targeting AI agents |
-| Dependency confusion | Internal package names registered publicly |
-| Hallucinated packages | AI-suggested packages that don't exist (then claimed) |
+- A package **on the blocklist** is refused.
+- A package that **could not be checked** — the server unreachable, the
+  free allowance used up, a name that is not on the registry, a command the
+  hook cannot read — is **put to you**, never passed silently. `STILLRUNNING_HOOK_STRICT=1`
+  refuses instead of asking.
+- If the hook **misreads a command** (an option it does not know, an odd
+  spelling), the words it could not place are still looked up on the
+  blocklist, so a misreading errs toward blocking.
+- "No known threat" means the name is not on the list. It is not a
+  statement that the package is harmless.
+
+## What it catches
+
+What the hook recognises as an install and looks up, including the
+spellings that independent reviewers used to try to get a blocked package
+past it (each one is now a test):
+
+| You or your agent types | What happens |
+|---|---|
+| `pip install <listed package>` (pip, pip3, `python -m pip`, uv, poetry, pdm, pipenv, pipx, uvx, npm, pnpm, yarn, bun, npx) | Blocked, with the advisory id |
+| A one-letter look-alike of a popular name (`reqeusts`) | Blocked if listed, otherwise asked about |
+| A name that is not on the registry (an AI-invented name) | Asked about |
+| A listed **version** (`litellm==1.82.8`, `axios@1.14.1`) | Blocked; a range or tag for such a package is asked about |
+| A requirements file, in this folder or one reached by `cd` / `pushd` / a subshell | Every name in it is looked up |
+| Clustered flags (`pip install -Ur requirements.txt`), notebook cells (`!pip`, `%pip`) | Read correctly |
+| Behind `sudo -n`, `env`, `time -p`, `nohup`, `xargs`, `poetry run`, `uv run`, any other prefix | Looked up |
+| Inside `sh -c '…'`, `bash -euo pipefail <<EOF`, `eval`, a pipe into a shell, a variable holding the command | Looked up |
+| A blocked name given as an option's value (`pnpm add -w X`, `uv tool install ruff --with X`, `uvx --constraints c.txt X`) | Blocked |
+| Plugin and tool installs (`poetry self add`, `pdm plugin add`, `pipx runpip`, `uv tool install`) | Looked up |
+| A different spelling of a listed name (`Evil_Pkg`, `evil.pkg`) | Matched (one name rule, as pip itself applies) |
+| Changes to stillrunning's own protection, or to where packages download from | Asked about (see below) |
 
 ## Supported package managers
 
@@ -60,6 +89,21 @@ Nothing is checked until a layer in `stillrunning status` says ON. Without an
 account you are on the anonymous free tier: a limited number of lookups per
 day, after which each install asks you first instead of being looked up.
 
+### Run, restart, remove
+
+- **Turn on / update the Claude Code hook:** `stillrunning --hook-claude-code`
+  (add `--statusline` for the status line). Run it again after upgrading
+  stillrunning; it replaces its own entry and leaves your other settings alone.
+  New Claude Code sessions pick it up; restart a running one to be sure.
+- **Check it is working:** `stillrunning status` (each layer ON / OFF / NOT
+  VERIFIED, and why) and `stillrunning --doctor`.
+- **See what it did:** `stillrunning shield`.
+- **Terminal wrappers** (outside Claude Code): `stillrunning shell-install`,
+  then open a new shell.
+- **Remove:** `stillrunning --uninstall-hook-claude-code` restores your
+  settings file byte for byte; `stillrunning shell-uninstall` removes the
+  wrappers; then `pip uninstall stillrunning`.
+
 ## Import protection
 
 ```python
@@ -68,7 +112,10 @@ import stillrunning.hook  # Blocks malicious imports at runtime
 
 ## AI agent integrations
 
-Works with: Claude Code, Cursor, Devin, Replit, GitHub Copilot, Windsurf, Aider
+- **Claude Code:** the hook below — every install is looked up before it runs.
+- **Other agents and plain terminals** (Cursor, Aider, a CI job): the terminal
+  wrappers (`stillrunning shell-install`) and the MCP tool. Weaker: see
+  "Known limitations".
 
 Setup: [stillrunning.io/agent-setup](https://stillrunning.io/agent-setup)
 
@@ -134,8 +181,18 @@ so this adds no questions. Two limits to that:
   there. Any other value (`-t vendor`, `-w web`) is asked about by name, which
   means that one word is sent to stillrunning.io like any package name.
 
-What it cannot do, stated plainly:
+## Known limitations
 
+What it does not cover, stated plainly. These were either found by the
+independent reviews and accepted, or are outside what a command-reading hook
+can do.
+
+- **Only reported threats.** It matches names against a list of packages
+  someone has already reported as malicious. A new malicious package nobody
+  has reported yet reads "no known threat". Brand-new and rarely downloaded
+  packages are not flagged.
+- **Not vulnerabilities.** It does not check packages for known CVEs (bugs in
+  honest packages); that is a different feature, not in this release.
 - **What the hook does not see.** It reads the text of the command Claude
   Code is about to run, nothing else. It does not see an install started from
   inside a program (a Python or Node script, a here-document handed to
@@ -176,6 +233,21 @@ What it cannot do, stated plainly:
   your own choice, so the wrappers honour it for *unverified* packages; a
   package on the blocklist is still stopped. Other AI agents get this layer
   only — it is a seatbelt, not a sandbox.
+- **Option values are sent by name.** A word in an install command that could
+  be a package name (`--filter web`, `uv add --package web`) is looked up on
+  the blocklist, which sends that word to stillrunning.io. This is what makes
+  a misread flag fail toward blocking; the cost is extra lookups of folder
+  and workspace names.
+- **Wording after an unknown option.** For `npx --some-unknown-option v tool`
+  the ✓ line can name the option's value instead of the tool. The tool is
+  still checked against the blocklist.
+- **Some secrets can reach the local log.** The hook removes credentials from
+  the commands it records, but a few spellings (`vault login TOKEN`,
+  `heroku auth:token`, `echo S | sudo -S`) are not recognised. The log is
+  readable only by you and is never uploaded.
+- **Platforms.** Tested on Linux only (table below).
+- **The GitHub Action** checks Python requirements; for npm it reports the
+  scan as incomplete rather than checking scoped names.
 
 ### Claude Code MCP server
 
@@ -239,10 +311,15 @@ RSS feed: [stillrunning.io/security-advisories/rss.xml](https://stillrunning.io/
 
 ## Privacy
 
-Heartbeats contain: command name, version, OS, anonymous UUID, timestamp.
-**No code, file paths, or package names are sent.**
-
-Disable: `STILLRUNNING_NO_TELEMETRY=1` or `--no-telemetry` flag.
+- **Lookups** send the package name, ecosystem and (when given) version to
+  stillrunning.io — never file contents. Without an account no token is sent.
+  Words that could be package names in an install command are sent the same
+  way (see "Known limitations").
+- **Heartbeats** contain: command name, version, OS, anonymous UUID,
+  timestamp. No code or file paths. Disable: `STILLRUNNING_NO_TELEMETRY=1` or
+  `--no-telemetry`.
+- **The hook's decision log** (`~/.stillrunning/hook_decisions.jsonl`, owner-only)
+  stays on your machine.
 
 ## Configuration
 

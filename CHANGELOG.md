@@ -1,5 +1,26 @@
 # Changelog
 
+## Security audit release — committed 2026-11-17 (`7fd5832`), not yet published to PyPI
+
+Everything below under "unreleased" ships together. Six rounds of independent
+adversarial review; the sixth approved with conditions, recorded under
+"Known limitations" in README.md.
+
+### Fourth to sixth review fixes
+- A misread flag fails toward blocking: words the parser did not read as a
+  package (an option's value, a word after an unknown subcommand, the word after
+  an unknown option of a runner) are looked up on the blocklist; a hit blocks.
+- Per-tool flag tables (pnpm `-w` is a switch, npm `-w` takes a value; uv's own
+  options for `uv pip`, `uv add`, `uvx`, `uv tool run`, pipx); clustered pip
+  flags (`-Ur file`); notebook `!pip` / `%pip`; shells with options reading
+  stdin (`bash -euo pipefail <<EOF`); plugin and tool installs.
+- Self-protection: shell startup files that set `STILLRUNNING_*`, reinstalling,
+  downgrading or uninstalling stillrunning, Claude Code managed settings.
+- Redaction: tokens fed on stdin (`--with-token <<< X`, `| … --password-stdin`)
+  and several CLI secret flags.
+- README: "What it catches", "The principle: fail closed", "Known limitations",
+  "Run, restart, remove"; header and privacy text describe what it does.
+
 ### Third review fixes (unreleased)
 - "Don't ask again for this exact command" is switched off (`REMEMBER_ENABLED = False`);
   `stillrunning remember` refuses. The code and its tests stay for a redesign.
