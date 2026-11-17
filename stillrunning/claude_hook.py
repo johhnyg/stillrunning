@@ -2332,11 +2332,11 @@ def _dispatch_program(prog, args, res, cwd, read_file, exists, raw):
                         _parse_pip_requirement(value, res, raw)
         if sub == "pip":
             j = _subcommand(rest, {"install", "sync", "compile"})
-            # uv pip install / sync check --hash pins unless told not to
-            res.hash_enforced = (j is not None and rest[j] in ("install", "sync")
-                                 and not res.hash_off_env
-                                 and not any(a.split("=", 1)[0] in _HASH_OFF_FLAGS
-                                             for a in args))
+            # review 2 (R1b): uv can switch hash checking off from a config file
+            # (uv.toml / pyproject [tool.uv.pip] verify-hashes = false, user or
+            # system level) that the hook does not see, so a uv hash never binds
+            # the artifact for the cache. Only pip, which has no off switch, does.
+            res.hash_enforced = False
             try:
                 if j is not None and rest[j] == "install":
                     _parse_pip_args(rest[j + 1:], res, cwd, read_file, raw, uv=True)

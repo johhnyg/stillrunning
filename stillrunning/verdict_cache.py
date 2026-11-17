@@ -176,6 +176,8 @@ def _check_file(path):
         raise _Unusable("not a regular file")
     if _foreign(st):
         raise _Untrusted("writable by another account or not owned by this one")
+    if st.st_nlink > 1:
+        raise _Untrusted("has another name (hard link) elsewhere")
     if st.st_mode & 0o044:
         os.chmod(path, 0o600)       # readable by others only: tighten, contents still ours
 

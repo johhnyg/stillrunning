@@ -606,8 +606,6 @@ def test_uv_no_verify_hashes_in_claude_codes_environment(tmp_path):
     "pip install -r requirements.txt",
     "pip3 install -r requirements.txt",
     "python3 -m pip install -r requirements.txt",
-    "uv pip install -r requirements.txt",
-    "uv pip sync requirements.txt",
 ])
 def test_enforcing_installers_keep_the_hash(tmp_path, command):
     req(tmp_path, pin())
@@ -684,3 +682,31 @@ def test_each_package_counts_once_as_could_not_check(tmp_path):
     assert shield.collect(now=T0)["today"]["needs_approval"] == 2
     from stillrunning import statusline
     assert "2 couldn't check" in statusline.render(now=T0, color=False, width=200)
+
+
+# ── review 2 (R1b): uv can disable hash checking from config the hook cannot see ──
+
+@pytest.mark.parametrize("command", [
+    "uv pip install -r req.txt",
+    "uv pip sync req.txt",
+])
+def test_uv_installs_never_carry_a_cache_hash(command, tmp_path):
+    (tmp_path / "req.txt").write_text("six==1.16.0 --hash=sha256:" + "a" * 64 + "\n")
+    (tmp_path / "uv.toml").write_text("[pip]\nverify-hashes = false\n")
+    parsed = ch.parse_install_commands(command, cwd=str(tmp_path))
+    six = [p for p in parsed["packages"] if p["name"] == "six"]
+    assert six and not any(p.get("hash") for p in six)
+
+
+def test_a_hard_linked_db_is_not_used(tmp_path, monkeypatch):
+    import os
+    from stillrunning import verdict_cache as vc
+    monkeypatch.setenv("HOME", str(tmp_path))
+    state = tmp_path / ".stillrunning"
+    state.mkdir(mode=0o700)
+    db = state / "verdicts.db"
+    db.write_bytes(b"")
+    os.chmod(db, 0o600)
+    os.link(db, tmp_path / "other-name")
+    with pytest.raises(vc._Untrusted):
+        vc._check_file(str(db))

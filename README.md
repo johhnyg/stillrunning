@@ -295,11 +295,11 @@ a requirements file the hook reads — in practice, the output of
 `pip-compile --generate-hashes` or `uv pip compile --generate-hashes` — and
 only when the command is one whose installer checks that pin: `pip install`
 (`python -m pip install`; once any line has `--hash`, pip requires and checks
-hashes for the whole install, and pip has no switch that turns this off) or
-`uv pip install` / `uv pip sync` without `--no-verify-hashes` /
-`--no-require-hashes` and without `UV_NO_VERIFY_HASHES` set (inline, exported,
-or in Claude Code's environment). Older uv releases did not check hashes
-unless asked; the hook cannot see which uv is installed. `uv add -r`, `pip
+hashes for the whole install, and pip has no switch that turns this off).
+**uv gets no hash**: uv can turn hash checking off from a config file
+(`uv.toml`, `[tool.uv.pip]` in `pyproject.toml`, user or system level) that
+the hook does not read, so a uv install never earns a cached pass. `uv pip
+install`, `uv pip sync`, `uv add -r`, `pip
 download` / `pip wheel`, `pipenv`, `poetry`, `pdm`, `pipx`, `uvx`,
 `easy_install`, npm, lockfile installs and local files get **no hash**.
 Nothing is fetched to get a hash. **Without such a pin the cache does not
