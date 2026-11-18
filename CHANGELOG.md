@@ -7,7 +7,11 @@
 > installer is not tested. SIEM, SSO and compliance were tier flags only,
 > never built.
 
-## 2.14.0 — built 2026-11-17, not yet published to PyPI (PyPI: 2.13.7)
+## 2.14.0 — November 18, 2026
+
+Fixes the 2.13.7 Claude Code hook, which did not stop blocklisted packages (it
+acted only on a DANGEROUS answer; the server answers BLOCKED). Upgrade with
+`pip install -U stillrunning`.
 
 Contains everything below down to and including "security audit release":
 the local verdict cache, CVE monitoring, and the Claude Code hook.
@@ -78,7 +82,7 @@ check, not attack prevention.
 
 ### Security audit release
 
-Everything below under "unreleased" ships together in 2.14.0. Six rounds of independent
+Everything below under "unreleased" shipped together in 2.14.0. Six rounds of independent
 adversarial review; the sixth approved with conditions, recorded under
 "Known limitations" in README.md.
 
