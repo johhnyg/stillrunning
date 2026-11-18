@@ -682,32 +682,22 @@ RSS feed: [stillrunning.io/security-advisories/rss.xml](https://stillrunning.io/
 **Personal** ($9/mo)
 - Everything in Free
 - 100 scans/day
-- Telegram + email alerts
-- Email support
 
 **Basic** ($29/mo)
 - Everything in Personal
 - yourname.stillrunning.io dashboard
-- Monday weekly reports
-- Uptime milestone alerts
-- File integrity tripwire
 - 3 machines
 
 **Ai** ($49/mo)
 - Everything in Basic
-- AI crash diagnosis
-- Reply to alerts - AI answers
-- Crash pattern detection
-- AI Agent Integrity Monitor
+- AI source review of pip packages (100/day, on request)
+- AI Agent Integrity Monitor (not available: runs only on the stillrunning server, not shipped to customers)
 - Unlimited machines
-- Priority support
 
 **Enterprise** ($499/mo)
 - Everything in AI
-- Dedicated account manager
-- Custom integrations
-- SLA guarantee
-- On-premises option
+- 10,000 AI package reviews/day
+- Team roles (admin / responder / viewer)
 <!-- END:feature-list -->
 
 ## Badge
@@ -726,5 +716,3 @@ RSS feed: [stillrunning.io/security-advisories/rss.xml](https://stillrunning.io/
 ## License
 
 MIT License
-
-Patent Pending — US Provisional Application filed April 12, 2026

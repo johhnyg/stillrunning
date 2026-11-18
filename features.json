@@ -8,7 +8,7 @@
       "machines": 1,
       "dashboard": false,
       "features": [
-        "Guard daemon (always-on)",
+        "Guard process monitor (Linux only)",
         "npm/pip intercept",
         "Live threat rules (hourly updates)"
       ]
@@ -20,9 +20,7 @@
       "dashboard": false,
       "features": [
         "Everything in Free",
-        "100 scans/day",
-        "Telegram + email alerts",
-        "Email support"
+        "100 scans/day"
       ]
     },
     "basic": {
@@ -33,9 +31,6 @@
       "features": [
         "Everything in Personal",
         "yourname.stillrunning.io dashboard",
-        "Monday weekly reports",
-        "Uptime milestone alerts",
-        "File integrity tripwire",
         "3 machines"
       ]
     },
@@ -46,12 +41,9 @@
       "dashboard": true,
       "features": [
         "Everything in Basic",
-        "AI crash diagnosis",
-        "Reply to alerts - AI answers",
-        "Crash pattern detection",
-        "AI Agent Integrity Monitor",
-        "Unlimited machines",
-        "Priority support"
+        "AI source review of pip packages (100/day, on request)",
+        "AI Agent Integrity Monitor (not available: runs only on the stillrunning server, not shipped to customers)",
+        "Unlimited machines"
       ]
     },
     "enterprise": {
@@ -61,14 +53,12 @@
       "dashboard": true,
       "features": [
         "Everything in AI",
-        "Dedicated account manager",
-        "Custom integrations",
-        "SLA guarantee",
-        "On-premises option"
+        "10,000 AI package reviews/day",
+        "Team roles (admin / responder / viewer)"
       ]
     }
   },
-  "verify_checks": 73,
-  "last_session": 129,
-  "blocklist_count": 234530
+  "verify_checks": 111,
+  "last_session": 135,
+  "blocklist_count": 236485
 }

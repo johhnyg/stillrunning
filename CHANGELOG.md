@@ -1,5 +1,12 @@
 # Changelog
 
+> Older entries record what each release said at the time. Not available
+> today: Telegram approve/deny buttons ("interactive approvals"), Telegram
+> two-way control, two-way email and reply-to-alert AI answers, the Monday
+> weekly report, and email alerts (mail is off on the server). The Windows
+> installer is not tested. SIEM, SSO and compliance were tier flags only,
+> never built.
+
 ## 2.14.0 — built 2026-11-17, not yet published to PyPI (PyPI: 2.13.7)
 
 Contains everything below down to and including "security audit release":
@@ -498,7 +505,7 @@ This helps us understand how many agents are actually running. Previously we had
   - `check_package` tool for pre-install verification
   - Add to Claude Code config for automatic package checking
   - Rate limited by tier (100/day AI, unlimited Enterprise)
-- **Interactive approvals** — Telegram allow/deny with one tap
+- **Interactive approvals** — Telegram allow/deny with one tap (not available today)
   - UNKNOWN packages: blocked pending 60s approval
   - SUSPICIOUS packages: blocked with research link
   - DANGEROUS packages: hard block, no override
@@ -527,7 +534,7 @@ This helps us understand how many agents are actually running. Previously we had
 - Personal: process monitor, restart, Telegram alerts
 - Basic: + file integrity, tripwire, honeypot
 - AI: + AI package review (server-side)
-- Enterprise: + unlimited scans, SIEM, SSO, compliance
+- Enterprise: + unlimited scans, SIEM, SSO, compliance (tier flags only; never built)
 
 ## v1.5.0 — April 2026
 
@@ -539,13 +546,13 @@ This helps us understand how many agents are actually running. Previously we had
 - Advisor upgrade — Sonnet executor + Opus advisor pattern for AI operations
 - Chrome extension scaffold — green/red status dot in browser
 - `/scan` route — customer file upload threat scanner (free tier 10/day)
-- North Korea supply chain attack response — 1,700+ malicious packages blocked
+- North Korea supply chain attack response (the "1,700+ blocked" figure is withdrawn: it is not backed by the blocklist data)
 
 ## v1.4.0 — April 2026
 
-- Email alerts — no Telegram required
-- Two-way email — reply to alerts, AI answers from live data
-- Monday weekly report — automatic every week
+- Email alerts — no Telegram required (not available today: mail is off on the server)
+- Two-way email — reply to alerts, AI answers from live data (not available today)
+- Monday weekly report — automatic every week (not available today)
 - Uptime milestone alerts — 7, 30, 60, 90, 365 days
 - Threat feed — new CVEs auto-pushed to every agent
 - Crash pattern AI — detects root cause after 5 events
@@ -559,7 +566,7 @@ This helps us understand how many agents are actually running. Previously we had
 
 - Shield security system
 - Multi-server support
-- Telegram two-way control
+- Telegram two-way control (not available today)
 - AI crash diagnosis (AI tier)
 - Daily health audit (AI tier)
 
