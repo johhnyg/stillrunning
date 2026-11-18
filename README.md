@@ -7,6 +7,7 @@ refused; anything it could not check is put to you. It does not catch a
 malicious package nobody has reported yet.
 
 [![PyPI version](https://img.shields.io/pypi/v/stillrunning)](https://pypi.org/project/stillrunning/)
+[![Glama score](https://glama.ai/api/github/johhnyg/stillrunning/score.svg)](https://glama.ai/mcp/connectors/io.stillrunning/stillrunning)
 ![Protected by stillrunning](https://stillrunning.io/badge/protected)
 ![Python](https://img.shields.io/badge/python-3.8+-green)
 ![License](https://img.shields.io/badge/license-MIT-blue)
