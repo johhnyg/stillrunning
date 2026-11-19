@@ -8,12 +8,13 @@ Disable by setting telemetry: false in stillrunning.yaml.
 Event types:
 - install: First run (one-time)
 - active: Running agent (every 6h)
-- intercept: Package was intercepted (per-event)
+- cli: CLI command name only (send_cli_ping)
 
 Dev/CI exclusion: Set STILLRUNNING_DEV=1 to flag as internal usage.
 """
 
 from stillrunning.apibase import api_base, api_url
+import atexit
 import hashlib
 import json
 import os
@@ -27,6 +28,7 @@ from datetime import datetime
 
 HEARTBEAT_URL = api_url("/api/heartbeat/anonymous")
 HEARTBEAT_INTERVAL_SEC = 6 * 60 * 60  # 6 hours
+CLI_PING_FLUSH_SEC = 2.0
 
 _start_time = time.time()
 _last_crash_ts = None
@@ -95,36 +97,6 @@ def send_install_event(config: dict, version: str) -> bool:
     return _send_heartbeat(config, version, event_type="install")
 
 
-def send_intercept_event(config: dict, version: str, package: str, result: str) -> bool:
-    """Send intercept event when a package is blocked/warned."""
-    machine_id = _get_hashed_machine_id(config)
-    if not machine_id:
-        return False
-
-    payload = {
-        "machine_id": machine_id,
-        "agent_version": version,
-        "os_type": sys.platform,
-        "event_type": "intercept",
-        "is_dev": is_dev_mode(),
-        "package": package,
-        "result": result,
-    }
-
-    try:
-        data = json.dumps(payload).encode("utf-8")
-        req = urllib.request.Request(
-            HEARTBEAT_URL,
-            data=data,
-            headers={"Content-Type": "application/json", "User-Agent": f"stillrunning/{version}"},
-            method="POST",
-        )
-        with urllib.request.urlopen(req, timeout=10) as resp:
-            return resp.status == 200
-    except Exception:
-        return False
-
-
 def heartbeat_loop(config: dict, version: str) -> None:
     """
     Background thread that sends heartbeats every 6 hours.
@@ -159,6 +131,15 @@ def _get_anonymous_machine_id() -> str:
     return hashlib.sha256(f"sr:{raw}".encode()).hexdigest()[:16]
 
 
+def command_label(args: list[str], known: set[str]) -> str:
+    """First CLI word if it is a known subcommand or flag name, else "other";
+    never a package name, path or option value."""
+    if not args:
+        return ""
+    word = args[0].split("=", 1)[0]
+    return word if word in known else "other"
+
+
 def send_cli_ping(version: str, command: str) -> None:
     """Fire-and-forget CLI usage ping. Non-blocking, fails silently."""
     if os.environ.get("STILLRUNNING_NO_TELEMETRY", "").lower() in ("1", "true"):
@@ -185,4 +166,8 @@ def send_cli_ping(version: str, command: str) -> None:
         except Exception:
             pass
 
-    threading.Thread(target=_send, daemon=True).start()
+    t = threading.Thread(target=_send, daemon=True)
+    t.start()
+    # Daemon threads die (or crash) mid-request at interpreter exit; fast
+    # commands like --help would otherwise never send.
+    atexit.register(t.join, CLI_PING_FLUSH_SEC)

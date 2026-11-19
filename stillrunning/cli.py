@@ -2655,13 +2655,6 @@ def _scan_package(pkg_name: str, npm: bool = False, not_latest: bool = False) ->
 
     ecosystem = "npm" if npm else "pip"
 
-    # Fire heartbeat
-    try:
-        from .telemetry import send_heartbeat_async
-        send_heartbeat_async("scan", VERSION)
-    except Exception:  # lint: allowed-silent(optional telemetry module; a scan never depends on it)
-        pass
-
     # 30-second timeout
     def timeout_handler(signum, frame):
         print("\n\033[91mERROR\033[0m: Scan timed out (30s)")
@@ -3561,14 +3554,6 @@ def _uninstall_claude_code_hook() -> None:
 
 def main_cli() -> None:
     """Entry point for the stillrunning command."""
-    # Fire-and-forget CLI telemetry (non-blocking)
-    # The Claude Code hook and status line run on every tool call / redraw:
-    # they must stay fast and make no network call of their own.
-    # `cve` talks only to api.osv.dev (and only with --refresh).
-    if sys.argv[1:2] not in (["hook"], ["statusline"], ["shield"], ["cve"]):
-        from .heartbeat import send_cli_ping
-        send_cli_ping(VERSION, " ".join(sys.argv[1:3]))
-
     import argparse
     parser = argparse.ArgumentParser(
         description="StillRunning — Lightweight process monitor with Telegram alerts"
@@ -3718,6 +3703,15 @@ def main_cli() -> None:
     subparsers.add_parser("shell-install", help="Install shell hooks for auto-activation")
     subparsers.add_parser("shell-uninstall", help="Remove shell hooks")
     subparsers.add_parser("status", help="Show status of all protection layers")
+
+    # Sent before parse_args so --help and usage errors still count.
+    # The Claude Code hook and status line run on every tool call / redraw:
+    # they must stay fast and make no network call of their own.
+    # `cve` talks only to api.osv.dev (and only with --refresh).
+    if sys.argv[1:2] not in (["hook"], ["statusline"], ["shield"], ["cve"]):
+        from .heartbeat import send_cli_ping, command_label
+        known = set(subparsers.choices) | set(parser._option_string_actions)
+        send_cli_ping(VERSION, command_label(sys.argv[1:], known))
 
     args = parser.parse_args()
 
