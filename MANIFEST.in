@@ -1,2 +1,3 @@
 prune tests
 global-exclude *.py[cod] __pycache__ *.db *.log *.pem .env*
+recursive-include stillrunning/claude_plugin *.json *.tsx *.d.ts *.md

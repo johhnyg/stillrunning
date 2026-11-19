@@ -7,6 +7,18 @@
 > installer is not tested. SIEM, SSO and compliance were tier flags only,
 > never built.
 
+## Unreleased
+
+- **Side panel for Claude Code.** The stillrunning shield panel (what the hook
+  checked, blocked and held, with plain-English reasons; hook state; CVEs in
+  installed packages) now ships inside the pip package.
+  `stillrunning --hook-claude-code`, and the hook offer in `--setup`, register
+  it in `~/.claude/settings.json` (`extraKnownMarketplaces` +
+  `enabledPlugins`, pointing at the installed package folder). Restart Claude
+  Code and type `/shield`. `--no-panel` skips it. A panel you switched off
+  stays off, and a marketplace of the same name that stillrunning did not add
+  is left alone. `--uninstall-hook-claude-code` removes it again.
+
 ## 2.14.2 — November 19, 2026
 
 Privacy fix; no change to what is checked or blocked.

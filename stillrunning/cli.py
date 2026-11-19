@@ -3519,11 +3519,11 @@ def _run_claude_code_hook() -> None:
     claude_hook.main()
 
 
-def _install_claude_code_hook(statusline: bool = False) -> None:
+def _install_claude_code_hook(statusline: bool = False, panel: bool = True) -> None:
     """Register the PreToolUse hook in ~/.claude/settings.json."""
     from . import claude_hook
     try:
-        messages = claude_hook.install(statusline=statusline)
+        messages = claude_hook.install(statusline=statusline, panel=panel)
     except (claude_hook.InstallError, OSError) as e:
         print(f"Claude Code hook NOT installed: {e}")
         sys.exit(1)
@@ -3534,7 +3534,9 @@ def _install_claude_code_hook(statusline: bool = False) -> None:
     print("You will see one line per package, for example:")
     print("  " + claude_hook.status_line("ok", "requests 2.32.3 (pip)", "no known threat", 140))
     print("Known-malicious packages are blocked; anything that cannot be checked asks you first.")
-    print("Report card: stillrunning shield")
+    print("Report card: stillrunning shield (in a terminal) or /shield (side panel in Claude Code)")
+    if not panel:
+        print("Optional side panel in Claude Code: stillrunning --hook-claude-code")
     if not statusline:
         print("Optional status line with today's counts: stillrunning --hook-claude-code --statusline")
     print("Remove: stillrunning --uninstall-hook-claude-code")
@@ -3625,6 +3627,10 @@ def main_cli() -> None:
         "--statusline", action="store_true",
         help="With --hook-claude-code: also add the shield status line "
              "(never replaces a status line you already have)"
+    )
+    parser.add_argument(
+        "--no-panel", action="store_true",
+        help="With --hook-claude-code: do not add the stillrunning shield side panel"
     )
 
     # SESSION 91: Whitelist subcommand
@@ -3788,7 +3794,7 @@ def main_cli() -> None:
 
     # SESSION 97: Handle Claude Code hook install/uninstall
     if args.hook_claude_code:
-        _install_claude_code_hook(statusline=args.statusline)
+        _install_claude_code_hook(statusline=args.statusline, panel=not args.no_panel)
         return
     elif args.uninstall_hook_claude_code:
         _uninstall_claude_code_hook()

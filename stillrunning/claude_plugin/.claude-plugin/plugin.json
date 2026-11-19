@@ -1,0 +1,11 @@
+{
+  "name": "stillrunning-shield",
+  "version": "0.1.0",
+  "description": "Side panel showing what stillrunning checked, blocked and held for approval, with plain-English reasons",
+  "types": "./types/index.d.ts",
+  "author": {
+    "name": "johhnyg"
+  },
+  "homepage": "https://github.com/johhnyg/stillrunning-shield",
+  "license": "MIT"
+}

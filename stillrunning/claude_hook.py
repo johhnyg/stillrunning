@@ -4717,6 +4717,77 @@ def statusline_command():
     return f"{shlex.quote(sys.executable)} -I -S {shlex.quote(script)}"
 
 
+# The Claude Code side panel shipped inside this package (stillrunning/claude_plugin).
+# install() registers it in settings.json as a local-folder marketplace, so a
+# pip install plus --hook-claude-code is all it takes; Claude Code loads it at
+# its next start.
+PANEL_MARKETPLACE = "stillrunning-shield"
+PANEL_PLUGIN_ID = "stillrunning-shield@stillrunning-shield"
+PANEL_REPO = "johhnyg/stillrunning-shield"
+
+
+def panel_dir():
+    return os.path.join(os.path.dirname(os.path.abspath(__file__)), "claude_plugin")
+
+
+def _is_our_panel_source(entry):
+    source = entry.get("source") if isinstance(entry, dict) else None
+    if not isinstance(source, dict):
+        return False
+    if source.get("source") == "directory":
+        path = str(source.get("path", ""))
+        return "stillrunning" in path and path.rstrip("/\\").endswith("claude_plugin")
+    return source.get("source") == "github" and source.get("repo") == PANEL_REPO
+
+
+def _add_panel(data, messages):
+    """Register the bundled side panel. Never overrides the person's own
+    choice: a panel they switched off stays off, and a marketplace of the
+    same name that is not ours is left alone."""
+    folder = panel_dir()
+    if not os.path.isfile(os.path.join(folder, ".claude-plugin", "marketplace.json")):
+        messages.append("Side panel NOT added: its files are missing from this stillrunning "
+                        "install (reinstall stillrunning).")
+        return
+    enabled = data.get("enabledPlugins", {})
+    markets = data.get("extraKnownMarketplaces", {})
+    if not isinstance(enabled, dict) or not isinstance(markets, dict):
+        messages.append("Side panel NOT added: settings.json has enabledPlugins or "
+                        "extraKnownMarketplaces in a form stillrunning does not edit.")
+        return
+    if enabled.get(PANEL_PLUGIN_ID) is False:
+        messages.append("Side panel left off (it is switched off in settings.json).")
+        return
+    current = markets.get(PANEL_MARKETPLACE)
+    if current is not None and not _is_our_panel_source(current):
+        messages.append(f"Side panel NOT added: a marketplace named {PANEL_MARKETPLACE} that "
+                        "stillrunning did not add is already in settings.json.")
+        return
+    markets[PANEL_MARKETPLACE] = {"source": {"source": "directory", "path": folder}}
+    enabled[PANEL_PLUGIN_ID] = True
+    data["extraKnownMarketplaces"] = markets
+    data["enabledPlugins"] = enabled
+    messages.append("Side panel added (stillrunning-shield): restart Claude Code, then type "
+                    "/shield to open it.")
+
+
+def _remove_panel(data):
+    """→ True when our panel registration was removed."""
+    changed = False
+    markets = data.get("extraKnownMarketplaces")
+    if isinstance(markets, dict) and _is_our_panel_source(markets.get(PANEL_MARKETPLACE)):
+        markets.pop(PANEL_MARKETPLACE)
+        changed = True
+        if not markets:
+            data.pop("extraKnownMarketplaces")
+    enabled = data.get("enabledPlugins")
+    if changed and isinstance(enabled, dict) and PANEL_PLUGIN_ID in enabled:
+        enabled.pop(PANEL_PLUGIN_ID)
+        if not enabled:
+            data.pop("enabledPlugins")
+    return changed
+
+
 def _is_ours(command):
     command = str(command)
     return (command.strip() == "stillrunning hook"
@@ -4872,7 +4943,7 @@ def _forget_receipt():
         pass
 
 
-def install(statusline=False):
+def install(statusline=False, panel=True):
     """Register the PreToolUse hook in ~/.claude/settings.json. Returns messages."""
     path = _settings_path()
     data, existed = _load_settings(path)
@@ -4902,6 +4973,8 @@ def install(statusline=False):
         else:
             data["statusLine"] = {"type": "command", "command": statusline_command()}
             messages.append("Status line installed (shield + today's checked/blocked counts).")
+    if panel:
+        _add_panel(data, messages)
     _atomic_write(path, json.dumps(data, indent=2, ensure_ascii=False) + "\n")
     _write_receipt(path, original, _sha256_file(path))
     _clean_legacy_hooks_json(messages)
@@ -4936,6 +5009,8 @@ def uninstall():
                 data.pop("hooks", None)
         if _is_our_statusline(data.get("statusLine")):
             data.pop("statusLine")
+            changed = True
+        if _remove_panel(data):
             changed = True
         if changed:
             messages.append(f"Backup: {_backup(path)}")

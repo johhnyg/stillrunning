@@ -1,0 +1,13 @@
+{
+  "name": "stillrunning-shield",
+  "owner": {
+    "name": "johhnyg"
+  },
+  "plugins": [
+    {
+      "name": "stillrunning-shield",
+      "source": "./"
+    }
+  ],
+  "description": "Claude Code side panel for the stillrunning supply-chain security client"
+}

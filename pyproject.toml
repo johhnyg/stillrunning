@@ -52,6 +52,16 @@ stillrunning-docker = "stillrunning.docker_agent:main"
 where = ["."]
 include = ["stillrunning*"]
 
+[tool.setuptools.package-data]
+# The Claude Code side panel (stillrunning-shield), registered by --hook-claude-code.
+stillrunning = [
+    "claude_plugin/README.md",
+    "claude_plugin/.claude-plugin/*.json",
+    "claude_plugin/hooks/*.json",
+    "claude_plugin/hooks/*.tsx",
+    "claude_plugin/types/*.d.ts",
+]
+
 # Changelog (most recent first):
 #
 # v1.9.0 (April 14, 2026):

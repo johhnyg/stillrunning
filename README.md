@@ -59,6 +59,12 @@ is asked about instead of passed.
 
 - **One line per package** on every install Claude Code runs (above), with a
   short plain-English reason underneath when something was refused or asked.
+- **A side panel** in Claude Code (stillrunning shield): what the hook
+  checked, blocked and held for approval, each with its reason, whether the
+  hook is on, and known CVEs in packages already installed. It ships inside
+  the pip package; `stillrunning --hook-claude-code` adds it (skip it with
+  `--no-panel`). Restart Claude Code, then type `/shield`. The panel only
+  reads: it runs `stillrunning` and draws what comes back.
 - **A status line** in Claude Code, if you turn it on:
   `stillrunning --hook-claude-code --statusline`. It never replaces a status
   line you already have. Once CVE checks have run it adds a segment such as
@@ -258,6 +264,7 @@ spellings (each one is a test):
 ```bash
 stillrunning --hook-claude-code                # registers a PreToolUse hook in ~/.claude/settings.json
 stillrunning --hook-claude-code --statusline   # also adds a status line (never replaces yours)
+stillrunning --hook-claude-code --no-panel     # hook without the /shield side panel
 stillrunning shield                            # report card: what was checked, blocked, and why
 stillrunning --uninstall-hook-claude-code
 ```
