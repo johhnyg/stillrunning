@@ -7,7 +7,9 @@
 > installer is not tested. SIEM, SSO and compliance were tier flags only,
 > never built.
 
-## Unreleased
+## 2.14.3 — November 19, 2026
+
+New: the side panel; no change to what is checked or blocked.
 
 - **Side panel for Claude Code.** The stillrunning shield panel (what the hook
   checked, blocked and held, with plain-English reasons; hook state; CVEs in

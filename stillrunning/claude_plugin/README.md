@@ -11,6 +11,19 @@ The panel only reads. It runs the `stillrunning` command (`shield --json`, `pane
 
 ## Install
 
+### With stillrunning (recommended)
+
+The panel ships inside the stillrunning pip package (2.14.3 or later):
+
+```
+pip install -U stillrunning
+stillrunning --hook-claude-code
+```
+
+Restart Claude Code, then type `/shield`. `stillrunning --hook-claude-code --no-panel` installs the hook without the panel; `stillrunning --uninstall-hook-claude-code` removes both.
+
+### From this repository
+
 At the prompt of a Claude Code terminal session:
 
 ```

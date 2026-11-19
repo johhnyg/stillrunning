@@ -1,5 +1,5 @@
 {
-  "version": "2.14.2",
+  "version": "2.14.3",
   "released": "2026-11-19",
   "tiers": {
     "free": {
@@ -59,6 +59,6 @@
     }
   },
   "verify_checks": 111,
-  "last_session": 135,
+  "last_session": 136,
   "blocklist_count": 236560
 }

@@ -31,6 +31,7 @@ Words used below:
 ```bash
 pip install stillrunning
 stillrunning --hook-claude-code   # check every install Claude Code runs (no account needed)
+                                  # + the /shield side panel (restart Claude Code to see it)
 stillrunning status               # each protection layer: ON / OFF / NOT VERIFIED, and why
 ```
 

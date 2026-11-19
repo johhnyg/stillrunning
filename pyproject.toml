@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "stillrunning"
-version = "2.14.2"
+version = "2.14.3"
 description = "Checks the pip/npm packages you or your AI coding agent install against a list of publicly reported malicious packages, before they install. Claude Code hook, terminal wrappers, CVE monitoring."
 license = {text = "MIT"}
 readme = "README.md"
