@@ -12,7 +12,7 @@ malicious package nobody has reported yet.
 ![Python](https://img.shields.io/badge/python-3.8+-green)
 ![License](https://img.shields.io/badge/license-MIT-blue)
 
-> This README describes version 2.14.1. If you have 2.13.7, upgrade
+> This README describes version 2.14.2. If you have 2.13.7, upgrade
 > (`pip install -U stillrunning`): its Claude Code hook does not stop
 > blocklisted packages. Tested on Linux.
 

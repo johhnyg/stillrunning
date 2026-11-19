@@ -7,6 +7,21 @@
 > installer is not tested. SIEM, SSO and compliance were tier flags only,
 > never built.
 
+## 2.14.2 — November 19, 2026
+
+Privacy fix; no change to what is checked or blocked.
+
+- The usage ping sent with each CLI command carried its first two words, so
+  a package name (`scan requests`) or a file path (`scan-manifest
+  /path/to/requirements.txt`) reached stillrunning.io. It now carries only
+  the command or flag name (`scan`, `scan-manifest`, `--setup`); any other
+  word is sent as `other`. Option values, package names and paths are never
+  sent. This is what the Privacy section already promised.
+- Fast commands (`--help`) give the ping up to 2 seconds to go out at exit
+  instead of dropping it mid-request.
+- Removed unused code that would have sent package names if it had ever
+  been called.
+
 ## 2.14.1 — November 19, 2026
 
 Telemetry fixes only; no change to what is checked or blocked.
