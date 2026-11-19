@@ -21,6 +21,10 @@ Telemetry fixes only; no change to what is checked or blocked.
   name. A marker at `~/.stillrunning/first_scan_sent` stops it repeating.
 - `STILLRUNNING_NO_TELEMETRY=1` now also turns off the setup and first-scan
   pings (as does `STILLRUNNING_NO_FUNNEL=1`).
+- Fix: `stillrunning --setup` (or a first run with no config) with no input
+  — CI, a pipe, a sandbox — crashed with a Python traceback. It now says
+  setup needs a terminal, points to `--autonomous`, and exits with code 2
+  (Ctrl-C exits 130).
 
 ## 2.14.0 — November 18, 2026
 

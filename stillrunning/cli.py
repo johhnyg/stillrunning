@@ -1311,7 +1311,19 @@ def _validate_email(email: str) -> bool:
 def run_setup_wizard(autonomous: bool = False) -> None:
     """Setup: the alert questions, then an honest report of what is and is
     not protected (and an offer to switch the Claude Code hook on)."""
-    _run_alert_setup(autonomous=autonomous)
+    from . import funnel
+    try:
+        _run_alert_setup(autonomous=autonomous)
+    except EOFError:
+        funnel.track_step("setup_aborted_no_input")
+        print("\n\n  Setup needs answers typed in a terminal, and none came (no input).")
+        print("  For CI or scripts, run `stillrunning --autonomous` with STILLRUNNING_* env vars.")
+        print("  Nothing was changed. Run `stillrunning --setup` in a terminal anytime.\n")
+        sys.exit(EXIT_USAGE)
+    except KeyboardInterrupt:
+        funnel.track_step("setup_aborted_interrupt")
+        print("\n\n  Setup cancelled. Run `stillrunning --setup` anytime.\n")
+        sys.exit(130)
     _finish_setup(interactive=not autonomous)
 
 

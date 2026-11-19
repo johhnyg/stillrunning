@@ -90,3 +90,23 @@ def test_exit_after_scan_keeps_exit_code_when_telemetry_breaks(sent, monkeypatch
     with pytest.raises(SystemExit) as e:
         cli._exit_after_scan(lambda: 10)
     assert e.value.code == 10
+
+
+@pytest.mark.parametrize("exc,code,step", [
+    (EOFError, cli.EXIT_USAGE, "setup_aborted_no_input"),
+    (KeyboardInterrupt, 130, "setup_aborted_interrupt"),
+])
+def test_setup_without_answers_exits_cleanly(sent, monkeypatch, capsys, exc, code, step):
+    def no_answer(*a, **k):
+        raise exc
+
+    monkeypatch.setattr("builtins.input", no_answer)
+    finished = []
+    monkeypatch.setattr(cli, "_finish_setup", lambda interactive: finished.append(1))
+    with pytest.raises(SystemExit) as e:
+        cli.run_setup_wizard(autonomous=False)
+    assert e.value.code == code
+    assert finished == []
+    funnel._flush_pending()
+    assert sent[-1] == step
+    assert "Traceback" not in capsys.readouterr().out
