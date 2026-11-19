@@ -7,6 +7,21 @@
 > installer is not tested. SIEM, SSO and compliance were tier flags only,
 > never built.
 
+## 2.14.1 — November 19, 2026
+
+Telemetry fixes only; no change to what is checked or blocked.
+
+- Setup-wizard step pings now use the same anonymous id as heartbeats. Before,
+  the id included the process id, so it changed on every run.
+- Pings report the real client version (they said 2.2.2).
+- Pings that were still sending when the command finished are given up to 3
+  seconds to go out instead of being dropped.
+- New: once per machine, the first `stillrunning scan` / `scan-manifest`
+  sends whether it ran or could not check (its exit code), never the package
+  name. A marker at `~/.stillrunning/first_scan_sent` stops it repeating.
+- `STILLRUNNING_NO_TELEMETRY=1` now also turns off the setup and first-scan
+  pings (as does `STILLRUNNING_NO_FUNNEL=1`).
+
 ## 2.14.0 — November 18, 2026
 
 Fixes the 2.13.7 Claude Code hook, which did not stop blocklisted packages (it
