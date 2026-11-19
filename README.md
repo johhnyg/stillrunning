@@ -136,7 +136,7 @@ detail" below.
 | The install-time CVE hold | `STILLRUNNING_CVE_CHECK=0` in the environment Claude Code runs in |
 | The local verdict cache | `STILLRUNNING_CACHE=0` |
 | Heartbeats (usage pings) | `STILLRUNNING_NO_TELEMETRY=1` |
-| Setup-wizard step pings | `STILLRUNNING_NO_FUNNEL=1` |
+| Setup-wizard and first-scan pings | `STILLRUNNING_NO_FUNNEL=1` (or `STILLRUNNING_NO_TELEMETRY=1`) |
 
 ## Privacy: what leaves your machine
 
@@ -149,9 +149,12 @@ detail" below.
   paths or your token.
 - **Heartbeats** contain: command name, version, OS, an anonymous id,
   timestamp. No code or file paths. Turn off with `STILLRUNNING_NO_TELEMETRY=1`.
-- **Setup-wizard steps** (`stillrunning --setup`): which step was reached, a
-  hashed machine id, the version and time. Turn off with
-  `STILLRUNNING_NO_FUNNEL=1`.
+- **Setup-wizard steps** (`stillrunning --setup`): which step was reached, the
+  same anonymous id as heartbeats, the version and time. Once per machine, the
+  first `stillrunning scan` / `scan-manifest` also sends whether that scan ran
+  or could not check (its exit code), never the package name; a marker at
+  `~/.stillrunning/first_scan_sent` stops it repeating. Turn off with
+  `STILLRUNNING_NO_FUNNEL=1` or `STILLRUNNING_NO_TELEMETRY=1`.
 - **Stays on your machine:** the hook's decision log
   (`~/.stillrunning/hook_decisions.jsonl`), the CVE state
   (`~/.stillrunning/cve_state.json`) and the local verdict cache
@@ -610,7 +613,7 @@ What it does not cover, stated plainly.
 | Variable | Purpose |
 |----------|---------|
 | `STILLRUNNING_NO_TELEMETRY=1` | Disable heartbeat |
-| `STILLRUNNING_NO_FUNNEL=1` | Disable the setup wizard's step pings |
+| `STILLRUNNING_NO_FUNNEL=1` | Disable the setup wizard's step pings and the one-time first-scan ping |
 | `STILLRUNNING_CVE_CHECK=0` | Turn off the Claude Code hook's install-time CVE check |
 | `BLOCKLIST_MAX_AGE_DAYS=730` | Max age for blocklist entries (default 2 years) |
 | `STILLRUNNING_TOKEN` | API token (enables import-time checks) |

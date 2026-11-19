@@ -2,46 +2,36 @@
 
 Tracks anonymous, aggregate conversion data through the setup wizard.
 This is OPT-OUT (enabled by default for anonymous aggregate stats).
-Set STILLRUNNING_NO_FUNNEL=1 to disable, or set STILLRUNNING_DEV=1.
+Set STILLRUNNING_NO_FUNNEL=1 or STILLRUNNING_NO_TELEMETRY=1 to disable,
+or set STILLRUNNING_DEV=1.
 
-No personal data is collected. Only: hashed machine ID, step name,
-timestamp, and agent version.
+No personal data is collected. Only: hashed machine ID (the same one the
+anonymous heartbeat uses), step name, timestamp, and agent version.
 """
 
-from stillrunning.apibase import api_base, api_url
-import hashlib
+from stillrunning.apibase import api_url
+import atexit
 import json
 import os
 import threading
 import time
 import urllib.request
-import urllib.error
 from datetime import datetime, timezone
+from pathlib import Path
 
-__version__ = "2.2.2"
+from stillrunning import __version__
 
 FUNNEL_URL = api_url("/api/setup-funnel")
+FLUSH_AT_EXIT_SEC = 3.0
+FIRST_SCAN_MARKER = ".stillrunning/first_scan_sent"
+SCAN_OK_EXIT_CODES = {0, 3, 10, 11}
 _funnel_enabled = True
-_machine_id_hash = None
+_pending: list[threading.Thread] = []
 
 
 def _get_machine_id_hash() -> str:
-    """Generate a privacy-preserving machine ID hash."""
-    global _machine_id_hash
-    if _machine_id_hash:
-        return _machine_id_hash
-
-    # Use a combination of hostname + username for uniqueness
-    # Hash it so we can't reverse-engineer the actual values
-    import socket
-    import getpass
-    try:
-        raw = f"{socket.gethostname()}:{getpass.getuser()}:{os.getpid()}"
-    except Exception:
-        raw = f"unknown:{time.time()}"
-
-    _machine_id_hash = hashlib.sha256(f"funnel:{raw}".encode()).hexdigest()[:16]
-    return _machine_id_hash
+    from stillrunning.heartbeat import _get_anonymous_machine_id
+    return _get_anonymous_machine_id()
 
 
 def is_dev_mode() -> bool:
@@ -55,8 +45,9 @@ def is_funnel_enabled() -> bool:
     if is_dev_mode():
         return False
     # Disabled if STILLRUNNING_NO_FUNNEL=1 (explicit opt-out)
-    if os.environ.get("STILLRUNNING_NO_FUNNEL", "").lower() in ("1", "true", "yes"):
-        return False
+    for var in ("STILLRUNNING_NO_FUNNEL", "STILLRUNNING_NO_TELEMETRY"):
+        if os.environ.get(var, "").lower() in ("1", "true", "yes"):
+            return False
     return _funnel_enabled
 
 
@@ -83,20 +74,32 @@ def track_step(step: str, extra: dict = None) -> bool:
         config_saved
         setup_completed
         monitoring_started / monitoring_skipped
+        first_scan_ok / first_scan_failed_exit<code>
 
     Returns True if event was queued, False if disabled.
     """
     if not is_funnel_enabled():
         return False
 
-    # Fire in background thread to avoid blocking
     t = threading.Thread(
         target=_send_event,
         args=(step, extra),
         daemon=True
     )
     t.start()
+    _pending.append(t)
     return True
+
+
+@atexit.register
+def _flush_pending() -> None:
+    # Daemon threads die at interpreter exit; give in-flight events a short window.
+    deadline = time.monotonic() + FLUSH_AT_EXIT_SEC
+    for t in _pending:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            break
+        t.join(remaining)
 
 
 def _send_event(step: str, extra: dict = None) -> bool:
@@ -164,6 +167,24 @@ def track_telemetry_choice(opted_in: bool):
 def track_setup_complete():
     """Track setup completed."""
     return track_step("setup_completed")
+
+
+def track_first_scan(exit_code: int) -> bool:
+    """Send one event for this machine's first CLI scan; later scans send nothing."""
+    if not is_funnel_enabled():
+        return False
+    marker = Path.home() / FIRST_SCAN_MARKER
+    if marker.exists():
+        return False
+    try:
+        marker.parent.mkdir(parents=True, exist_ok=True)
+        marker.write_text(datetime.now(timezone.utc).isoformat() + "\n")
+    except OSError:
+        # Without the marker every scan would report itself as the first.
+        return False
+    if exit_code in SCAN_OK_EXIT_CODES:
+        return track_step("first_scan_ok")
+    return track_step(f"first_scan_failed_exit{exit_code}")
 
 
 def track_monitoring_choice(started: bool):

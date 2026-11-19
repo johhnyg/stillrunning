@@ -2674,6 +2674,19 @@ def _scan_package(pkg_name: str, npm: bool = False, not_latest: bool = False) ->
             signal.alarm(0)
 
 
+def _exit_after_scan(run) -> None:
+    try:
+        code = run()
+    except SystemExit as e:
+        code = e.code if isinstance(e.code, int) else EXIT_ERROR
+    try:
+        from . import funnel
+        funnel.track_first_scan(code)
+    except Exception:  # lint: allowed-silent(optional telemetry; a scan's exit code never depends on it)
+        pass
+    sys.exit(code)
+
+
 MAX_MANIFEST_PACKAGES = 400
 
 
@@ -3746,12 +3759,12 @@ def main_cli() -> None:
 
     # v2.3.0: Handle scan subcommand (v2.13.2: --npm)
     if args.command == "scan":
-        sys.exit(_scan_package(args.package, npm=args.npm,
-                               not_latest=getattr(args, "not_latest", False)))
+        _exit_after_scan(lambda: _scan_package(args.package, npm=args.npm,
+                                               not_latest=getattr(args, "not_latest", False)))
 
     # v2.4.0: Handle scan-manifest subcommand
     if args.command == "scan-manifest":
-        sys.exit(_scan_manifest(args.path))
+        _exit_after_scan(lambda: _scan_manifest(args.path))
 
     # v2.5.0: Handle venv-install/uninstall
     if args.command == "venv-install":
