@@ -7,6 +7,9 @@ import pytest
 from pathlib import Path
 from unittest import mock
 
+import os as _os
+_PKG = _os.path.join(_os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))), "stillrunning")  # the package next to these tests
+
 
 class TestManifestParser:
     """Part C: Manifest file parsing."""
@@ -150,7 +153,7 @@ class TestHookPathFix:
 
     def test_no_hardcoded_root_paths(self):
         """hook.py should not have hardcoded /root/my-app paths."""
-        with open("/root/stillrunning/stillrunning/hook.py") as f:
+        with open(_PKG + "/hook.py") as f:
             content = f.read()
 
         # Check the constants section only
@@ -170,7 +173,7 @@ class TestHookPathFix:
 
     def test_uses_home_directory(self):
         """hook.py should use Path.home() for paths."""
-        with open("/root/stillrunning/stillrunning/hook.py") as f:
+        with open(_PKG + "/hook.py") as f:
             content = f.read()
         assert "Path.home()" in content or "_STILLRUNNING_DIR" in content
 

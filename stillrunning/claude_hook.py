@@ -1644,7 +1644,7 @@ def _read_requirements(path, cwd, res, depth, read_file, raw):
 
 def _parse_requirements_text(text, base, cwd, res, depth, read_file, raw):
     for line in text.replace("\\\n", " ").splitlines():
-        line = re.split(r"(?:^|\s)#", line, 1)[0].strip()   # pip: a comment is `#` after whitespace
+        line = re.split(r"(?:^|\s)#", line, maxsplit=1)[0].strip()   # pip: a comment is `#` after whitespace
         if not line or line.startswith("#"):
             continue
         if len(res.packages) > MAX_REQ_FILE_PACKAGES:
@@ -1674,7 +1674,7 @@ def _parse_requirements_text(text, base, cwd, res, depth, read_file, raw):
         else:
             res.line_hashes = _requirement_hashes(line)
             try:
-                _parse_pip_requirement(re.split(r"\s--", line, 1)[0], res, raw)
+                _parse_pip_requirement(re.split(r"\s--", line, maxsplit=1)[0], res, raw)
             finally:
                 res.line_hashes = None
 

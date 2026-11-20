@@ -5,6 +5,9 @@ import sys
 import pytest
 from unittest import mock
 
+import os as _os
+_PKG = _os.path.join(_os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))), "stillrunning")  # the package next to these tests
+
 
 class TestBlocklistCheck:
     """Bug #1: /api/check-package must check blocklist."""
@@ -72,13 +75,13 @@ class TestUvInterception:
     def test_uv_in_allowed_managers(self):
         """uv must be in the list of intercepted managers."""
         # Read intercept.py and check
-        with open("/root/stillrunning/stillrunning/intercept.py") as f:
+        with open(_PKG + "/intercept.py") as f:
             content = f.read()
         assert '"uv"' in content or "'uv'" in content
 
     def test_uv_pip_handling_exists(self):
         """uv pip install handling code must exist."""
-        with open("/root/stillrunning/stillrunning/intercept.py") as f:
+        with open(_PKG + "/intercept.py") as f:
             content = f.read()
         assert "is_uv_pip" in content
         assert 'args[0] == "pip"' in content
@@ -94,7 +97,7 @@ class TestNamespacePackages:
 
     def test_full_path_checking_in_find_spec(self):
         """find_spec must check full dotted path."""
-        with open("/root/stillrunning/stillrunning/hook.py") as f:
+        with open(_PKG + "/hook.py") as f:
             content = f.read()
         # Check that we're iterating through namespace parts
         assert "namespace =" in content or "namespace=" in content

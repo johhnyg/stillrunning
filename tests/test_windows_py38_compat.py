@@ -256,6 +256,7 @@ class _MetadataWithoutPackagesDistributions:
     distributions = staticmethod(importlib.metadata.distributions)
 
 
+@pytest.mark.skipif(sys.version_info < (3, 10), reason="no native packages_distributions to compare with")
 def test_fallback_map_matches_the_native_one(monkeypatch):
     from stillrunning import hook
     monkeypatch.setattr(hook, "_PD_FALLBACK", None)
@@ -268,7 +269,7 @@ def test_fallback_map_matches_the_native_one(monkeypatch):
 
 def test_import_checks_map_distributions_without_packages_distributions(monkeypatch, capsys):
     from stillrunning import hook
-    monkeypatch.delattr(importlib.metadata, "packages_distributions")
+    monkeypatch.delattr(importlib.metadata, "packages_distributions", raising=False)   # absent on 3.8/3.9
     monkeypatch.setattr(hook, "_PD_FALLBACK", None)
     hook._warned.discard("dist_map")
     assert hook._distribution_for("pytest") == "pytest"
@@ -280,7 +281,7 @@ def test_native_packages_distributions_still_used_when_present(monkeypatch):
     from stillrunning import hook
     calls = []
     monkeypatch.setattr(importlib.metadata, "packages_distributions",
-                        lambda: calls.append(1) or {"pytest": ["pytest"]})
+                        lambda: calls.append(1) or {"pytest": ["pytest"]}, raising=False)
     assert hook._distribution_for("pytest") == "pytest" and calls == [1]
 
 

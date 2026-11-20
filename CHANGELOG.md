@@ -7,9 +7,33 @@
 > installer is not tested. SIEM, SSO and compliance were tier flags only,
 > never built.
 
-## Unreleased — Windows and Python 3.8/3.9 fixes (not published)
+## Unreleased (not published)
 
-No change to what is checked or blocked.
+Two batches since 2.14.3. Neither changes what is checked or blocked.
+
+### Python 3.15, CI, and a Python 3.8 fix
+
+- **Python 3.15:** tested on python:3.15-slim (3.15.2). The full test suite
+  fails nothing that 3.12 does not, under identical conditions. All 24 modules
+  import, and `--version` works. With DeprecationWarnings from this package
+  turned into errors, 3.15 raises none. The only deprecated use was two
+  `re.split(..., 1)` calls in `claude_hook.py` passing `maxsplit` positionally
+  (deprecated since 3.13); they now pass `maxsplit=1`, which means the same on
+  every version. The "Programming Language :: Python :: 3.15" classifier is
+  added. 3.13 and 3.14 have not been tested and are not claimed.
+- **Python 3.8: `stillrunning cve` crashed.** `ThreadPoolExecutor.shutdown`
+  has `cancel_futures` only from 3.9, so the call raised TypeError. On 3.8 the
+  pending futures are now cancelled and the pool shut down; 3.9+ is unchanged.
+  Found by running the test suite on 3.8 for the first time.
+- **CI** (`.github/workflows/tests.yml`): the full suite on every push to main
+  and on pull requests, in the official python:3.8-slim, 3.12-slim and
+  3.15-slim images. The three tests that already fail on main are
+  deselected, so a red run means something new broke. Two test files
+  (`test_v230_fixes.py`, `test_v240_fixes.py`) opened the package at this
+  server's absolute path; they now find it next to the tests.
+
+### Windows and Python 3.8/3.9 fixes
+
 - **Python 3.8 and 3.9:** the CLI failed to import (`TypeError: unsupported
   operand type(s) for |`) because annotations written as `X | None` and
   `list[...]` were evaluated at import. Eight modules now use

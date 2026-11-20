@@ -230,7 +230,14 @@ def check(packages, now=None, budget_s=REFRESH_BUDGET_S, query_batch=None, get_v
                 problems.append(problem or "garbage")
                 continue
             cache[vid] = {"modified": wanted[vid], "raw": _slim(raw)}
-        pool.shutdown(wait=False, cancel_futures=True)
+        if sys.version_info >= (3, 9):
+            pool.shutdown(wait=False, cancel_futures=True)
+        else:
+            # Python 3.8 has no cancel_futures (it raised TypeError and stopped
+            # `stillrunning cve`): cancel what has not started, then shut down.
+            for pending in futures.values():
+                pending.cancel()
+            pool.shutdown(wait=False)
         if again and attempt == 1:
             claude_hook._warn(f"cve: {len(again)} advisory detail(s) did not arrive; trying once more")
         todo = again
