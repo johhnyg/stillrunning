@@ -4468,6 +4468,11 @@ def _private_state_dir():
     accounts by an older version is closed."""
     directory = _state_dir()
     os.makedirs(directory, mode=0o700, exist_ok=True)
+    if os.name == "nt":
+        # Windows reports every folder as 0o777 and chmod cannot change that:
+        # checking the bits warned "readable by other accounts" on every hook
+        # call. Access there is by ACL; the user profile is private by default.
+        return
     try:
         mode = os.stat(directory).st_mode & 0o777
         if mode & 0o077:
@@ -5077,6 +5082,8 @@ def installed_state():
 
 
 def main():
+    from ._stdio import make_output_safe
+    make_output_safe()   # never crash on a non-UTF-8 console (Windows code pages)
     sys.exit(run_hook(sys.stdin.read()))
 
 

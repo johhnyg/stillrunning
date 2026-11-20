@@ -164,8 +164,17 @@ def _sqlite():
         raise _Unusable(f"sqlite3 unavailable ({type(exc).__name__})")
 
 
+# On Windows the POSIX mode bits are synthesized (writable files read 0o666,
+# read-only ones 0o444, every folder 0o777) and say nothing about other accounts — access is ACLs,
+# and the per-user profile that holds ~/.stillrunning is private by default.
+# Judging by the bits rejected every cache file there as "foreign".
+_POSIX_MODES = os.name != "nt"
+
+
 def _foreign(st):
-    """Writable by another account, or not ours."""
+    """Writable by another account, or not ours (POSIX only; see _POSIX_MODES)."""
+    if not _POSIX_MODES:
+        return False
     return bool(st.st_mode & 0o022) or (hasattr(os, "getuid") and st.st_uid != os.getuid())
 
 
@@ -178,7 +187,7 @@ def _check_file(path):
         raise _Untrusted("writable by another account or not owned by this one")
     if st.st_nlink > 1:
         raise _Untrusted("has another name (hard link) elsewhere")
-    if st.st_mode & 0o044:
+    if _POSIX_MODES and st.st_mode & 0o044:
         os.chmod(path, 0o600)       # readable by others only: tighten, contents still ours
 
 

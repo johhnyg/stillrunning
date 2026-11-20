@@ -16,6 +16,7 @@ Supported formats:
 - environment.yml (conda)
 - pixi.toml (pixi)
 """
+from __future__ import annotations  # annotations stay strings: Python 3.8/3.9 can import this module
 
 import json
 import re

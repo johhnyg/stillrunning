@@ -294,6 +294,8 @@ class DockerAgentState:
 
 def main():
     """Main agent loop."""
+    from ._stdio import make_output_safe
+    make_output_safe()   # never crash on a non-UTF-8 console (Windows code pages)
     print(f"{BOLD}Docker Security Agent{RESET}")
     print(f"{'='*40}")
 

@@ -11,6 +11,7 @@ Tiers:
 - AI ($49/mo): + AI package review (server-side)
 - Enterprise ($499/mo): everything + unlimited scans, SIEM, SSO, compliance
 """
+from __future__ import annotations  # annotations stay strings: Python 3.8/3.9 can import this module
 
 from stillrunning.apibase import api_base, api_url
 import json

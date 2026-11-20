@@ -12,6 +12,7 @@ Called automatically when stillrunning wraps pip/npm.
 v2.4.0: Added support for poetry, pdm, pipenv, conda, pixi, bun, pnpm.
         Added manifest file parsing for requirements.txt, pyproject.toml, etc.
 """
+from __future__ import annotations  # annotations stay strings: Python 3.8/3.9 can import this module
 
 from stillrunning.apibase import api_base, api_url
 import json
@@ -452,6 +453,8 @@ def _check_packages(packages: list, ecosystem: str) -> tuple[list, list]:
 
 
 def main():
+    from ._stdio import make_output_safe
+    make_output_safe()   # never crash on a non-UTF-8 console (Windows code pages)
     import shutil
 
     if len(sys.argv) < 3:

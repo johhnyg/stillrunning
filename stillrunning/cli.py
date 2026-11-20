@@ -9,6 +9,7 @@ Usage:
 
 Requires: PyYAML (pip install pyyaml)
 """
+from __future__ import annotations  # annotations stay strings: Python 3.8/3.9 can import this module
 
 from stillrunning.apibase import api_base, api_url
 import gzip
@@ -2050,6 +2051,8 @@ def get_shield_summary() -> str:
 # Entry point
 # ---------------------------------------------------------------------------
 def main() -> None:
+    from ._stdio import make_output_safe
+    make_output_safe()   # never crash on a non-UTF-8 console (Windows code pages)
     if _unsupported_os("monitor", "Package checks work here: stillrunning scan <package>, "
                                   "stillrunning --hook-claude-code, stillrunning shell-install."):
         sys.exit(1)
@@ -3556,6 +3559,8 @@ def _uninstall_claude_code_hook() -> None:
 
 def main_cli() -> None:
     """Entry point for the stillrunning command."""
+    from ._stdio import make_output_safe
+    make_output_safe()   # never crash on a non-UTF-8 console (Windows code pages)
     import argparse
     parser = argparse.ArgumentParser(
         description="StillRunning — Lightweight process monitor with Telegram alerts"

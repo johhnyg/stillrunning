@@ -7,6 +7,43 @@
 > installer is not tested. SIEM, SSO and compliance were tier flags only,
 > never built.
 
+## Unreleased — Windows and Python 3.8/3.9 fixes (not published)
+
+No change to what is checked or blocked.
+- **Python 3.8 and 3.9:** the CLI failed to import (`TypeError: unsupported
+  operand type(s) for |`) because annotations written as `X | None` and
+  `list[...]` were evaluated at import. Eight modules now use
+  `from __future__ import annotations`. Tested on python:3.8-slim and
+  python:3.9-slim: all 24 modules import, and `--version` and `--help` work.
+- **Windows console output:** when output is piped or redirected (CI,
+  PowerShell capture, `> file`), Windows encodes it with the ANSI code page,
+  which has no ✓ ✗ ⚠ 🚨 ✅. A BLOCKED result crashed with UnicodeEncodeError
+  (exit 1 instead of 10), and the install interceptor failed for every package.
+  Each entry point now writes those symbols as ASCII words (`OK`, `X`, `!`,
+  `!!`) on a stream that is not UTF-8. UTF-8 streams are untouched, and nothing
+  changes at import.
+- **Windows verdict cache:** Windows reports writable files as 0o666 (read-only
+  ones as 0o444) and every folder as 0o777, so the cache judged its own database "writable by another
+  account", moved it aside and warned on every lookup; nothing was ever
+  cached. The permission-bit checks are now POSIX-only. On Windows, access is
+  by ACL, and the user profile that holds `~/.stillrunning` is private by
+  default. Trade-off: on Windows the cache file has no owner or permission
+  check (only the regular-file and hard-link checks), so another account able
+  to write into the profile could plant a verdict. That gains at most this: a
+  hash-pinned release whose live check could not complete turns from "ask"
+  into "allow". A live "blocked", the local blocklist and a held CVE still
+  win, and an account that can write the profile can already edit
+  `~/.claude/settings.json`.
+- **Windows Claude Code hook:** stopped warning "readable by other accounts …
+  now owner-only" on every tool call. chmod cannot change those bits on
+  Windows, so the warning repeated forever.
+- Python 3.8/3.9 limit, unchanged: the import-time checks (`hook.py`) use
+  `importlib.metadata.packages_distributions`, added in Python 3.10. On 3.8/3.9
+  they report "import checks skipped" and check nothing. The CLI, the scans
+  and the Claude Code hook work.
+- Still not tested on a real Windows machine; Windows behaviour is simulated in
+  `tests/test_windows_py38_compat.py`.
+
 ## 2.14.3 — November 19, 2026
 
 New: the side panel; no change to what is checked or blocked.

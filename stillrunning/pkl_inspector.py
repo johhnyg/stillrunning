@@ -815,6 +815,8 @@ def _print_result(result: Dict[str, Any], verbose: bool = False):
 
 def main():
     """CLI entry point."""
+    from ._stdio import make_output_safe
+    make_output_safe()   # never crash on a non-UTF-8 console (Windows code pages)
     import argparse
 
     parser = argparse.ArgumentParser(

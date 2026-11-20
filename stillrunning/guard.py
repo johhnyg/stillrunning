@@ -5,6 +5,7 @@ Monitors processes, detects suspicious behavior, blocks threats.
 
 Start: stillrunning-guard
 """
+from __future__ import annotations  # annotations stay strings: Python 3.8/3.9 can import this module
 
 import os
 import platform
@@ -758,6 +759,8 @@ def write_status():
 
 def main_loop():
     """Main daemon loop."""
+    from ._stdio import make_output_safe
+    make_output_safe()   # never crash on a non-UTF-8 console (Windows code pages)
     global _known_pids, _started_at
 
     if not sys.platform.startswith("linux"):

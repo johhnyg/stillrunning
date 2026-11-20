@@ -12,6 +12,7 @@ Event types:
 
 Dev/CI exclusion: Set STILLRUNNING_DEV=1 to flag as internal usage.
 """
+from __future__ import annotations  # annotations stay strings: Python 3.8/3.9 can import this module
 
 from stillrunning.apibase import api_base, api_url
 import atexit

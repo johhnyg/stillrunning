@@ -5,6 +5,7 @@ Layer 1 analysis only - no code execution.
 
 Usage: python3 stillrunning_scan.py <file>
 """
+from __future__ import annotations  # annotations stay strings: Python 3.8/3.9 can import this module
 
 import ast
 import sys
@@ -399,6 +400,8 @@ def print_report(filepath: str, score: int, reasons: list, analysis: dict):
 # ─── Main ────────────────────────────────────────────────────────────────────
 
 def main():
+    from ._stdio import make_output_safe
+    make_output_safe()   # never crash on a non-UTF-8 console (Windows code pages)
     if len(sys.argv) < 2:
         print(f"Usage: python3 {sys.argv[0]} <file>")
         print("Supported: .py, .pkl, .pickle files")

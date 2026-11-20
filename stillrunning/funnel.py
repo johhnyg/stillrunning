@@ -8,6 +8,7 @@ or set STILLRUNNING_DEV=1.
 No personal data is collected. Only: hashed machine ID (the same one the
 anonymous heartbeat uses), step name, timestamp, and agent version.
 """
+from __future__ import annotations  # annotations stay strings: Python 3.8/3.9 can import this module
 
 from stillrunning.apibase import api_url
 import atexit
