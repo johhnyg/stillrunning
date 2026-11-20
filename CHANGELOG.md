@@ -20,8 +20,11 @@ No change to what is checked or blocked.
   which has no ✓ ✗ ⚠ 🚨 ✅. A BLOCKED result crashed with UnicodeEncodeError
   (exit 1 instead of 10), and the install interceptor failed for every package.
   Each entry point now writes those symbols as ASCII words (`OK`, `X`, `!`,
-  `!!`) on a stream that is not UTF-8. UTF-8 streams are untouched, and nothing
-  changes at import.
+  `!!`) on a stream that is not UTF-8. Any other character it cannot encode is
+  written as a code-point tag such as `<U+0435>`. Nothing is transliterated, so
+  a look-alike package name like Cyrillic "rеquests" stays visibly different
+  from "requests". An undecodable filename byte is written as `<0xFF>`. UTF-8
+  streams are untouched, and nothing changes at import.
 - **Windows verdict cache:** Windows reports writable files as 0o666 (read-only
   ones as 0o444) and every folder as 0o777, so the cache judged its own database "writable by another
   account", moved it aside and warned on every lookup; nothing was ever
@@ -37,10 +40,18 @@ No change to what is checked or blocked.
 - **Windows Claude Code hook:** stopped warning "readable by other accounts …
   now owner-only" on every tool call. chmod cannot change those bits on
   Windows, so the warning repeated forever.
-- Python 3.8/3.9 limit, unchanged: the import-time checks (`hook.py`) use
-  `importlib.metadata.packages_distributions`, added in Python 3.10. On 3.8/3.9
-  they report "import checks skipped" and check nothing. The CLI, the scans
-  and the Claude Code hook work.
+- **Import-time checks on Python 3.8/3.9:** they used
+  `importlib.metadata.packages_distributions`, added in Python 3.10, so on
+  3.8/3.9 they reported "import checks skipped" and checked nothing. When that
+  function is missing, they now use the standard library's own algorithm
+  (Python 3.11's; 3.10 read only `top_level.txt`) on top of `distributions()`
+  (`top_level.txt`, otherwise the installed `.py` files), built once per
+  process (a package installed later in the same process is seen after a
+  restart). Verified on python:3.8-slim and 3.9-slim: `pip` and `setuptools`
+  map to their distributions and stdlib modules map to none. Python 3.10+
+  still calls the native function.
+- The "cannot map imports to distributions" warning now names the exception
+  type (all Python versions).
 - Still not tested on a real Windows machine; Windows behaviour is simulated in
   `tests/test_windows_py38_compat.py`.
 

@@ -371,15 +371,53 @@ def _warn_once(key: str, message: str) -> None:
     print(f"[stillrunning] WARNING: {message}", file=sys.stderr)
 
 
+_PD_FALLBACK = None              # Python 3.8/3.9: the map, built once per process
+_PD_LOCK = threading.Lock()
+
+
+def _packages_distributions(md) -> dict:
+    """{top-level import name: [distribution names]}.
+
+    importlib.metadata.packages_distributions() exists only from Python 3.10;
+    without it the import checks were skipped on 3.8/3.9. This fallback is the
+    standard library's own algorithm (Python 3.11's, plus 3.12's rule dropping
+    dotted names; 3.10 read only top_level.txt)
+    on top of distributions(), which 3.8 has: the names a distribution declares
+    in top_level.txt, otherwise the top folders / modules of the .py files it
+    installed. It is built once per process: on 3.8/3.9 every first import of a
+    stdlib module asks, and rescanning each time slowed the host program's own
+    imports badly. A distribution installed later in the same process is seen
+    after a restart."""
+    global _PD_FALLBACK
+    native = getattr(md, "packages_distributions", None)
+    if native is not None:
+        return native()
+    with _PD_LOCK:
+        if _PD_FALLBACK is None:
+            pkg_to_dist = {}
+            for dist in md.distributions():
+                declared = (dist.read_text("top_level.txt") or "").split()
+                if declared:
+                    names = declared
+                else:
+                    names = {f.parts[0] if len(f.parts) > 1 else f.with_suffix("").name
+                             for f in (dist.files or ()) if f.suffix == ".py"}
+                for pkg in (n for n in names if n and "." not in n):
+                    pkg_to_dist.setdefault(pkg, []).append(dist.metadata["Name"])
+            _PD_FALLBACK = pkg_to_dist
+        return _PD_FALLBACK
+
+
 def _distribution_for(import_name: str) -> Optional[str]:
     """Installed distribution that provides this top-level import (None = not
     an installed distribution: stdlib, local or vendored code)."""
     try:
         import importlib.metadata as md
-        dists = md.packages_distributions().get(import_name) or []
+        dists = _packages_distributions(md).get(import_name) or []
         return dists[0] if dists else None
     except Exception as exc:
-        _warn_once("dist_map", f"cannot map imports to distributions ({exc}); import checks skipped")
+        _warn_once("dist_map", f"cannot map imports to distributions ({type(exc).__name__}: {exc}); "
+                               f"import checks skipped")
         return None
 
 

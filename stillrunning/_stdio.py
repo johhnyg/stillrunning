@@ -6,7 +6,10 @@ has no ✓ ✗ ⚠ 🚨 ✅. A plain ``print`` of those raises UnicodeEncodeErro
 a BLOCKED result became a traceback and the install interceptor failed for
 every package. Entry points call ``make_output_safe()`` first: streams that are
 already UTF-8 are left alone; any other stream keeps its encoding but writes
-the symbols as ASCII words instead of failing.
+the symbols as ASCII words instead of failing. A character with no ASCII word
+is written as a code-point tag, ``<U+0435>`` (never silently transliterated, so
+a look-alike package name such as Cyrillic "rеquests" stays visibly different
+from "requests"); an undecodable filename byte (surrogate escape) as ``<0xFF>``.
 
 Only entry points call it (never at import): this package is imported into
 other programs through sitecustomize, and their streams are not ours to change.
@@ -36,11 +39,18 @@ _ASCII = {
 }
 
 
+def _ascii_tag(ch):
+    code = ord(ch)
+    if 0xDC80 <= code <= 0xDCFF:            # surrogateescape: an undecodable byte
+        return f"<0x{code - 0xDC00:02X}>"
+    return f"<U+{code:04X}>"
+
+
 def _ascii_fallback(err):
     if not isinstance(err, UnicodeEncodeError):
         raise err
     chunk = err.object[err.start:err.end]
-    return "".join(_ASCII.get(ch, "?") for ch in chunk), err.end
+    return "".join(_ASCII[ch] if ch in _ASCII else _ascii_tag(ch) for ch in chunk), err.end
 
 
 def _register():

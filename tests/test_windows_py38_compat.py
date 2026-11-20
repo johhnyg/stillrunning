@@ -10,6 +10,8 @@ Four bugs, each pinned here:
 No network; Windows is simulated by the mode bits and os.name it reports.
 """
 import ast
+import importlib
+import importlib.metadata
 import io
 import os
 import pathlib
@@ -66,7 +68,20 @@ def test_symbols_are_spelled_in_ascii():
     assert raw.encode("cp1252", _stdio.ERROR_HANDLER).decode("cp1252") == \
         "OK ok X no ! warn !! alarm OK • — é"   # • — é exist in cp1252
     assert "• —".encode("ascii", _stdio.ERROR_HANDLER) == b"* --"
-    assert "中".encode("ascii", _stdio.ERROR_HANDLER) == b"?"
+    assert "中".encode("ascii", _stdio.ERROR_HANDLER) == b"<U+4E2D>"
+
+
+def test_lookalike_names_stay_visibly_different():
+    """No transliteration: Cyrillic "rеquests" must not print as "requests"."""
+    _stdio._register()
+    assert "rеquests".encode("cp1252", _stdio.ERROR_HANDLER) == b"r<U+0435>quests"
+    assert "ｒequests".encode("cp1252", _stdio.ERROR_HANDLER) == b"<U+FF52>equests"   # fullwidth r
+
+
+def test_undecodable_filename_bytes_keep_their_value():
+    _stdio._register()
+    assert "bad\udcffname".encode("ascii", _stdio.ERROR_HANDLER) == b"bad<0xFF>name"
+    assert "⚠️".encode("ascii", _stdio.ERROR_HANDLER) == b"!"      # empty mapping kept
 
 
 def test_utf8_streams_are_left_alone(monkeypatch):
@@ -136,7 +151,14 @@ def windows(monkeypatch):
     monkeypatch.setattr(os, "stat", lambda *a, **k: _WinStat(real_stat(*a, **k)))
     monkeypatch.setattr(os, "lstat", lambda *a, **k: _WinStat(real_lstat(*a, **k)))
     monkeypatch.setattr(os, "chmod", lambda *a, **k: None)     # cannot change these bits there
-    monkeypatch.setattr(vc, "_POSIX_MODES", False)
+    # Derive the flag the real way: verdict_cache reads os.name when it loads.
+    monkeypatch.setattr(os, "name", "nt")
+    importlib.reload(vc)
+    assert vc._POSIX_MODES is False
+    yield
+    monkeypatch.undo()
+    importlib.reload(vc)                 # back to this platform's value for later tests
+    assert vc._POSIX_MODES is (os.name != "nt")
 
 
 def test_verdict_cache_works_with_windows_modes(windows, tmp_path):
@@ -225,3 +247,55 @@ def test_no_module_evaluates_annotations_python38_cannot_read():
 def test_every_module_parses_as_python38():
     for path in sorted(PKG.rglob("*.py")):
         ast.parse(path.read_text(encoding="utf-8"), feature_version=(3, 8))
+
+
+# ── import-time checks on Python 3.8/3.9 (no packages_distributions) ──
+
+class _MetadataWithoutPackagesDistributions:
+    """importlib.metadata as Python 3.8/3.9 have it."""
+    distributions = staticmethod(importlib.metadata.distributions)
+
+
+def test_fallback_map_matches_the_native_one(monkeypatch):
+    from stillrunning import hook
+    monkeypatch.setattr(hook, "_PD_FALLBACK", None)
+    native = importlib.metadata.packages_distributions()
+    fallback = hook._packages_distributions(_MetadataWithoutPackagesDistributions)
+    # 3.12+ also infers names from .pyc files (e.g. "__pycache__"); real import names must agree
+    real = {k for k in set(native) | set(fallback) if k.isidentifier() and k != "__pycache__"}
+    assert real and all(sorted(native.get(k, [])) == sorted(fallback.get(k, [])) for k in real)
+
+
+def test_import_checks_map_distributions_without_packages_distributions(monkeypatch, capsys):
+    from stillrunning import hook
+    monkeypatch.delattr(importlib.metadata, "packages_distributions")
+    monkeypatch.setattr(hook, "_PD_FALLBACK", None)
+    hook._warned.discard("dist_map")
+    assert hook._distribution_for("pytest") == "pytest"
+    assert hook._distribution_for("json") is None                  # stdlib: not a distribution
+    assert "import checks skipped" not in capsys.readouterr().err
+
+
+def test_native_packages_distributions_still_used_when_present(monkeypatch):
+    from stillrunning import hook
+    calls = []
+    monkeypatch.setattr(importlib.metadata, "packages_distributions",
+                        lambda: calls.append(1) or {"pytest": ["pytest"]})
+    assert hook._distribution_for("pytest") == "pytest" and calls == [1]
+
+
+def test_fallback_map_is_built_once_per_process(monkeypatch):
+    """On 3.8/3.9 every first stdlib import asks: rescanning each time slowed
+    the host program's own imports (review: 0.5 s -> 11.7 s with 200 dists)."""
+    from stillrunning import hook
+    monkeypatch.setattr(hook, "_PD_FALLBACK", None)
+    scans = []
+
+    class Counting:
+        @staticmethod
+        def distributions():
+            scans.append(1)
+            return importlib.metadata.distributions()
+    first = hook._packages_distributions(Counting)
+    second = hook._packages_distributions(Counting)
+    assert scans == [1] and first is second and first
