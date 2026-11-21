@@ -136,6 +136,20 @@ def looks_like_install(command):
                 or _HIDDEN_SCRIPT_HINT.search(squashed))
 
 
+# Shell words separate paths with "/" on every OS: Claude Code runs Bash tool
+# commands through bash (Git Bash on Windows), and `./x.sh` or
+# `"$VIRTUAL_ENV/bin/pip"` are written that way there too; Windows also accepts
+# "\\". Testing a word for os.sep alone missed every "/" path on Windows — a
+# script written and then run as `./x.sh` was never read, so a blocklisted
+# install inside it was allowed (fail-open, found on a real windows-latest
+# runner 2026-11-21). On POSIX this is exactly os.sep, so nothing changes there.
+_WORD_SEPS = "/" if os.sep == "/" else "/" + os.sep
+
+
+def _has_sep(word):
+    return any(sep in word for sep in _WORD_SEPS)
+
+
 def _inside(path, directory):
     return path == directory or path.startswith(directory.rstrip(os.sep) + os.sep)
 
@@ -436,7 +450,7 @@ def _paths_touch_protection(command, cwds, depth):
                 and not _CODE_RUNNERS.match(program):
             # an unknown wrapper (`setsid rm -rf …`): judge the destructive word after it
             for later in range(start + 1, len(cmd)):
-                if _prog_name(cmd[later]) in _DESTRUCTIVE and os.sep not in cmd[later].rstrip(os.sep)[1:]:
+                if _prog_name(cmd[later]) in _DESTRUCTIVE and not _has_sep(cmd[later].rstrip(_WORD_SEPS)[1:]):
                     start, program = later, _prog_name(cmd[later])
                     break
         args = list(cmd[start + 1:])
@@ -1789,7 +1803,7 @@ def _parse_pip_args(args, res, cwd, read_file, raw, poetry=False, uv=False):
             # a requirements file named without `-r` (or after a flag that was
             # misread): its lines are what would be installed
             _read_requirements(arg, cwd, res, 0, read_file, raw)
-        elif _is_local_path(arg) or (os.sep in arg and not arg.startswith("@")):
+        elif _is_local_path(arg) or (_has_sep(arg) and not arg.startswith("@")):
             res.local(arg, raw, "path")
         else:
             _parse_pip_requirement(arg, res, raw)
@@ -2231,7 +2245,7 @@ def _safety_net(prog, args, res, raw):
     else:
         return
     for word in rest[:20]:
-        if _is_url(word) or _is_local_path(word) or os.sep in word and not word.startswith("@"):
+        if _is_url(word) or _is_local_path(word) or _has_sep(word) and not word.startswith("@"):
             continue
         if family == "npm":
             if _NPM_NAME.match(word):
@@ -2801,7 +2815,7 @@ def _parse_simple(tokens, res, cwd, env, read_file, exists, depth, feeds_shell=F
         if token.startswith("-") or " " in token or "\n" in token:
             continue
         name = _prog_name(token)
-        if token.startswith("$") and not (os.sep in token and _is_installer(name)):
+        if token.startswith("$") and not (_has_sep(token) and _is_installer(name)):
             if index == start:
                 positions.append(index)
             continue
@@ -2826,7 +2840,7 @@ def _parse_simple(tokens, res, cwd, env, read_file, exists, depth, feeds_shell=F
         if local_env.get("PIP_REQUIREMENT") and (_PIP.match(_prog_name(token)) or "pip" in rest[:3]):
             res.ask("requirements_unread", raw)     # the list of packages is named by a variable
         try:
-            if token.startswith("$") and not (os.sep in token and _is_installer(_prog_name(token))):
+            if token.startswith("$") and not (_has_sep(token) and _is_installer(_prog_name(token))):
                 # The program is only known at run time ($PIP, $(which pip), `…`).
                 if any(re.match(r"^-[A-Za-z]*m$", a) for a in rest[:4]) and \
                         _INSTALLER_HINT.search(" ".join(rest[:6])):
@@ -3113,7 +3127,7 @@ def _parse_into(command, res, cwd, env, read_file, exists, depth, output_runs=Fa
                 if program in _SHELLS or program in (".", "source"):
                     if not any(re.match(r"^-[A-Za-z]*c$", a) for a in args):
                         ran = next((a for a in args if not a.startswith("-")), None)
-                elif start < len(simple) and os.sep in simple[start] and not simple[start].startswith("$"):
+                elif start < len(simple) and _has_sep(simple[start]) and not simple[start].startswith("$"):
                     ran = simple[start]
                 if ran and not _STDIN_PATH.match(ran):
                     full = res.full(ran)
@@ -5087,11 +5101,37 @@ def main():
     sys.exit(run_hook(sys.stdin.read()))
 
 
+def _safe_script_streams():
+    """The bare-script path (`python -I -S <this file>`, how Claude Code runs it)
+    cannot import the package, so the entry points' make_output_safe() never ran
+    here: on a Windows code page a non-ASCII warning (→, —) raised
+    UnicodeEncodeError and crashed the process (found on a real windows-latest
+    runner 2026-11-21). Load the package's own _stdio.py by absolute path (never
+    from the current folder: -I keeps that off sys.path) and apply it. UTF-8
+    streams are left untouched, so nothing changes where they already are UTF-8
+    (Linux, macOS)."""
+    try:
+        import importlib.util
+        spec = importlib.util.spec_from_file_location(
+            "_stillrunning_stdio", os.path.join(os.path.dirname(os.path.abspath(__file__)), "_stdio.py"))
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        module.make_output_safe()
+    except Exception:  # _stdio.py missing or broken: still never crash on output
+        for stream in (sys.stdout, sys.stderr):
+            try:
+                if (getattr(stream, "encoding", "") or "").lower().replace("-", "") not in ("utf8", "utf8sig"):
+                    stream.reconfigure(errors="backslashreplace")
+            except (AttributeError, ValueError, OSError):
+                continue
+
+
 def _script_main():
     """Run as the hook process (`python -I -S <this file>`). The decision is
     printed and flushed by run_hook; the process then ends at once, so a
     lookup thread still waiting on the network can never hold the hook past
     its deadline."""
+    _safe_script_streams()
     code = run_hook(sys.stdin.read())
     for stream in (sys.stdout, sys.stderr):
         try:

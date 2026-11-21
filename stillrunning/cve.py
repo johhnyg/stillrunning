@@ -59,7 +59,15 @@ LOCKFILES = {"package-lock.json": "npm", "npm-shrinkwrap.json": "npm", "pnpm-loc
 NO_FEED_KINDS = {"conda", "pixi"}
 MAL_TODO = "listed as malicious — remove it (the blocklist refuses it)"
 _SAFE_PLACE = re.compile(r"^[A-Za-z0-9 ._/@+-]{1,120}$")
-_SAFE_ROOT = re.compile(r"^/[A-Za-z0-9 ._/@+-]{0,400}$")
+# A folder name that is safe to store, show and put in a scheduled command.
+# POSIX: an absolute path of plain characters. Windows: the same characters
+# after a drive letter (`C:\\…`, either separator). The POSIX-only pattern
+# rejected every Windows folder, so the saved state always read "checked for
+# another folder" and CVE monitoring was UNKNOWN there (found on a real
+# windows-latest runner 2026-11-21). UNC paths (\\\\server\\share) stay
+# rejected: UNKNOWN, never a wrong verdict. Unchanged on POSIX.
+_SAFE_ROOT = re.compile(r"^/[A-Za-z0-9 ._/@+-]{0,400}$") if os.name != "nt" else \
+    re.compile(r"^[A-Za-z]:[\\/][A-Za-z0-9 ._\\/@+-]{0,400}$")
 _SAFE_WHY = re.compile(r"^[A-Za-z0-9 ._/()+;,-]{1,300}$")
 
 
@@ -641,6 +649,12 @@ def _read_crontab():
 
 
 def schedule(cwd, remove=False):
+    if os.name == "nt":
+        # Windows has no crontab; the old message ("crontab could not be run
+        # (FileNotFoundError)") read like a fault on this machine.
+        print("Scheduling uses crontab, which Windows does not have; nothing was changed. "
+              "Run `stillrunning cve --refresh` yourself, or add it to Task Scheduler.")
+        return 1
     lines, problem = _read_crontab()
     if problem:
         print(problem)

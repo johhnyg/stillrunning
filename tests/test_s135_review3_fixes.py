@@ -414,10 +414,10 @@ SILENT = [
 def home(monkeypatch, tmp_path):
     root = tmp_path / "home"
     (root / ".claude").mkdir(parents=True)
-    (root / ".claude" / "settings.json").write_text("{}")
+    (root / ".claude" / "settings.json").write_text("{}", encoding="utf-8")
     (root / ".stillrunning").mkdir(mode=0o700)
-    (root / ".stillrunning" / "overrides.json").write_text("{}")
-    (root / ".npmrc").write_text("")
+    (root / ".stillrunning" / "overrides.json").write_text("{}", encoding="utf-8")
+    (root / ".npmrc").write_text("", encoding="utf-8")
     monkeypatch.setenv("HOME", str(root))
     for name in list(os.environ):
         if name.startswith(("STILLRUNNING_", "PIP_", "UV_", "NPM_CONFIG_", "npm_config_", "POETRY_",
@@ -740,7 +740,7 @@ def test_state_folder_is_created_owner_only_and_an_open_one_is_closed(home, caps
 # ───────────────────────── the installed script, as Claude Code runs it ─────────────────────────
 def run_script(home, cwd, command):
     event = json.dumps({"tool_name": "Bash", "cwd": str(cwd), "tool_input": {"command": command}})
-    env = {"HOME": str(home), "PATH": os.environ.get("PATH", ""), "STILLRUNNING_API_BASE": "http://127.0.0.1:9"}
+    env = {"HOME": str(home), **({"USERPROFILE": str(home), "SYSTEMROOT": os.environ.get("SYSTEMROOT", "")} if os.name == "nt" else {}), "PATH": os.environ.get("PATH", ""), "STILLRUNNING_API_BASE": "http://127.0.0.1:9"}
     done = subprocess.run([sys.executable, "-I", "-S", ch.__file__], input=event, env=env,
                           capture_output=True, text=True, timeout=40)
     assert done.returncode == 0, done.stderr

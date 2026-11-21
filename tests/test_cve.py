@@ -116,7 +116,7 @@ CURRENT = {"root": None}
 def project(tmp_path, text, name="requirements.txt", folder="proj"):
     root = tmp_path / folder
     root.mkdir(exist_ok=True)
-    (root / name).write_text(text)
+    (root / name).write_text(text, encoding="utf-8")
     CURRENT["root"] = str(root)
     return root
 
@@ -249,7 +249,7 @@ def test_affected_wins_over_unresolved_but_says_what_was_not_checked(tmp_path, f
 def test_a_lockfile_resolves_ranges_in_its_manifest(tmp_path, feed, no_installed):
     root = project(tmp_path, '{"dependencies": {"left-pad": "^1.3.0"}}', "package.json")
     (root / "package-lock.json").write_text(json.dumps(
-        {"packages": {"": {}, "node_modules/left-pad": {"version": "1.3.0"}}}))
+        {"packages": {"": {}, "node_modules/left-pad": {"version": "1.3.0"}}}), encoding="utf-8")
     data = cve.evaluate(cve.refresh(root, now=NOW), NOW)
     assert data["state"] == "CLEAR", data
     assert {p["part"]: p["unresolved"] for p in data["inventory"]} == \
@@ -259,7 +259,7 @@ def test_a_lockfile_resolves_ranges_in_its_manifest(tmp_path, feed, no_installed
 def test_unlistable_venv_is_unresolved(tmp_path, feed, monkeypatch):
     root = project(tmp_path, "requests==2.31.0\n")
     (root / ".venv").mkdir()
-    (root / ".venv" / "pyvenv.cfg").write_text("home = /usr/bin\n")
+    (root / ".venv" / "pyvenv.cfg").write_text("home = /usr/bin\n", encoding="utf-8")
     monkeypatch.setattr("importlib.metadata.distributions", lambda: [])
     inv = cve.inventory(root)
     venv = next(p for p in inv["parts"] if p["part"] == ".venv")
@@ -316,12 +316,12 @@ def test_status_line_still_runs_standalone_with_a_state_file(tmp_path, feed, no_
     cve.refresh(project(tmp_path, "requests==2.5.0\n"))
     payload = json.dumps({"cwd": "/", "workspace": {"project_dir": CURRENT["root"]}})
     r = subprocess.run([sys.executable, "-I", "-S", statusline.__file__], capture_output=True,
-                       text=True, env={"HOME": os.environ["HOME"], "NO_COLOR": "1"}, timeout=30,
+                       text=True, env={"HOME": os.environ["HOME"], **({"USERPROFILE": os.environ["HOME"], "SYSTEMROOT": os.environ.get("SYSTEMROOT", "")} if os.name == "nt" else {}), "NO_COLOR": "1"}, timeout=30,
                        input=payload, cwd="/")
     assert r.returncode == 0 and "CVEs: 1 affected (1 critical) · feed just now" in r.stdout
     # another folder: never the other project's answer
     r = subprocess.run([sys.executable, "-I", "-S", statusline.__file__], capture_output=True,
-                       text=True, env={"HOME": os.environ["HOME"], "NO_COLOR": "1"}, timeout=30,
+                       text=True, env={"HOME": os.environ["HOME"], **({"USERPROFILE": os.environ["HOME"], "SYSTEMROOT": os.environ.get("SYSTEMROOT", "")} if os.name == "nt" else {}), "NO_COLOR": "1"}, timeout=30,
                        input=json.dumps({"workspace": {"project_dir": "/tmp"}}), cwd="/")
     assert "CVEs: unknown · checked for another folder" in r.stdout
 
@@ -510,7 +510,7 @@ def test_the_hook_as_a_bare_script_loads_the_osv_module_by_path(tmp_path):
     driver.write_text("import runpy, sys\n"
                       "g = runpy.run_path(sys.argv[1], run_name='bare')\n"
                       "assert 'stillrunning' not in sys.modules\n"
-                      "print(g['_osv_module']().USER_AGENT)\n")
+                      "print(g['_osv_module']().USER_AGENT)\n", encoding="utf-8")
     r = subprocess.run([sys.executable, "-I", "-S", str(driver), ch.__file__], capture_output=True,
                        text=True, timeout=30, cwd=str(tmp_path))
     assert r.stdout.strip() == "stillrunning-cve/1", r.stderr
@@ -568,7 +568,7 @@ if [ "$1" = "-l" ]; then
   if [ -f {store} ]; then cat {store}; else echo "no crontab for tester" >&2; exit 1; fi
 elif [ "$1" = "-" ]; then cat > {store}
 else exit 2; fi
-""")
+""", encoding="utf-8")
     tool.chmod(tool.stat().st_mode | stat.S_IEXEC)
     monkeypatch.setenv("PATH", f"{tool.parent}:{os.environ['PATH']}")
     return store
@@ -584,7 +584,7 @@ def test_schedule_adds_one_line_is_idempotent_and_unschedule_removes_only_its_ow
     assert "Scheduled" in capsys.readouterr().out
 
     other = ["MAILTO=me", "0 3 * * * /usr/bin/backup  # mine"]
-    fake_crontab.write_text("\n".join(other + lines) + "\n")
+    fake_crontab.write_text("\n".join(other + lines) + "\n", encoding="utf-8")
     assert cve.main(["--schedule", "--cwd", str(tmp_path)]) == 0
     assert "Already scheduled" in capsys.readouterr().out
     assert fake_crontab.read_text(encoding="utf-8").splitlines() == other + lines
@@ -599,7 +599,7 @@ def test_schedule_adds_one_line_is_idempotent_and_unschedule_removes_only_its_ow
 def test_schedule_refuses_when_crontab_cannot_be_read(tmp_path, monkeypatch, capsys):
     tool = tmp_path / "bin" / "crontab"
     tool.parent.mkdir()
-    tool.write_text("#!/bin/sh\necho 'permission denied' >&2\nexit 1\n")
+    tool.write_text("#!/bin/sh\necho 'permission denied' >&2\nexit 1\n", encoding="utf-8")
     tool.chmod(0o755)
     monkeypatch.setenv("PATH", f"{tool.parent}:{os.environ['PATH']}")
     assert cve.main(["--schedule", "--cwd", str(tmp_path)]) == 1
@@ -691,7 +691,7 @@ def test_manifests_beyond_the_search_limits_make_the_inventory_unknown(tmp_path,
     root = project(tmp_path, "requests==2.31.0\n")
     deep = root / "a" / "b" / "c"
     deep.mkdir(parents=True)
-    (deep / "requirements.txt").write_text("requests==2.5.0\n")
+    (deep / "requirements.txt").write_text("requests==2.5.0\n", encoding="utf-8")
     data = cve.evaluate_for(cve.refresh(root, now=NOW), NOW, str(root))
     assert data["state"] == "UNKNOWN"
     assert any("more than two folders deep" in r for r in data["reasons"])
@@ -700,7 +700,7 @@ def test_manifests_beyond_the_search_limits_make_the_inventory_unknown(tmp_path,
     for i in range(panel.MAX_MANIFESTS + 3):
         sub = many / f"svc{i:02d}"
         sub.mkdir()
-        (sub / "requirements.txt").write_text("requests==2.31.0\n")
+        (sub / "requirements.txt").write_text("requests==2.31.0\n", encoding="utf-8")
     data = cve.evaluate_for(cve.refresh(many, now=NOW), NOW, str(many))
     assert data["state"] == "UNKNOWN"
     assert any("not searched" in r for r in data["reasons"])

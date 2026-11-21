@@ -52,7 +52,7 @@ def db():
 
 
 def req(tmp_path, *lines, name="requirements.txt"):
-    (tmp_path / name).write_text("\n".join(lines) + "\n")
+    (tmp_path / name).write_text("\n".join(lines) + "\n", encoding="utf-8")
     return f"pip install -r {name}"
 
 
@@ -386,7 +386,7 @@ def test_nothing_is_stored_unless_both_checks_completed(tmp_path, monkeypatch):
 ])
 def test_range_tag_pre_and_constraints_are_never_served(tmp_path, lines, extra):
     verify(tmp_path)
-    (tmp_path / "constraints.txt").write_text("six==1.16.0\n")
+    (tmp_path / "constraints.txt").write_text("six==1.16.0\n", encoding="utf-8")
     command = req(tmp_path, *lines, name="other-requirements.txt") + extra
     out = run(tmp_path, command, OFFLINE, cve_failed, T0 + 60)
     assert out["action"] == "ask"
@@ -518,14 +518,14 @@ def test_requirement_hashes():
 
 
 def test_the_hash_reaches_the_parsed_package(tmp_path):
-    (tmp_path / "r.txt").write_text(f"six==1.16.0 \\\n    --hash={H1}\nidna==3.7\n")
+    (tmp_path / "r.txt").write_text(f"six==1.16.0 \\\n    --hash={H1}\nidna==3.7\n", encoding="utf-8")
     parsed = ch.parse_install_commands("pip install -r r.txt", cwd=str(tmp_path))
     by_name = {p["name"]: p for p in parsed["packages"]}
     assert by_name["six"]["hash"] == H1 and "hash" not in by_name["idna"]
 
 
 def test_the_same_pin_with_two_different_hashes_has_no_hash(tmp_path):
-    (tmp_path / "r.txt").write_text(f"six==1.16.0 --hash={H1}\nsix==1.16.0 --hash={H2}\n")
+    (tmp_path / "r.txt").write_text(f"six==1.16.0 --hash={H1}\nsix==1.16.0 --hash={H2}\n", encoding="utf-8")
     parsed = ch.parse_install_commands("pip install -r r.txt", cwd=str(tmp_path))
     six = [p for p in parsed["packages"] if p["name"] == "six"]
     assert len(six) == 1 and "hash" not in six[0] and six[0]["hash_conflict"]
@@ -691,8 +691,8 @@ def test_each_package_counts_once_as_could_not_check(tmp_path):
     "uv pip sync req.txt",
 ])
 def test_uv_installs_never_carry_a_cache_hash(command, tmp_path):
-    (tmp_path / "req.txt").write_text("six==1.16.0 --hash=sha256:" + "a" * 64 + "\n")
-    (tmp_path / "uv.toml").write_text("[pip]\nverify-hashes = false\n")
+    (tmp_path / "req.txt").write_text("six==1.16.0 --hash=sha256:" + "a" * 64 + "\n", encoding="utf-8")
+    (tmp_path / "uv.toml").write_text("[pip]\nverify-hashes = false\n", encoding="utf-8")
     parsed = ch.parse_install_commands(command, cwd=str(tmp_path))
     six = [p for p in parsed["packages"] if p["name"] == "six"]
     assert six and not any(p.get("hash") for p in six)

