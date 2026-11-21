@@ -5257,22 +5257,19 @@ def _safe_script_streams():
     cannot import the package, so the entry points' make_output_safe() never ran
     here: on a Windows code page a non-ASCII warning (→, —) raised
     UnicodeEncodeError and crashed the process (found on a real windows-latest
-    runner 2026-11-21). Load the package's own _stdio.py by absolute path (never
-    from the current folder: -I keeps that off sys.path) and apply it. UTF-8
-    streams are left untouched, so nothing changes where they already are UTF-8
-    (Linux, macOS)."""
-    try:
-        import importlib.util
-        spec = importlib.util.spec_from_file_location(
-            "_stillrunning_stdio", os.path.join(os.path.dirname(os.path.abspath(__file__)), "_stdio.py"))
-        module = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(module)
-        module.make_output_safe()
-    except Exception:  # _stdio.py missing or broken: still never crash on output
-        for stream in (sys.stdout, sys.stderr):
+    runner 2026-11-21). What reads these streams is Claude Code, which decodes
+    them as UTF-8 — so a stream that is not UTF-8 is switched to UTF-8 (the
+    status line's 🛡 arrives as 🛡, not as an ASCII tag). Streams that already
+    are UTF-8 are left untouched, so nothing changes on Linux or macOS."""
+    for stream in (sys.stdout, sys.stderr):
+        name = (getattr(stream, "encoding", "") or "").lower().replace("-", "").replace("_", "")
+        if name in ("utf8", "utf8sig"):
+            continue                        # Linux, macOS: unchanged
+        try:
+            stream.reconfigure(encoding="utf-8", errors="backslashreplace")
+        except (AttributeError, ValueError, OSError):
             try:
-                if (getattr(stream, "encoding", "") or "").lower().replace("-", "") not in ("utf8", "utf8sig"):
-                    stream.reconfigure(errors="backslashreplace")
+                stream.reconfigure(errors="backslashreplace")
             except (AttributeError, ValueError, OSError):
                 continue
 

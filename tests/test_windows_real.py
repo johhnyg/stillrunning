@@ -78,12 +78,13 @@ def test_status_line_runs_as_a_bare_script_with_non_ascii_output(tmp_path):
     r = _bare("statusline.py", payload, {"HOME": str(tmp_path), "USERPROFILE": str(tmp_path)})
     assert r.returncode == 0, r.stderr.decode("utf-8", "replace")[-500:]
     assert r.stdout.strip() and b"Traceback" not in r.stderr
+    assert "\U0001f6e1".encode("utf-8") in r.stdout          # the shield arrives as UTF-8, not "<U+1F6E1>"
 
 
 def test_bare_hook_streams_survive_a_code_page(tmp_path):
     """The hook's own stream set-up, under cp1252 (forced here so it also runs
-    on Linux; on Windows that is the real default for a pipe). → and — would
-    have raised UnicodeEncodeError."""
+    on Linux; on Windows that is the real default for a pipe). → and — raised
+    UnicodeEncodeError before the fix; now the stream is UTF-8."""
     driver = tmp_path / "driver.py"
     driver.write_text(
         "import importlib.util, sys\n"
@@ -95,9 +96,9 @@ def test_bare_hook_streams_survive_a_code_page(tmp_path):
     env = dict(os.environ, PYTHONIOENCODING="cp1252", HOME=str(tmp_path), USERPROFILE=str(tmp_path))
     r = subprocess.run([sys.executable, "-S", str(driver)], capture_output=True, env=env, timeout=60)
     assert r.returncode == 0, r.stderr.decode("cp1252", "replace")[-500:]
-    # → has no cp1252 byte and is spelled out; — exists in cp1252 and is kept
-    assert "result -> done — ok" in r.stdout.decode("cp1252")
-    assert "install -> checked — ok" in r.stderr.decode("cp1252")
+    # a non-UTF-8 stream is switched to UTF-8 (Claude Code reads these as UTF-8)
+    assert "result → done — ok" in r.stdout.decode("utf-8")
+    assert "install → checked — ok" in r.stderr.decode("utf-8")
 
 
 def test_bare_hook_answer_is_unchanged_json(tmp_path):

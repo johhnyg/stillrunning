@@ -714,7 +714,7 @@ def test_remembering_works_end_to_end_in_the_bare_script_the_hook_runs_as(home):
     def run(cwd):
         event = json.dumps({"tool_name": "Bash", "cwd": cwd, "tool_input": {"command": command}})
         done = subprocess.run([sys.executable, "-I", "-S", str(script)], input=event, env=env,
-                              capture_output=True, text=True, timeout=30)
+                              capture_output=True, text=True, encoding="utf-8", timeout=30)
         assert done.returncode == 0, done.stderr
         return json.loads(done.stdout), done.stderr
 

@@ -674,7 +674,7 @@ def test_ordinary_git_in_the_hooks_own_repository_is_silent(command, package_rep
 
 
 def test_git_dash_c_names_the_folder(work, package_repo):
-    assert ch.touches_protection(f"git -C {package_repo} stash", work)
+    assert ch.touches_protection(f"git -C {str(package_repo).replace(os.sep, '/')} stash", work)   # bash form
     assert not ch.touches_protection("git -C docs stash", work)
 
 

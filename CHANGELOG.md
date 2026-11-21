@@ -88,8 +88,9 @@ against the 30 s timeout), so a blocked install padded that way went through.
   - **Crash:** the hook and the status line, run as bare scripts
     (`python -I -S …`) the way Claude Code runs them, never applied the
     encoding fix, so on a Windows code page `→` or `—` raised
-    UnicodeEncodeError (the status line exited 1). They now load the package's
-    `_stdio.py` by absolute path.
+    UnicodeEncodeError (the status line exited 1). A stream that is not UTF-8
+    is now switched to UTF-8, which is what Claude Code reads (the status line's
+    🛡 arrives intact); UTF-8 streams, as on Linux and macOS, are untouched.
   - **CVE monitoring was always UNKNOWN on Windows:** the safe-folder pattern
     accepted only `/…`, so every Windows folder read "checked for another
     folder". Windows drive-letter folders are now accepted (UNC paths still
