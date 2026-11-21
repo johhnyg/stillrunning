@@ -225,50 +225,61 @@ def test_the_pipeline_walk_answers_the_same_with_and_without_its_memo(command):
         assert ch._stdin_consumer(commands, j) == ch._stdin_consumer(commands, j, None, memo), (command, j)
 
 
-# ── review 3: the bounded display never cuts inside quotes or shows part of a quoted secret ──
+# ── reviews 3 and 4: a command over 4,096 characters is not shown at all ──
 
 PASS = "Tr0ub4dor&3horse"
+HEREDOC = "cat > notes.md <<'EOF'\nIt's the release checklist.\nEOF\n"
 
 
-def _long(middle, before=1800, after=3000):
-    """`middle` inside a command over _SHOW_EXACT characters, where it still
-    falls inside the shown part."""
-    return "x " * (before // 2) + middle + " ok" * (after // 3)
-
-
-@pytest.mark.parametrize("middle", [
-    f'mysql -u root --password "{PASS} battery staple" -e "select 1"',
-    f'curl --password "{"a" * 300} {PASS} more" https://x.example',
-    f'export API_TOKEN="{"a" * 300} {PASS}"',
-    f"tool --secret '{PASS} battery staple'",
-    f'echo "{PASS} {"a" * 300}" | docker login --password-stdin',
+@pytest.mark.parametrize("command", [
+    # review 3: a cut inside quotes, a long word swallowing the opening quote, a long comment
+    "# " + " ".join(["note"] * 900) + f'\nmysql -u root --password "{PASS} battery staple" -e "select 1"',
+    "x " * 900 + f'curl --password "{"a" * 300} {PASS} more" https://x.example' + " ok" * 1000,
+    "x " * 900 + f'export API_TOKEN="{"a" * 300} {PASS}"' + " ok" * 1000,
+    # review 4 A1: an apostrophe in a heredoc body before a quoted password
+    HEREDOC + f"mysql -u root --password '{PASS} battery' -e \"select 1\"\n" + "echo step done\n" * 400,
+    "echo don't " + "w " * 100 + f"mysql --password '{PASS} battery'" + " ok" * 1500,
+    # review 4 A2: a long word that takes the program name with it
+    "/" + "v" * 300 + f"/twine upload dist/* -u __token__ -p {PASS}" + " ok" * 1500,
+    'X="' + "a" * 300 + f'";mysql -u root -p{PASS} db' + " ok" * 1500,
+    'cd "' + "a" * 300 + f'"&&docker login -u bob -p {PASS} reg' + " ok" * 1500,
+    # review 4 A3: the cut dropping a trailing anchor; a two-value rule misaligned
+    " ".join("TOKEN=" + "t" * 250 for _ in range(16)) + f" && echo {PASS} | docker login --password-stdin",
+    "poetry config http-basic.r " + "u" * 300 + f" {PASS}" + " ok" * 1500,
 ])
-def test_a_quoted_secret_in_a_long_command_never_shows(middle):
-    shown = ch.show_command(_long(middle), limit=10 ** 6)
-    assert PASS not in shown and "battery" not in shown, shown[1780:1900]
-
-
-def test_the_cut_never_falls_inside_a_quoted_secret():
-    for pad in range(3900, 4200):
-        command = "w " * (pad // 2) + f' mysql --password "{PASS} battery staple" more' + " t" * 500
-        shown = ch.show_command(command, limit=10 ** 6)
-        assert PASS not in shown and "battery" not in shown, pad
-
-
-def test_a_long_comment_in_front_does_not_blank_the_command():
-    command = "# " + " ".join(["note"] * 900) + "\npip install evilx"
+def test_a_long_command_is_not_shown_so_no_secret_in_it_can_show(command):
     assert len(command) > ch._SHOW_EXACT
-    assert ch.show_command(command) == "pip install evilx"
-    assert ch.show_command("# " + "c" * 5000 + "\npip install evilx") == "pip install evilx"
+    shown = ch.show_command(command)
+    assert shown == f"[command of {len(command)} characters, not shown]"
+    assert PASS not in shown and "battery" not in shown
 
 
-def test_the_bounded_display_is_linear():
-    for command in ("a" * ch.MAX_COMMAND_CHARS, "a'" * (ch.MAX_COMMAND_CHARS // 2),
-                    '"x" ' * (ch.MAX_COMMAND_CHARS // 4), "\\" * ch.MAX_COMMAND_CHARS,
-                    "$'" * (ch.MAX_COMMAND_CHARS // 2), "# c\n" * (ch.MAX_COMMAND_CHARS // 4)):
-        start = time.monotonic()
-        ch.show_command(command)
-        assert time.monotonic() - start < 2, command[:10]
+def test_the_decision_log_of_a_long_command_names_the_package_but_not_the_command(monkeypatch, tmp_path):
+    command = HEREDOC + f"mysql --password '{PASS} battery'\n" + "echo step done\n" * 400 + "pip install evilx"
+    code, decision, out = _run({"tool_name": "Bash", "tool_input": {"command": command}, "cwd": str(tmp_path)},
+                               monkeypatch, tmp_path)
+    assert decision == "deny" and PASS not in out
+    log = (tmp_path / ".stillrunning" / "hook_decisions.jsonl").read_text(encoding="utf-8")
+    assert PASS not in log and "battery" not in log and "evilx" in log
+    assert f"[command of {len(command)} characters, not shown]" in log
+
+
+def test_the_boundary_is_exact():
+    command = "echo " + "a " * 2045 + "b"
+    assert len(command) == ch._SHOW_EXACT
+    assert ch.show_command(command, limit=10 ** 6) == " ".join(command.split())
+    assert ch.show_command(command + "c") == f"[command of {ch._SHOW_EXACT + 1} characters, not shown]"
+
+
+@pytest.mark.parametrize("count", [1000, 4000])
+def test_many_separate_install_commands_decide_in_linear_time(count, monkeypatch, tmp_path):
+    """review 4 B: `pip install x ; pip install q1 ; …` rebuilt the known names
+    for every command (4,000 commands 16 s)."""
+    command = " ; ".join(f"pip install q{i}" for i in range(count)) + " ; pip install evilx"
+    start = time.monotonic()
+    code, decision, out = _run({"tool_name": "Bash", "tool_input": {"command": command}, "cwd": str(tmp_path)},
+                               monkeypatch, tmp_path)
+    assert decision == "deny" and time.monotonic() - start < count / 400 + 2, time.monotonic() - start
 
 
 # ── review 3: many packages, and the band just under the size cap ──

@@ -1308,6 +1308,7 @@ class _Result:
         self.script_text = {}         # file → literal text this command writes into it
         self.downloaded = set()       # files this command downloads
         self.shadow = []        # words the parser did not read as packages but that could be
+        self.known_names = (0, 0, set())   # _known_names(): how far it has read, and the names
         self.line_hashes = None  # `--hash` pins of the requirements line being read (verdict cache)
         self.hash_enforced = False  # the installer being parsed refuses a file that misses them
         self.hash_off_env = False   # UV_NO_VERIFY_HASHES is in force for this command
@@ -1493,57 +1494,13 @@ def _without_comments(text):
 
 # Several redaction patterns take quadratic time on one long run of
 # non-space characters (a 40,000-character comment took 42-59 s, past the
-# hook's 30 s timeout — fuzz finding F3). Up to _SHOW_EXACT characters the
-# command is redacted as before. A longer one is first read once, left to
-# right, as shell words (quotes and backslashes respected, comments dropped):
-# a word longer than _SHOW_RUN — quoted parts and any `NAME=` or `--flag=` in
-# front included — is replaced WHOLE by a length note, so no piece of a long
-# secret can show; whole words are then kept up to _SHOW_EXACT characters,
-# so the cut never falls inside quotes and the redactions see every quoted
-# value closed. Only 400 characters are shown either way.
+# hook's 30 s timeout — fuzz finding F3), and no shortened form of a long
+# command has proved safe to show: a cut or a skipped part can leave a
+# password the redactions no longer recognise (two independent reviews found
+# such leaks). So a command over _SHOW_EXACT characters is not shown at all;
+# the decision record still names the package and the reason. Shorter
+# commands are redacted and shown exactly as before.
 _SHOW_EXACT = 4096
-_SHOW_RUN = 256
-
-
-def _bounded_for_display(text):
-    out, size, n, at, newline = [], 0, len(text), 0, False
-    while at < n:
-        ch = text[at]
-        if ch.isspace():
-            newline = newline or ch == "\n"
-            at += 1
-            continue
-        if ch == "#" and text[at + 1:at + 2] != "!":       # a comment, to the end of its line
-            end = text.find("\n", at)
-            at = n if end < 0 else end
-            continue
-        start, quote = at, None
-        while at < n:
-            ch = text[at]
-            if quote is None:
-                if ch.isspace():
-                    break
-                if ch == "\\":
-                    at += 2
-                    continue
-                if ch in "'\"":
-                    quote = "$" if ch == "'" and at > start and text[at - 1] == "$" else ch
-            elif ch == "\\" and quote != "'":            # escapes in "…" and $'…'
-                at += 2
-                continue
-            elif ch == ("'" if quote == "$" else quote):
-                quote = None
-            at += 1
-        word = text[start:min(at, n)]
-        if len(word) > _SHOW_RUN:
-            word = f"[{len(word)} characters]"
-        sep = ("\n" if newline else " ") if out else ""
-        if size + len(sep) + len(word) > _SHOW_EXACT:
-            break
-        out.append(sep + word)
-        size += len(sep) + len(word)
-        newline = False
-    return "".join(out)
 
 
 def show_command(command, limit=400):
@@ -1551,7 +1508,7 @@ def show_command(command, limit=400):
     credentials removed, cut to `limit`. For display only; never parsed."""
     text = str(command or "")
     if len(text) > _SHOW_EXACT:
-        text = _bounded_for_display(text)
+        return f"[command of {len(text)} characters, not shown]"
     for pattern, replacement in _REDACTIONS:
         text = pattern.sub(replacement, text)
     text = " ".join(_without_comments(text).split())
@@ -2227,6 +2184,22 @@ def _runner_tables(prog):
         _npm_value_flags(prog) | _NPM_INDEX_FLAGS | {"-p", "--package", "-c", "--call"})
 
 
+def _known_names(res):
+    """{(eco, normalized name)} of res.packages and res.shadow. Both lists only
+    grow (append), so the set is brought up to date from where it was left
+    instead of rebuilt for every simple command (that made `pip install a ;
+    pip install b ; …` quadratic). A key added here by _collect_shadow is
+    always appended to res.shadow right after, so the set never holds a name
+    the lists do not."""
+    done_packages, done_shadow, names = res.known_names
+    for p in res.packages[done_packages:]:
+        names.add((p["eco"], normalize(p["eco"], p["name"])))
+    for s in res.shadow[done_shadow:]:
+        names.add((s["eco"], normalize(s["eco"], s["name"])))
+    res.known_names = (len(res.packages), len(res.shadow), names)
+    return names
+
+
 def _collect_shadow(prog, args, res, raw, touched):
     if _PIP.match(prog) or prog in ("easy_install", "uv", "uvx", "pipx", "poetry", "pdm", "pipenv"):
         eco, pattern = "pip", _SHADOW_PIP
@@ -2243,8 +2216,7 @@ def _collect_shadow(prog, args, res, raw, touched):
     # words from the command on belong to that command, not to the installer.
     runner = prog in ("npx", "pnpx", "bunx", "uvx") or any(w in _SHADOW_RUN_VERBS for w in plain[:2])
     run_at = next((i for i, a in enumerate(args) if a in _SHADOW_RUN_VERBS), -1) if runner else None
-    have = {(p["eco"], normalize(p["eco"], p["name"])) for p in res.packages}
-    have |= {(s["eco"], normalize(s["eco"], s["name"])) for s in res.shadow}
+    have = _known_names(res)
     switches, valued = _runner_tables(prog) if runner else (frozenset(), frozenset())
     after_flag, unsure, last = None, False, False
     for index, arg in enumerate(args):

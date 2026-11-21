@@ -32,14 +32,18 @@ against the 30 s timeout), so a blocked install padded that way went through.
 - `stillrunning hook` (the older registration) ends as soon as it has
   answered, like the registered script, instead of waiting for lookups that
   are still running.
-- Linear time where it was quadratic: the redaction of the command for the
-  decision log, long pipelines (2,000 pipes: 187 s → 1.6 s), commands naming
-  thousands of packages (4,000: 18 s → 2.2 s), repeated path checks, and the
-  dynamic-install pattern.
-- Only commands over 4,096 characters are shown differently in the decision
-  log and the panel: comments are left out, and a word of more than 256
-  characters (quoted parts included) appears as `[N characters]`, so no part
-  of a long quoted value, or of a password after a long comment, can show.
+- Faster where it was quadratic: long pipelines (2,000 pipes: 187 s → 0.6 s),
+  one install naming thousands of packages (4,000: 18 s → 2.2 s), many
+  separate install commands (`pip install a ; pip install b ; …`, 4,000:
+  16 s → 2.6 s), repeated path checks, and the dynamic-install
+  pattern. Near the 128 KiB cap some commands can still take longer than
+  the 25 s the hook allows itself; those are stopped (blocked), never let
+  through on Linux and macOS.
+- A command over 4,096 characters is no longer shown in the decision log or
+  the side panel: it appears as `[command of N characters, not shown]` (the
+  record still names the package and the reason). Shortening it safely
+  proved impossible — every shortened form tried could leave part of a
+  password visible. Shorter commands are shown exactly as before.
 - A command with invalid UTF-8 is logged with an escape instead of crashing
   the hook.
 - Stricter on purpose: a crash or timeout now blocks even a harmless command.
