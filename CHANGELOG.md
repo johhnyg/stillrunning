@@ -9,7 +9,10 @@
 
 ## Unreleased (not published)
 
-Two batches since 2.14.3. Neither changes what is checked or blocked.
+Three batches since 2.14.3. The first (the hook failing closed) changes
+what is blocked: a crash or timeout of the hook now blocks, and a command
+over the 128K-character limit is asked about. The other two change nothing
+that is checked or blocked.
 
 ### The hook fails closed on its own failure (fuzz findings F3, F4, R1, R2)
 
@@ -28,17 +31,22 @@ against the 30 s timeout), so a blocked install padded that way went through.
 - On Linux and macOS the hook stops itself after 25 s and blocks, even in the
   middle of a slow regular expression (Windows has no such timer; there the
   registration covers it).
-- Commands over 128 KiB are asked about without being read.
+- Commands over 128K characters are asked about without being read.
 - `stillrunning hook` (the older registration) ends as soon as it has
   answered, like the registered script, instead of waiting for lookups that
   are still running.
 - Faster where it was quadratic: long pipelines (2,000 pipes: 187 s → 0.6 s),
   one install naming thousands of packages (4,000: 18 s → 2.2 s), many
   separate install commands (`pip install a ; pip install b ; …`, 4,000:
-  16 s → 2.6 s), repeated path checks, and the dynamic-install
-  pattern. Near the 128 KiB cap some commands can still take longer than
-  the 25 s the hook allows itself; those are stopped (blocked), never let
-  through on Linux and macOS.
+  16 s → 2.6 s), and the dynamic-install pattern; resolved paths are
+  remembered within one call. Not everything is linear: the
+  self-protection check is still quadratic on a long chain of `cd`
+  steps (`cd sub && pip install q && …`: 1,000 steps take about 10 s, and
+  2,000 reach the 25 s limit). Main is just as slow there; the difference
+  is that the hook now stops at the limit and blocks. Near the
+  128K-character cap other commands can also take longer than the 25 s the
+  hook allows itself; those are stopped (blocked), never let through, on
+  Linux and macOS.
 - A command over 4,096 characters is no longer shown in the decision log or
   the side panel: it appears as `[command of N characters, not shown]` (the
   record still names the package and the reason). Shortening it safely
