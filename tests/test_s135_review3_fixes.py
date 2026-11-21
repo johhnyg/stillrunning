@@ -742,7 +742,7 @@ def run_script(home, cwd, command):
     event = json.dumps({"tool_name": "Bash", "cwd": str(cwd), "tool_input": {"command": command}})
     env = {"HOME": str(home), **({"USERPROFILE": str(home), "SYSTEMROOT": os.environ.get("SYSTEMROOT", "")} if os.name == "nt" else {}), "PATH": os.environ.get("PATH", ""), "STILLRUNNING_API_BASE": "http://127.0.0.1:9"}
     done = subprocess.run([sys.executable, "-I", "-S", ch.__file__], input=event, env=env,
-                          capture_output=True, text=True, timeout=40)
+                          capture_output=True, text=True, encoding="utf-8", timeout=40)
     assert done.returncode == 0, done.stderr
     return json.loads(done.stdout) if done.stdout.strip() else {}
 

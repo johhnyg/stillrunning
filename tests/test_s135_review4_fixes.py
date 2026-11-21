@@ -745,7 +745,7 @@ def test_the_hook_script_blocks_a_package_hidden_behind_a_flag(home, work):
                             ("ls -la", None)):
         payload = json.dumps({"hook_event_name": "PreToolUse", "tool_name": "Bash", "cwd": work,
                               "tool_input": {"command": command}})
-        ran = subprocess.run([sys.executable, "-I", "-S", ch.__file__], input=payload, text=True,
+        ran = subprocess.run([sys.executable, "-I", "-S", ch.__file__], input=payload, text=True, encoding="utf-8",
                              capture_output=True, timeout=60, env=env, cwd=work)
         assert ran.returncode == 0, ran.stderr
         if action is None:
