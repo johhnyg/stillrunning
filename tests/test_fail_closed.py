@@ -79,8 +79,28 @@ def test_registration_blocks_when_the_hook_fails(tmp_path, monkeypatch):
 
 # ── R1 / any crash: exit 2 (blocks), never 1 (lets the call through) ──
 
+def _ordinary_stack():
+    """Python 3.14+ bounds JSON recursion by the real C stack, not the
+    recursion limit: under `ulimit -s unlimited` (some CI runners) 100,000
+    levels parse fine, the input is a list rather than a hook event, and the
+    hook rightly does nothing. Give the child an ordinary 8 MB stack so the
+    parser fails on every version, as it does on a user's machine."""
+    try:
+        import resource
+    except ImportError:            # Windows: a 1 MB main-thread stack already
+        return None
+    def limit():
+        hard = resource.getrlimit(resource.RLIMIT_STACK)[1]
+        want = 8 * 1024 * 1024
+        resource.setrlimit(resource.RLIMIT_STACK, (want if hard == resource.RLIM_INFINITY else min(want, hard), hard))
+    return limit
+
+
 def test_deeply_nested_input_blocks_instead_of_crashing(tmp_path):
-    r = _bare(("[" * 100000 + "]" * 100000).encode(), tmp_path)
+    env = {"HOME": str(tmp_path), "USERPROFILE": str(tmp_path), "PATH": os.environ.get("PATH", ""),
+           "SYSTEMROOT": os.environ.get("SYSTEMROOT", ""), "STILLRUNNING_CVE_CHECK": "0"}
+    r = subprocess.run([sys.executable, "-I", "-S", HOOK], input=("[" * 100000 + "]" * 100000).encode(),
+                       capture_output=True, env=env, timeout=60, preexec_fn=_ordinary_stack())
     assert r.returncode == 2, (r.returncode, r.stderr[-300:])
     assert b"stillrunning:" in r.stderr
 
