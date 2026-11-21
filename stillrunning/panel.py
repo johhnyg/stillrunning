@@ -69,6 +69,8 @@ def protection():
                     state = "off"
                     problems.append("The hook is registered but no longer watches commands.")
                 watches_edits = matcher in ("", "*") or {"Write", "Edit"} <= tools
+        if state == "on" and claude_hook.registered_fail_open():
+            problems.append("The hook is " + claude_hook.REREGISTER_ADVICE + ".")
         if state == "on" and not watches_edits:
             problems.append("The hook does not watch file edits, so its own settings could be changed "
                             "without asking you. Fix: stillrunning --hook-claude-code")

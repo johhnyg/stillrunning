@@ -1290,6 +1290,7 @@ def split_npm_version(version):
 class _Result:
     def __init__(self):
         self.packages = []      # {"eco","name","version","raw"}
+        self._by_key = {}       # add()'s key → the first package in self.packages with it
         self.unverifiable = []  # {"kind", "raw"}  → ask the user
         self.notes = []         # plain strings → shown, never block
         self.uncertain = False  # a flag in force changes which version resolves
@@ -1316,21 +1317,23 @@ class _Result:
         # one may be the bad version.
         self.touched += 1
         key = (eco, normalize(eco, name), version, spec, bool(self.uncertain))
-        same = [p for p in self.packages if (p["eco"], normalize(p["eco"], p["name"]),
-                                             p.get("version"), p.get("spec"),
-                                             bool(p.get("uncertain"))) == key]
+        # first package with this key; add() is the only writer of
+        # self.packages, so the index never goes stale (a list scan here made
+        # a command naming thousands of packages quadratic)
+        first = self._by_key.get(key)
         # a hash names the artifact only when this installer enforces it
         hashes = self.line_hashes if self.hash_enforced else None
-        if not same:
+        if first is None:
             self.packages.append({"eco": eco, "name": name, "version": version, "raw": raw,
                                   "spec": spec, "uncertain": bool(self.uncertain)})
+            self._by_key[key] = self.packages[-1]
             if hashes:
                 self.packages[-1]["hash"] = hashes
-        elif same[0].get("hash") != hashes:
+        elif first.get("hash") != hashes:
             # the same pin named twice with different (or missing) hashes:
             # no one artifact is known, so the verdict cache stays out of it
-            same[0].pop("hash", None)
-            same[0]["hash_conflict"] = True
+            first.pop("hash", None)
+            first["hash_conflict"] = True
 
     def full(self, path):
         path = os.path.expanduser(path)
@@ -1491,23 +1494,56 @@ def _without_comments(text):
 # Several redaction patterns take quadratic time on one long run of
 # non-space characters (a 40,000-character comment took 42-59 s, past the
 # hook's 30 s timeout — fuzz finding F3). Up to _SHOW_EXACT characters the
-# command is redacted as before. In a longer one, any run of non-space
-# characters longer than _SHOW_RUN is first replaced WHOLE by a length note
-# (so no piece of a long secret can show), then a prefix cut at whitespace is
-# redacted.
-# Only 400 characters are shown either way.
+# command is redacted as before. A longer one is first read once, left to
+# right, as shell words (quotes and backslashes respected, comments dropped):
+# a word longer than _SHOW_RUN — quoted parts and any `NAME=` or `--flag=` in
+# front included — is replaced WHOLE by a length note, so no piece of a long
+# secret can show; whole words are then kept up to _SHOW_EXACT characters,
+# so the cut never falls inside quotes and the redactions see every quoted
+# value closed. Only 400 characters are shown either way.
 _SHOW_EXACT = 4096
 _SHOW_RUN = 256
-_LONG_RUN = re.compile(r"\S{%d,}" % (_SHOW_RUN + 1))
 
 
 def _bounded_for_display(text):
-    text = _LONG_RUN.sub(lambda m: f"[{len(m.group(0))} characters]", text)    # linear
-    head = text[:_SHOW_EXACT]
-    if len(text) > _SHOW_EXACT and not text[_SHOW_EXACT].isspace():
-        cut = max(head.rfind(" "), head.rfind("\t"), head.rfind("\n"))
-        head = head[:cut] if cut > 0 else ""
-    return head
+    out, size, n, at, newline = [], 0, len(text), 0, False
+    while at < n:
+        ch = text[at]
+        if ch.isspace():
+            newline = newline or ch == "\n"
+            at += 1
+            continue
+        if ch == "#" and text[at + 1:at + 2] != "!":       # a comment, to the end of its line
+            end = text.find("\n", at)
+            at = n if end < 0 else end
+            continue
+        start, quote = at, None
+        while at < n:
+            ch = text[at]
+            if quote is None:
+                if ch.isspace():
+                    break
+                if ch == "\\":
+                    at += 2
+                    continue
+                if ch in "'\"":
+                    quote = "$" if ch == "'" and at > start and text[at - 1] == "$" else ch
+            elif ch == "\\" and quote != "'":            # escapes in "…" and $'…'
+                at += 2
+                continue
+            elif ch == ("'" if quote == "$" else quote):
+                quote = None
+            at += 1
+        word = text[start:min(at, n)]
+        if len(word) > _SHOW_RUN:
+            word = f"[{len(word)} characters]"
+        sep = ("\n" if newline else " ") if out else ""
+        if size + len(sep) + len(word) > _SHOW_EXACT:
+            break
+        out.append(sep + word)
+        size += len(sep) + len(word)
+        newline = False
+    return "".join(out)
 
 
 def show_command(command, limit=400):
@@ -4571,7 +4607,7 @@ def _private_state_dir():
         _warn(f"could not make {directory} owner-only ({type(exc).__name__})")
 
 
-def _atomic_write(path, text):
+def _atomic_write(path, text, errors="strict"):
     directory = os.path.dirname(path)
     if os.path.realpath(directory) == os.path.realpath(_state_dir()):
         _private_state_dir()
@@ -4582,7 +4618,7 @@ def _atomic_write(path, text):
         mode = os.stat(path).st_mode & 0o777
     except OSError:  # lint: allowed-silent(new file → default mode below)
         mode = None
-    with open(tmp, "w", encoding="utf-8") as handle:
+    with open(tmp, "w", encoding="utf-8", errors=errors) as handle:
         handle.write(text)
         handle.flush()
         os.fsync(handle.fileno())
@@ -4656,7 +4692,10 @@ def log_decisions(records):
     kept += [json.dumps(dict({"cmd_id": None, "can_remember": False}, **record),
                         ensure_ascii=False) for record in records]
     try:
-        _atomic_write(path, chr(10).join(kept[-MAX_DECISIONS:]) + chr(10))
+        # backslashreplace: a lone surrogate (a command with invalid UTF-8)
+        # is written as a \udcff escape, which inside a JSON string reads
+        # back as the same text, instead of crashing the hook
+        _atomic_write(path, chr(10).join(kept[-MAX_DECISIONS:]) + chr(10), errors="backslashreplace")
         os.chmod(path, 0o600)
     except OSError as exc:
         _warn(f"could not write hook_decisions.jsonl ({exc}) — `stillrunning shield` is behind")
@@ -5189,6 +5228,26 @@ def verify_install():
     return "on", "registered in ~/.claude/settings.json; hook script found"
 
 
+REREGISTER_ADVICE = ("registered without \"onFailure\": \"block\", so a crash or timeout of the "
+                     "hook lets the command through; re-register: stillrunning --hook-claude-code")
+
+
+def registered_fail_open():
+    """True when one of our entries in ~/.claude/settings.json lacks
+    "onFailure": "block" (registered by a version before it was added): the
+    hook still decides, but Claude Code runs the command when the hook
+    itself fails or times out. False when there is no entry or the file
+    cannot be read (verify_install reports those)."""
+    try:
+        data, _ = _load_settings(_settings_path())
+    except (InstallError, OSError):  # lint: allowed-silent(unreadable settings are reported by verify_install)
+        return False
+    return any(h.get("onFailure") != HOOK_ON_FAILURE
+               for group in data.get("hooks", {}).get("PreToolUse", [])
+               if isinstance(group, dict) and isinstance(group.get("hooks"), list)
+               for h in group["hooks"] if isinstance(h, dict) and _is_ours(h.get("command", "")))
+
+
 def installed_state():
     """'active' | 'legacy' (only the dead hooks.json) | 'absent' | 'unreadable'."""
     state, reason = verify_install()
@@ -5263,24 +5322,41 @@ def _guarded_run():
         _disarm_deadline()
 
 
-def main():
-    from ._stdio import make_output_safe
-    make_output_safe()   # never crash on a non-UTF-8 console (Windows code pages)
-    sys.exit(_guarded_run())
-
-
-def _script_main():
-    """Run as the hook process (`python -I -S <this file>`). The decision is
-    printed and flushed by run_hook; the process then ends at once, so a
-    lookup thread still waiting on the network can never hold the hook past
-    its deadline."""
-    code = _guarded_run()
+def _end_with(code):
+    """End the hook process with `code` at once, after flushing: a lookup
+    thread still waiting on the network can never hold the hook past its
+    deadline (the decision was already printed and flushed by run_hook)."""
     for stream in (sys.stdout, sys.stderr):
         try:
             stream.flush()
         except (OSError, ValueError):  # lint: allowed-silent(stream already closed; the decision was flushed in _emit)
             continue
     os._exit(code)
+
+
+def main():
+    """`stillrunning hook`. Exits normally (SystemExit) unless a lookup thread
+    is still running after the answer: then a normal exit would wait for it
+    past Claude Code's timeout (the deadline is disarmed by then), so it ends
+    at once like _script_main. No usage ping is sent on this path, so nothing
+    at exit is skipped."""
+    from ._stdio import make_output_safe
+    make_output_safe()   # never crash on a non-UTF-8 console (Windows code pages)
+    import threading
+    before = set(threading.enumerate())
+    code = _guarded_run()
+    stop = time.monotonic() + 0.5          # idle pool workers end within milliseconds
+    for thread in set(threading.enumerate()) - before:
+        if not thread.daemon:
+            thread.join(max(0.0, stop - time.monotonic()))
+    if any(t.is_alive() and not t.daemon for t in set(threading.enumerate()) - before):
+        _end_with(code)
+    sys.exit(code)
+
+
+def _script_main():
+    """Run as the hook process (`python -I -S <this file>`)."""
+    _end_with(_guarded_run())
 
 
 if __name__ == "__main__":

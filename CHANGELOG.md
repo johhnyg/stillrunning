@@ -21,18 +21,27 @@ against the 30 s timeout), so a blocked install padded that way went through.
 
 - The hook is registered with `"onFailure": "block"` (Claude Code 2.1.295 or
   later). Existing installs get it when `stillrunning --hook-claude-code`
-  (or `--setup`) is run again.
+  (or `--setup`) is run again; until then `stillrunning status` and the side
+  panel say so and give that command.
 - Any unhandled failure of the hook process exits 2 (blocks), with the reason
   on stderr; deeply nested input no longer crashes with exit 1.
 - On Linux and macOS the hook stops itself after 25 s and blocks, even in the
   middle of a slow regular expression (Windows has no such timer; there the
   registration covers it).
 - Commands over 128 KiB are asked about without being read.
+- `stillrunning hook` (the older registration) ends as soon as it has
+  answered, like the registered script, instead of waiting for lookups that
+  are still running.
 - Linear time where it was quadratic: the redaction of the command for the
-  decision log (only commands over 4,096 characters are shown differently:
-  runs of more than 256 non-space characters appear as `[N characters]`),
-  long pipelines (2,000 pipes: 187 s → 1.6 s), repeated path checks, and the
+  decision log, long pipelines (2,000 pipes: 187 s → 1.6 s), commands naming
+  thousands of packages (4,000: 18 s → 2.2 s), repeated path checks, and the
   dynamic-install pattern.
+- Only commands over 4,096 characters are shown differently in the decision
+  log and the panel: comments are left out, and a word of more than 256
+  characters (quoted parts included) appears as `[N characters]`, so no part
+  of a long quoted value, or of a password after a long comment, can show.
+- A command with invalid UTF-8 is logged with an escape instead of crashing
+  the hook.
 - Stricter on purpose: a crash or timeout now blocks even a harmless command.
   Every other decision, reason and message is unchanged.
 

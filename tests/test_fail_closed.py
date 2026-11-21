@@ -50,6 +50,15 @@ def _bare(stdin_bytes, home, extra=None, timeout=60):
                           env=env, timeout=timeout)
 
 
+def _driver(path, home, timeout=60, flags=("-I", "-S")):
+    """Run a driver script as the hook runs: isolated (-I -S), minimal env,
+    so no PYTHONPATH or user site can change what is imported. The
+    `stillrunning hook` path needs site-packages (PyYAML): flags=("-I",)."""
+    env = {"HOME": str(home), "USERPROFILE": str(home), "PATH": os.environ.get("PATH", ""),
+           "SYSTEMROOT": os.environ.get("SYSTEMROOT", ""), "STILLRUNNING_CVE_CHECK": "0"}
+    return subprocess.run([sys.executable, *flags, str(path)], capture_output=True, timeout=timeout, env=env)
+
+
 # ── F4: the registration blocks on failure ──
 
 def test_registration_blocks_when_the_hook_fails(tmp_path, monkeypatch):
@@ -88,8 +97,7 @@ def test_any_unhandled_failure_of_the_hook_blocks(error, tmp_path):
         "h.run_hook = boom\n"
         "sys.stdin = io.StringIO('{}')\n"
         "h._script_main()\n", encoding="utf-8")
-    r = subprocess.run([sys.executable, "-S", str(driver)], capture_output=True, timeout=60,
-                       env={**os.environ, "HOME": str(tmp_path), "USERPROFILE": str(tmp_path)})
+    r = _driver(driver, tmp_path)
     assert r.returncode == 2, (r.returncode, r.stderr[-300:])
     assert b"the hook failed" in r.stderr
 
@@ -107,10 +115,9 @@ def test_the_hooks_own_deadline_blocks_even_inside_a_long_regex(tmp_path):
         "sys.stdin = io.StringIO('{}')\n"
         "h._script_main()\n", encoding="utf-8")
     start = time.monotonic()
-    r = subprocess.run([sys.executable, "-S", str(driver)], capture_output=True, timeout=60,
-                       env={**os.environ, "HOME": str(tmp_path), "USERPROFILE": str(tmp_path)})
+    r = _driver(driver, tmp_path)
     assert r.returncode == 2 and b"did not finish" in r.stderr, (r.returncode, r.stderr[-300:])
-    assert time.monotonic() - start < 15
+    assert time.monotonic() - start < ch.HOOK_DEADLINE_S
 
 
 def test_a_decision_already_given_is_kept_when_the_deadline_fires(tmp_path):
@@ -121,8 +128,7 @@ def test_a_decision_already_given_is_kept_when_the_deadline_fires(tmp_path):
         "h = importlib.util.module_from_spec(spec); spec.loader.exec_module(h)\n"
         "h._ANSWERED.append(0)\n"
         "h._on_deadline(14, None)\n", encoding="utf-8")
-    r = subprocess.run([sys.executable, "-S", str(driver)], capture_output=True, timeout=60,
-                       env={**os.environ, "HOME": str(tmp_path), "USERPROFILE": str(tmp_path)})
+    r = _driver(driver, tmp_path)
     assert r.returncode == 0
 
 
@@ -148,7 +154,7 @@ def test_padding_a_blocked_install_decides_fast_and_denies(shape, place, size, m
                                monkeypatch, tmp_path)
     took = time.monotonic() - start
     assert decision == ("deny" if len(command) <= ch.MAX_COMMAND_CHARS else "ask"), (shape, place, size, decision)
-    assert took < ch.HOOK_TIMEOUT_S / 2, f"{shape} / {place} / {size}: {took:.1f} s (Claude Code gives up at {ch.HOOK_TIMEOUT_S} s)"
+    assert took < ch.HOOK_DEADLINE_S, f"{shape} / {place} / {size}: {took:.1f} s (the hook stops itself at {ch.HOOK_DEADLINE_S} s)"
 
 
 def test_many_pipes_and_lines_decide_well_within_the_timeout(monkeypatch, tmp_path):
@@ -157,7 +163,7 @@ def test_many_pipes_and_lines_decide_well_within_the_timeout(monkeypatch, tmp_pa
         start = time.monotonic()
         code, decision, out = _run({"tool_name": "Bash", "tool_input": {"command": command},
                                     "cwd": str(tmp_path)}, monkeypatch, tmp_path)
-        assert decision == "deny" and time.monotonic() - start < 15, (command[:40], decision)
+        assert decision == "deny" and time.monotonic() - start < ch.HOOK_DEADLINE_S, (command[:40], decision)
 
 
 def test_a_command_over_the_size_cap_asks_unread_and_the_opt_out_cannot_pass_it(monkeypatch, tmp_path):
@@ -179,7 +185,9 @@ def test_the_bare_hook_answers_a_padded_install_fast(tmp_path):
     event = {"tool_name": "Bash", "tool_input": {"command": "pip install evilx # " + "x-" * 20000}, "cwd": str(tmp_path)}
     start = time.monotonic()
     r = _bare(json.dumps(event).encode(), tmp_path, timeout=60)
-    assert r.returncode in (0, 2) and time.monotonic() - start < 20, (r.returncode, r.stderr[-300:])
+    took = time.monotonic() - start
+    assert r.returncode in (0, 2) and took < ch.HOOK_DEADLINE_S, (r.returncode, took, r.stderr[-300:])
+    assert b"did not finish" not in r.stderr        # answered, not stopped by the deadline
     if r.returncode == 0:
         assert json.loads(r.stdout)["hookSpecificOutput"]["permissionDecision"] in ("ask", "deny")
 
@@ -215,3 +223,126 @@ def test_the_pipeline_walk_answers_the_same_with_and_without_its_memo(command):
     memo = {}
     for j in range(len(commands)):
         assert ch._stdin_consumer(commands, j) == ch._stdin_consumer(commands, j, None, memo), (command, j)
+
+
+# ── review 3: the bounded display never cuts inside quotes or shows part of a quoted secret ──
+
+PASS = "Tr0ub4dor&3horse"
+
+
+def _long(middle, before=1800, after=3000):
+    """`middle` inside a command over _SHOW_EXACT characters, where it still
+    falls inside the shown part."""
+    return "x " * (before // 2) + middle + " ok" * (after // 3)
+
+
+@pytest.mark.parametrize("middle", [
+    f'mysql -u root --password "{PASS} battery staple" -e "select 1"',
+    f'curl --password "{"a" * 300} {PASS} more" https://x.example',
+    f'export API_TOKEN="{"a" * 300} {PASS}"',
+    f"tool --secret '{PASS} battery staple'",
+    f'echo "{PASS} {"a" * 300}" | docker login --password-stdin',
+])
+def test_a_quoted_secret_in_a_long_command_never_shows(middle):
+    shown = ch.show_command(_long(middle), limit=10 ** 6)
+    assert PASS not in shown and "battery" not in shown, shown[1780:1900]
+
+
+def test_the_cut_never_falls_inside_a_quoted_secret():
+    for pad in range(3900, 4200):
+        command = "w " * (pad // 2) + f' mysql --password "{PASS} battery staple" more' + " t" * 500
+        shown = ch.show_command(command, limit=10 ** 6)
+        assert PASS not in shown and "battery" not in shown, pad
+
+
+def test_a_long_comment_in_front_does_not_blank_the_command():
+    command = "# " + " ".join(["note"] * 900) + "\npip install evilx"
+    assert len(command) > ch._SHOW_EXACT
+    assert ch.show_command(command) == "pip install evilx"
+    assert ch.show_command("# " + "c" * 5000 + "\npip install evilx") == "pip install evilx"
+
+
+def test_the_bounded_display_is_linear():
+    for command in ("a" * ch.MAX_COMMAND_CHARS, "a'" * (ch.MAX_COMMAND_CHARS // 2),
+                    '"x" ' * (ch.MAX_COMMAND_CHARS // 4), "\\" * ch.MAX_COMMAND_CHARS,
+                    "$'" * (ch.MAX_COMMAND_CHARS // 2), "# c\n" * (ch.MAX_COMMAND_CHARS // 4)):
+        start = time.monotonic()
+        ch.show_command(command)
+        assert time.monotonic() - start < 2, command[:10]
+
+
+# ── review 3: many packages, and the band just under the size cap ──
+
+@pytest.mark.parametrize("count", [5000, 10000])
+def test_a_command_naming_thousands_of_packages_decides_fast_and_denies(count, monkeypatch, tmp_path):
+    command = "pip install " + " ".join(f"pkg{i}" for i in range(count)) + " evilx"
+    start = time.monotonic()
+    code, decision, out = _run({"tool_name": "Bash", "tool_input": {"command": command}, "cwd": str(tmp_path)},
+                               monkeypatch, tmp_path)
+    assert decision == "deny" and time.monotonic() - start < ch.HOOK_DEADLINE_S
+
+
+@pytest.mark.parametrize("place", ["comment", "assignment", "echo before"])
+@pytest.mark.parametrize("shape", ["letters", "$(", "x-", "words"])
+def test_padding_right_under_the_size_cap_still_denies_in_time(shape, place, monkeypatch, tmp_path):
+    room = ch.MAX_COMMAND_CHARS - len(PLACES[place].format(p=""))
+    command = PLACES[place].format(p=PADDING[shape](room))
+    assert ch.MAX_COMMAND_CHARS - 3 <= len(command) <= ch.MAX_COMMAND_CHARS
+    start = time.monotonic()
+    code, decision, out = _run({"tool_name": "Bash", "tool_input": {"command": command}, "cwd": str(tmp_path)},
+                               monkeypatch, tmp_path)
+    assert decision == "deny" and time.monotonic() - start < ch.HOOK_DEADLINE_S, (shape, place, decision)
+
+
+# ── review 3: `stillrunning hook` ends at once, like the registered script ──
+
+def test_the_cli_hook_path_does_not_wait_for_lookup_threads(tmp_path):
+    root = os.path.dirname(os.path.dirname(HOOK))
+    driver = tmp_path / "driver.py"
+    driver.write_text(
+        "import io, sys, threading, time\n"
+        f"sys.path.insert(0, {root!r})\n"
+        "from stillrunning import claude_hook as h\n"
+        "def answer(text):\n"
+        "    threading.Thread(target=time.sleep, args=(120,)).start()   # a hung lookup (not daemon)\n"
+        "    print('{}'); return 0\n"
+        "h.run_hook = answer\n"
+        "sys.stdin = io.StringIO('{}')\n"
+        "h.main()\n", encoding="utf-8")
+    start = time.monotonic()
+    r = _driver(driver, tmp_path, flags=("-I",))
+    assert r.returncode == 0 and time.monotonic() - start < 20, (r.returncode, r.stdout[-300:], r.stderr[-300:])
+
+
+# ── review 3: an entry from before onFailure is reported, with the fix ──
+
+def test_an_old_registration_without_on_failure_is_reported(tmp_path, monkeypatch):
+    from stillrunning import layers, panel
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("USERPROFILE", str(tmp_path))
+    ch.install(statusline=False, panel=False)
+    assert ch.registered_fail_open() is False
+    path = tmp_path / ".claude" / "settings.json"
+    data = json.loads(path.read_text(encoding="utf-8"))
+    for group in data["hooks"]["PreToolUse"]:
+        for hook in group["hooks"]:
+            hook.pop("onFailure", None)
+    path.write_text(json.dumps(data), encoding="utf-8")
+    assert ch.verify_install()[0] == "on" and ch.registered_fail_open() is True
+    layer = next(x for x in layers.protection_layers() if x["key"] == "claude_hook")
+    assert layer["next"] == "stillrunning --hook-claude-code" and "onFailure" in layer["reason"]
+    assert any("onFailure" in p for p in panel.protection()["problems"])
+    ch.install(statusline=False, panel=False)          # re-registering clears it
+    assert ch.registered_fail_open() is False
+    layer = next(x for x in layers.protection_layers() if x["key"] == "claude_hook")
+    assert layer["next"] is None
+
+
+# ── review 3: invalid UTF-8 in a command is logged, not a crash ──
+
+def test_a_command_with_invalid_utf8_is_decided_and_logged(tmp_path, monkeypatch):
+    event = '{"tool_name": "Bash", "tool_input": {"command": "pip install \\udcff evilx"}, "cwd": "/tmp"}'
+    code, decision, out = _run(event, monkeypatch, tmp_path)
+    assert decision == "deny"
+    lines = (tmp_path / ".stillrunning" / "hook_decisions.jsonl").read_text(encoding="utf-8").splitlines()
+    assert any("\udcff" in json.loads(line).get("command", "") for line in lines)

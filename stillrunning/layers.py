@@ -45,12 +45,13 @@ def protection_layers():
     home = os.path.expanduser("~")
 
     state, reason = claude_hook.verify_install()
+    fail_open = state == "on" and claude_hook.registered_fail_open()
     layers.append({
         "key": "claude_hook", "install_time": True,
         "name": "Claude Code hook (installs that Claude Code runs)",
         "state": {"on": ON, "off": OFF, "not_verified": NOT_VERIFIED}[state],
-        "reason": reason,
-        "next": None if state == "on" else "stillrunning --hook-claude-code"})
+        "reason": reason + ("; " + claude_hook.REREGISTER_ADVICE if fail_open else ""),
+        "next": None if state == "on" and not fail_open else "stillrunning --hook-claude-code"})
 
     bin_dir = os.path.join(home, ".stillrunning", "bin")
     wrapper = os.path.join(bin_dir, "pip")
