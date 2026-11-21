@@ -90,13 +90,33 @@ against the 30 s timeout), so a blocked install padded that way went through.
     encoding fix, so on a Windows code page `→` or `—` raised
     UnicodeEncodeError (the status line exited 1). A stream that is not UTF-8
     is now switched to UTF-8, which is what Claude Code reads (the status line's
-    🛡 arrives intact); UTF-8 streams, as on Linux and macOS, are untouched.
+    🛡 arrives intact). This runs on Windows only; Linux and macOS output is
+    unchanged in every locale.
   - **CVE monitoring was always UNKNOWN on Windows:** the safe-folder pattern
     accepted only `/…`, so every Windows folder read "checked for another
     folder". Windows drive-letter folders are now accepted (UNC paths still
     are not); the POSIX pattern is unchanged. The status line also ignored a
     Windows folder from Claude Code.
   - `cve --schedule` on Windows now says plainly that there is no crontab.
+  - **Self-protection, security:** the hook did not recognise its own files,
+    its state folder or Claude Code's settings when a command named them in
+    Git Bash's own spelling (`rm /d/…/claude_hook.py`), so `rm`, `sed -i`,
+    `echo >>` and the like changed them without asking. A simulation of the
+    old matcher missed 8,053 of 12,647 spelling × operation cases. Now
+    recognised on Windows: `/d/…`, `/cygdrive/d/…`, any letter case (NTFS
+    ignores it), `\\?\D:\…` and `//./D:/…`, this computer's admin shares
+    (`//localhost/d$/…`), 8.3 short names, and trailing dots, spaces or
+    `::$DATA`. Also covered: `cd` into one of those, `$USERPROFILE` and the
+    other inherited variables, Write/Edit of those paths, Git Bash's own
+    start-up files, and Windows' own tools (`cmd //c del`, PowerShell
+    `Remove-Item` / `Set-Content`, encoded PowerShell, `icacls`, `attrib`,
+    `robocopy`…). cmd and PowerShell commands that name a protected file ask
+    even when they only read it.
+  - **Fail-open, more spellings:** a written script run as `/c/…/x.sh`,
+    `C:/…`, a different letter case (`X.sh` then `./x.sh`), `cmd //c x.bat`,
+    or PowerShell `-File x.ps1` was allowed on Windows; it is now read.
+    Still open on every OS (own fix, tests mark them): a written script run
+    through `sh -c ./x.sh` or `$PWD/x.sh`.
 
 ### Python 3.15, CI, and a Python 3.8 fix
 
