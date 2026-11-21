@@ -1,9 +1,11 @@
-# Client test suite on the Python floor (3.8), the version this project's
-# own server runs (3.12) and the newest release (3.15), each inside the
-# official python:<version>-slim image, as the support claims were verified
-# locally (2026-11-20). Nothing is published from here.
+# Client test suite. Linux: the Python floor (3.8), the version this
+# project's own server runs (3.12) and the newest release (3.15), each inside
+# the official python:<version>-slim image, as the support claims were
+# verified locally (2026-11-20). Windows and macOS: Python 3.12 on GitHub's
+# own runners (added 2026-11-21). Nothing is published from here.
 # Not hermetic: some hook tests (test_s135_*) probe live package registries,
 # so a network problem on the runner can turn a run red without a code change.
+# Actions are pinned to full commit SHAs (tag in the comment).
 name: tests
 
 on:
@@ -16,20 +18,35 @@ permissions:
 
 jobs:
   test:
-    runs-on: ubuntu-latest
+    name: ${{ matrix.os }} / Python ${{ matrix.python }}
+    runs-on: ${{ matrix.os }}
     timeout-minutes: 20
     strategy:
       fail-fast: false
       matrix:
-        python: ["3.8", "3.12", "3.15"]
-    container:
-      image: python:${{ matrix.python }}-slim
+        include:
+          - {os: ubuntu-latest, python: "3.8", container: "python:3.8-slim"}
+          - {os: ubuntu-latest, python: "3.12", container: "python:3.12-slim"}
+          - {os: ubuntu-latest, python: "3.15", container: "python:3.15-slim"}
+          - {os: windows-latest, python: "3.12"}
+          - {os: macos-latest, python: "3.12"}
+    container: ${{ matrix.container }}
+    defaults:
+      run:
+        shell: bash
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09  # v5.1.0
+        with:
+          persist-credentials: false
+      - name: Set up Python (Windows / macOS runners)
+        if: ${{ !matrix.container }}
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0  # v7.1.0
+        with:
+          python-version: ${{ matrix.python }}
       - name: Install the package and pytest
         run: |
           python -m pip install --disable-pip-version-check -q -e . pytest
-          python -c "import sys, stillrunning; print(sys.version.split()[0], stillrunning.__file__)"
+          python -c "import sys, platform, stillrunning; print(sys.version.split()[0], platform.system(), stillrunning.__file__)"
           stillrunning --version
       - name: Run the tests
         # Three tests fail on main and are tracked separately; they are
