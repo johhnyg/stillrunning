@@ -18,12 +18,12 @@ def home(monkeypatch, tmp_path):
 
 
 def settings(home):
-    with open(home / ".claude" / "settings.json") as handle:
+    with open(home / ".claude" / "settings.json", encoding="utf-8") as handle:
         return json.load(handle)
 
 
 def write_settings(home, data):
-    with open(home / ".claude" / "settings.json", "w") as handle:
+    with open(home / ".claude" / "settings.json", "w", encoding="utf-8") as handle:
         json.dump(data, handle)
 
 
@@ -32,7 +32,7 @@ def test_panel_files_ship_in_the_package():
     for rel in (".claude-plugin/plugin.json", ".claude-plugin/marketplace.json",
                 "hooks/hooks.json", "hooks/register.tsx", "types/index.d.ts"):
         assert os.path.isfile(os.path.join(folder, rel)), rel
-    with open(os.path.join(folder, ".claude-plugin", "marketplace.json")) as handle:
+    with open(os.path.join(folder, ".claude-plugin", "marketplace.json"), encoding="utf-8") as handle:
         market = json.load(handle)
     assert market["name"] == MARKET
     assert [p["name"] for p in market["plugins"]] == ["stillrunning-shield"]

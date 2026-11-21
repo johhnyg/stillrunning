@@ -87,9 +87,16 @@ def _is_rc_file(path, cwd=None):
     if not isinstance(path, str) or not path.strip():
         return False
     full = os.path.expanduser(path.strip())
+    full = _win_spelling(full) or full
     if not os.path.isabs(full):
         full = os.path.join(cwd or os.getcwd(), full)
     full = os.path.normpath(full)
+    if os.name == "nt":
+        comps = _path_comps(full) or [""]       # ~/.BASHRC is ~/.bashrc there
+        # Git Bash's /etc (its install folder's etc\): profile, bash.bashrc, profile.d\*
+        return (comps[-1] in _RC_NAMES or "profile.d" in comps[:-1]
+                or (len(comps) > 1 and comps[-2] == "etc"
+                    and comps[-1] in {os.path.basename(f) for f in _RC_SYSTEM}))
     return (os.path.basename(full) in _RC_NAMES or full in _RC_SYSTEM
             or full.startswith("/etc/profile.d/"))
 
@@ -136,7 +143,175 @@ def looks_like_install(command):
                 or _HIDDEN_SCRIPT_HINT.search(squashed))
 
 
+# Shell words separate paths with "/" on every OS: Claude Code runs Bash tool
+# commands through bash (Git Bash on Windows), and `./x.sh` or
+# `"$VIRTUAL_ENV/bin/pip"` are written that way there too; Windows also accepts
+# "\\". Testing a word for os.sep alone missed every "/" path on Windows — a
+# script written and then run as `./x.sh` was never read, so a blocklisted
+# install inside it was allowed (fail-open, found on a real windows-latest
+# runner 2026-11-21). On POSIX this is exactly os.sep, so nothing changes there.
+_WORD_SEPS = "/" if os.sep == "/" else "/" + os.sep
+
+
+def _has_sep(word):
+    return any(sep in word for sep in _WORD_SEPS)
+
+
+# ── Windows path spellings (2026-11-21) ──
+# Under Git Bash one file has many names: D:\a\x, D:/a/x, d:/A/X (NTFS ignores
+# case), /d/a/x and /cygdrive/d/a/x (MSYS), \\?\D:\a\x and \\.\D:\a\x (device
+# prefixes), \\localhost\d$\a\x (this computer's admin share), and x. / "x " /
+# x::$DATA (Win32 drops trailing dots and spaces; ::$DATA is the file itself).
+# ntpath knows only the first two, so /d/… and the rest never matched
+# stillrunning's own files (found on a real windows-latest runner). Everything
+# below is used only when os.name == "nt"; on POSIX none of it runs.
+_MSYS_DRIVE = re.compile(r"^(?:/proc)?(?:/cygdrive)?/([A-Za-z])(?=/|$)")
+_DEVICE_PREFIX = re.compile(r"^[\\/]{2}[?.][\\/](?!UNC[\\/])", re.I)
+_DEVICE_UNC = re.compile(r"^[\\/]{2}[?.][\\/]UNC[\\/]", re.I)
+_ADMIN_SHARE = re.compile(r"^[\\/]{2}([^\\/]+)[\\/]([A-Za-z])\$(?=[\\/]|$)")
+
+
+def _this_computer(host):
+    host = host.strip("[]").lower()
+    if host in ("localhost", ".", "::1", "0:0:0:0:0:0:0:1", "0--1.ipv6-literal.net") \
+            or re.fullmatch(r"127(?:\.\d{1,3}){3}", host):
+        return True
+    names = {os.environ.get("COMPUTERNAME", "").lower()}
+    try:
+        import socket
+        names.add(socket.gethostname().lower())
+    except Exception:  # lint: allowed-silent(no host name → only the fixed names count)
+        pass
+    names.discard("")
+    return host in names or host.split(".", 1)[0] in names
+
+
+def _win_spelling(text):
+    """Windows only: the drive-letter path a bash word names, when it spells
+    one in a form ntpath does not read (/d/…, /cygdrive/d/…, \\\\?\\D:\\…,
+    \\\\localhost\\d$\\…). None when there is nothing to translate."""
+    if os.name != "nt" or not text:
+        return None
+    t = text
+    unc = _DEVICE_UNC.match(t)
+    if unc:
+        t = "\\\\" + t[unc.end():]
+    else:
+        device = _DEVICE_PREFIX.match(t)
+        if device:
+            t = t[device.end():]
+    share = _ADMIN_SHARE.match(t)
+    if share and _this_computer(share.group(1)):
+        t = share.group(2) + ":\\" + t[share.end():].lstrip("\\/")
+    msys = _MSYS_DRIVE.match(t)
+    if msys:
+        t = msys.group(1).upper() + ":\\" + t[msys.end():].lstrip("\\/")
+    return t if t != text else None
+
+
+def _win_no_stream(text):
+    """Windows only: a path without its trailing :stream / ::$DATA (the file itself)."""
+    drive = 2 if re.match(r"^[A-Za-z]:", text) else 0
+    head, tail = text[:drive], text[drive:]
+    cut = re.search(r":[^\\/:]*(?::\$data)?$|::\$data$", tail, re.I)
+    if cut and cut.start() > 0 and tail[cut.start() - 1] not in "\\/":
+        tail = tail[:cut.start()]
+    return head + tail
+
+
+def _win_comp(comp):
+    if comp in ("", ".", ".."):
+        return comp
+    comp = comp.split(":", 1)[0]             # name:stream, name::$DATA
+    return comp.rstrip(" .") or comp         # Win32 drops trailing dots and spaces
+
+
+def _win_canon(path):
+    """Windows only: one spelling per file (lower case, \\, no trailing dots,
+    spaces or :streams)."""
+    path = os.path.normcase(os.path.normpath(path))
+    drive, rest = os.path.splitdrive(path)
+    return drive + "\\".join(_win_comp(c) for c in rest.split("\\"))
+
+
+def _path_comps(path):
+    """Path components to compare: as they are on POSIX, canonical on Windows."""
+    if os.name != "nt":
+        return _comps(path)
+    return [c for c in _win_canon(path).split("\\") if c]
+
+
+def _win_candidates(text, cwds):
+    """Windows only: the extra files a bash word can name there (added to
+    what ntpath reads, never instead of it)."""
+    out = []
+    spelled = _win_spelling(text)
+    if spelled:
+        out.append(os.path.normpath(spelled))
+    elif re.match(r"^[A-Za-z]:(?![\\/])", text):
+        # D:x — relative to D:'s current folder: this one when it is on D:, else D:\x
+        drive, rest = text[:2], text[2:]
+        out += [os.path.normpath(os.path.join(c, rest)) for c in cwds
+                if os.path.splitdrive(c)[0].lower() == drive.lower()]
+        out.append(os.path.normpath(drive + "\\" + rest))
+    return out
+
+
+def _win_env(text):
+    """Windows only: $NAME / ${NAME} from the environment Git Bash inherits
+    (USERPROFILE, LOCALAPPDATA, APPDATA…); unknown names are left as they are."""
+    return re.sub(r"\$\{?([A-Za-z_]\w*)\}?", lambda m: os.environ.get(m.group(1), m.group(0)), text)
+
+
+# Windows programs reachable from Git Bash that delete, write, move or re-permission
+# files. A shell is read for every path in its command text; the rest are writers.
+_WIN_SHELLS = {"cmd", "powershell", "pwsh", "cscript", "wscript", "mshta"}
+_WIN_FILE_WRITERS = {"robocopy", "xcopy", "attrib", "icacls", "cacls", "takeown", "mklink",
+                     "fsutil", "certutil", "expand", "extrac32", "esentutl", "bitsadmin",
+                     "forfiles", "compact", "cipher", "replace", "msiexec"}
+_WIN_PIECE = re.compile(r"""'([^'\n]*)'|"([^"\n]*)"|([^\s'"`;,|&()<>]+)""")
+
+
+def _win_shell_touches(args, cwds):
+    """Windows only: does a cmd / PowerShell command text name a protected place?
+    Every path-like piece counts (reading it asks too: these shells cannot be
+    read word by word the way bash is), and encoded PowerShell cannot be read."""
+    text = " ".join(args)
+    if re.search(r"(?i)(?:^|\s)-e(?:c|n[a-z]*)?(?:\s|$)", text):
+        return True                                  # powershell -EncodedCommand …
+    text = text.replace("^", "")                     # cmd's escape: de^l, D:\st^illrunning
+    text = re.sub(r"%(\w+)%", lambda m: os.environ.get(m.group(1), m.group(0)), text)
+    text = re.sub(r"(?i)\$env:(\w+)", lambda m: os.environ.get(m.group(1), m.group(0)), text)
+    text = re.sub(r"(?i)\$home\b", lambda m: _home(), text)
+    recursive = re.search(r"(?i)(?:^|\s)(?:/s|-r(?:ecurse)?|/mir|/purge|/e)(?:\s|$)", text)
+    for match in _WIN_PIECE.finditer(text):
+        piece = next(g for g in match.groups() if g is not None).strip()
+        piece = re.sub(r"^-\w+:", "", piece)                       # -Path:C:\…
+        piece = re.sub(r"^(?:[\w.]+\\)?\w+::", "", piece)          # FileSystem::C:\…
+        if not piece or (not _has_sep(piece) and not piece.startswith("~")):
+            continue
+        kinds = _path_kinds(piece, list(cwds))
+        if kinds & {"state", "settings", "claude_dir", "pkg"} or ("ancestor" in kinds and recursive):
+            return True
+    return False
+
+
+def _real_prefix(path):
+    """A wildcard path with its plain leading folders resolved (8.3 short
+    names such as RUNNER~1, links): `C:/Users/RUNNER~1/x/*.py`."""
+    drive, rest = os.path.splitdrive(path)
+    comps = rest.split(os.sep)
+    cut = next((i for i, c in enumerate(comps) if any(ch in c for ch in "*?[{")), len(comps))
+    head = drive + os.sep.join(comps[:cut])
+    if not head or head == drive:
+        return path
+    return os.path.join(os.path.realpath(head), *comps[cut:]) if cut < len(comps) else os.path.realpath(head)
+
+
 def _inside(path, directory):
+    if os.name == "nt":
+        parts, folder = _path_comps(path), _path_comps(directory)
+        return parts[:len(folder)] == folder
     return path == directory or path.startswith(directory.rstrip(os.sep) + os.sep)
 
 
@@ -189,6 +364,11 @@ def _path_kinds(word, cwds):
         text = home + text[1:]
     elif text.startswith("~"):
         text = os.path.expanduser(text)                # ~user/…
+    if os.name == "nt":
+        text = _win_no_stream(text)                    # x::$DATA, x:stream
+        spelled = _win_spelling(text)
+        if spelled and "$" in text and "$" not in spelled:
+            text = spelled                             # //localhost/c$/… is C:\…, not a variable
     if "$" in text:
         low = text.lower()
         if ".still" in low:
@@ -197,6 +377,12 @@ def _path_kinds(word, cwds):
             kinds.add("settings")
         elif low.rstrip("/").endswith(".claude"):
             kinds.add("claude_dir")
+        if os.name == "nt":
+            # Git Bash inherits the Windows environment: $USERPROFILE,
+            # $LOCALAPPDATA, $APPDATA… name the same folders the hook sees.
+            expanded = _win_env(text)
+            if "$" not in expanded:
+                kinds |= _path_kinds(expanded, cwds + ([_UNKNOWN_CWD] if unknown else []))
         return kinds
     has_glob = any(ch in text for ch in "*?[{")
     if os.path.isabs(text):
@@ -207,8 +393,10 @@ def _path_kinds(word, cwds):
             # The folder is decided at run time (`cd $X && …`). Guessing it would
             # make every relative path look protected, so only what the word
             # itself spells counts: `.stillrunning/…`, `.claude/settings.json`.
-            parts = _comps(os.path.normpath(text))
+            parts = _path_comps(os.path.normpath(text))
             state_name = os.path.basename(os.path.realpath(_state_dir()))
+            if os.name == "nt":
+                state_name = state_name.lower()
             if any(_comp_match(part, state_name) for part in parts):
                 kinds.add("state")
             for at, part in enumerate(parts):
@@ -217,13 +405,17 @@ def _path_kinds(word, cwds):
                         kinds.add("claude_dir")
                     elif any(_comp_match(parts[at + 1], name) for name in _SETTINGS_NAMES):
                         kinds.add("settings")
+    if os.name == "nt":
+        candidates += _win_candidates(text, cwds)
+        if has_glob:
+            candidates += [_real_prefix(c) for c in list(candidates)]
     if not has_glob:
         candidates += [os.path.realpath(c) for c in list(candidates)]
-    state = _comps(os.path.realpath(_state_dir()))
-    claude = _comps(os.path.join(home, ".claude"))
-    pkg = _comps(_package_dir())
+    state = _path_comps(os.path.realpath(_state_dir()))
+    claude = _path_comps(os.path.join(home, ".claude"))
+    pkg = _path_comps(_package_dir())
     for candidate in candidates:
-        parts = _comps(candidate)
+        parts = _path_comps(candidate)
         rel = _relation(parts, state)
         if rel in ("equal", "inside"):
             kinds.add("state")
@@ -269,7 +461,8 @@ def _project_settings_under(spot, cwds):
     for cwd in cwds:
         if cwd == _UNKNOWN_CWD:
             continue
-        base = spot if os.path.isabs(spot) else os.path.join(cwd, spot)
+        spot_here = _win_spelling(spot) or spot
+        base = spot_here if os.path.isabs(spot_here) else os.path.join(cwd, spot_here)
         if _holds_settings(os.path.join(os.path.expanduser(base), ".claude")):
             return True
     return False
@@ -431,12 +624,14 @@ def _paths_touch_protection(command, cwds, depth):
         body = bodies.pop(0) if cmd.has_heredoc and bodies else None
         start = _program_index(cmd)
         program = _prog_name(cmd[start]) if start < len(cmd) else ""
+        if os.name == "nt" and program in _WIN_SHELLS and _win_shell_touches(cmd[start + 1:], cwds):
+            return True     # cmd //c del …, powershell -c Remove-Item …
         if program and program not in _FILE_WRITERS and program not in _READ_ONLY \
                 and program not in _STRING_RUNNERS and program not in _DATA_COMMANDS \
                 and not _CODE_RUNNERS.match(program):
             # an unknown wrapper (`setsid rm -rf …`): judge the destructive word after it
             for later in range(start + 1, len(cmd)):
-                if _prog_name(cmd[later]) in _DESTRUCTIVE and os.sep not in cmd[later].rstrip(os.sep)[1:]:
+                if _prog_name(cmd[later]) in _DESTRUCTIVE and not _has_sep(cmd[later].rstrip(_WORD_SEPS)[1:]):
                     start, program = later, _prog_name(cmd[later])
                     break
         args = list(cmd[start + 1:])
@@ -462,7 +657,8 @@ def _paths_touch_protection(command, cwds, depth):
         in_place = any(re.match(r"^-[A-Za-z]*i|^--in-place", a) for a in args)
         edits = program in ("sed", "perl", "ruby", "awk", "gawk")
         read_only = not by_stdin and (program in _READ_ONLY or (edits and not in_place))
-        writer = by_stdin or (program in _FILE_WRITERS and (not edits or in_place))
+        writer = by_stdin or (program in _FILE_WRITERS and (not edits or in_place)) \
+            or (os.name == "nt" and program in _WIN_FILE_WRITERS)
         recursive = any(re.match(r"^-[A-Za-z]*[rR]|^--recursive", a) for a in args)
         words = [(a, False) for a in args]
         words += [(t.split("=", 1)[1], True) for t in cmd[:start] if _ASSIGN.match(t)]
@@ -485,6 +681,7 @@ def _paths_touch_protection(command, cwds, depth):
             for at, arg in enumerate(args[:args.index(verb)]):
                 if arg == "-C" and at + 1 < len(args):          # git -C <folder> …
                     folder = os.path.expanduser(args[at + 1])
+                    folder = _win_spelling(folder) or folder        # Windows: git -C /d/…
                     git_cwds = [folder] if os.path.isabs(folder) else [
                         os.path.normpath(os.path.join(c, folder)) for c in cwds if c != _UNKNOWN_CWD]
             # The forms that put files back to an earlier state or delete them,
@@ -525,8 +722,8 @@ def _paths_touch_protection(command, cwds, depth):
                     and _find_could_hit(args):
                 return True
         for word, forced in words:
-            if any(ch.isspace() for ch in word):
-                continue
+            if any(ch.isspace() for ch in (word.rstrip(" ") if os.name == "nt" else word)):
+                continue                # (Windows: "x " is x, Win32 drops the space)
             if word.startswith("-"):
                 if "=" not in word:
                     continue
@@ -555,6 +752,10 @@ def _paths_touch_protection(command, cwds, depth):
                     return True
         if program in ("cd", "pushd"):
             target = plain[0] if plain else "~"
+            if os.name == "nt":
+                if "$" in target and "$" not in _win_env(target):
+                    target = _win_env(target)                    # Windows: cd $USERPROFILE/…
+                target = _win_spelling(target) or target         # cd /d/…, cd //localhost/d$/…
             if "$" in target and not re.match(r"^\$\{?HOME\}?(/|$)", target) or target == "-":
                 cwds = [_UNKNOWN_CWD]
             elif _UNKNOWN_CWD in cwds and not os.path.isabs(os.path.expanduser(target)) \
@@ -563,6 +764,7 @@ def _paths_touch_protection(command, cwds, depth):
             else:
                 target = re.sub(r"^\$\{?HOME\}?", lambda m: home, target)
                 target = home + target[1:] if target == "~" or target.startswith("~/") else target
+                target = _win_spelling(target) or target        # Windows: cd /d/…
                 cwds = [target] if os.path.isabs(target) else \
                     [os.path.normpath(os.path.join(c, target)) for c in cwds]
             cwds = cwds[:8]
@@ -598,7 +800,11 @@ def touches_protection(command, cwd=None):
 
 def index_config_file(path):
     """Is this one of the files that decide where packages download from?"""
-    return isinstance(path, str) and os.path.basename(path.strip()) in INDEX_CONFIG_FILES
+    if not isinstance(path, str):
+        return False
+    if os.name == "nt":                 # PIP.INI is pip.ini there
+        return _win_comp(os.path.basename(path.strip())).lower() in {n.lower() for n in INDEX_CONFIG_FILES}
+    return os.path.basename(path.strip()) in INDEX_CONFIG_FILES
 
 
 def protected_path(path, cwd=None):
@@ -608,17 +814,22 @@ def protected_path(path, cwd=None):
     if not isinstance(path, str) or not path.strip():
         return False
     full = os.path.expanduser(path.strip())
+    if os.name == "nt":
+        full = _win_spelling(_win_env(full)) or _win_env(full)
     if not os.path.isabs(full):
         full = os.path.join(cwd or os.getcwd(), full)
     real = os.path.realpath(full)
     if _inside(real, os.path.realpath(_state_dir())):
         return True
-    if (os.path.basename(real) in _SETTINGS_NAMES
-            and os.path.basename(os.path.dirname(real)) == ".claude"):
+    name, parent = os.path.basename(real), os.path.basename(os.path.dirname(real))
+    if os.name == "nt":                     # Settings.JSON, claude_hook.py. , x::$DATA
+        comps = _path_comps(real)
+        name, parent = (comps[-1] if comps else ""), (comps[-2] if len(comps) > 1 else "")
+    if name in _SETTINGS_NAMES and parent == ".claude":
         return True
-    if os.path.basename(real) == _MANAGED_SETTINGS:
+    if name == _MANAGED_SETTINGS:
         return True
-    if re.match(r"^stillrunning[\w.-]*\.pth$", os.path.basename(real), re.I):
+    if re.match(r"^stillrunning[\w.-]*\.pth$", name, re.I):
         return True
     return _inside(real, _package_dir())
 
@@ -1289,8 +1500,12 @@ class _Result:
 
     def full(self, path):
         path = os.path.expanduser(path)
+        if os.name == "nt":
+            path = _win_spelling(path) or path
         if not os.path.isabs(path):
             path = os.path.join(self.cwd or ".", path)
+        if os.name == "nt":
+            return _win_canon(path)     # one key per file: X.sh, x.sh, /c/p/x.sh, C:/P/x.sh
         return os.path.normpath(path)
 
     def changed_here(self, path):
@@ -1298,12 +1513,15 @@ class _Result:
         if self.unknown_writes or self.full(path) in self.written:
             return True
         # the command moves between folders: the same file name written anywhere counts
-        return self.cd_seen and os.path.basename(path) in {os.path.basename(w) for w in self.written}
+        name = os.path.basename(self.full(path)) if os.name == "nt" else os.path.basename(path)
+        return self.cd_seen and name in {os.path.basename(w) for w in self.written}
 
     def local(self, arg, raw, what):
         """A local file or folder: nothing to look up when it is there; an
         install of something that is not there cannot be judged."""
         path = arg[5:] if arg.lower().startswith("file:") else arg
+        if os.name == "nt":
+            path = _win_spelling(path) or path
         path = os.path.expanduser(path.lstrip("/") if path.startswith("//") else path)
         path = path.split("[", 1)[0] if what != "npm" else path
         if not os.path.isabs(path):
@@ -1315,7 +1533,7 @@ class _Result:
             there = bool(self.exists(path))
         except (OSError, ValueError):
             there = False
-        if os.path.normpath(path) in self.written or (
+        if (_win_canon(path) if os.name == "nt" else os.path.normpath(path)) in self.written or (
                 self.unknown_writes and path.lower().endswith(_ARCHIVE_SUFFIXES)):
             self.ask("file_changed", raw)
         elif there:
@@ -1789,7 +2007,7 @@ def _parse_pip_args(args, res, cwd, read_file, raw, poetry=False, uv=False):
             # a requirements file named without `-r` (or after a flag that was
             # misread): its lines are what would be installed
             _read_requirements(arg, cwd, res, 0, read_file, raw)
-        elif _is_local_path(arg) or (os.sep in arg and not arg.startswith("@")):
+        elif _is_local_path(arg) or (_has_sep(arg) and not arg.startswith("@")):
             res.local(arg, raw, "path")
         else:
             _parse_pip_requirement(arg, res, raw)
@@ -2231,7 +2449,7 @@ def _safety_net(prog, args, res, raw):
     else:
         return
     for word in rest[:20]:
-        if _is_url(word) or _is_local_path(word) or os.sep in word and not word.startswith("@"):
+        if _is_url(word) or _is_local_path(word) or _has_sep(word) and not word.startswith("@"):
             continue
         if family == "npm":
             if _NPM_NAME.match(word):
@@ -2801,7 +3019,7 @@ def _parse_simple(tokens, res, cwd, env, read_file, exists, depth, feeds_shell=F
         if token.startswith("-") or " " in token or "\n" in token:
             continue
         name = _prog_name(token)
-        if token.startswith("$") and not (os.sep in token and _is_installer(name)):
+        if token.startswith("$") and not (_has_sep(token) and _is_installer(name)):
             if index == start:
                 positions.append(index)
             continue
@@ -2826,7 +3044,7 @@ def _parse_simple(tokens, res, cwd, env, read_file, exists, depth, feeds_shell=F
         if local_env.get("PIP_REQUIREMENT") and (_PIP.match(_prog_name(token)) or "pip" in rest[:3]):
             res.ask("requirements_unread", raw)     # the list of packages is named by a variable
         try:
-            if token.startswith("$") and not (os.sep in token and _is_installer(_prog_name(token))):
+            if token.startswith("$") and not (_has_sep(token) and _is_installer(_prog_name(token))):
                 # The program is only known at run time ($PIP, $(which pip), `…`).
                 if any(re.match(r"^-[A-Za-z]*m$", a) for a in rest[:4]) and \
                         _INSTALLER_HINT.search(" ".join(rest[:6])):
@@ -3006,6 +3224,7 @@ def _cd_target(args, here, home):
     if target == "-" or "`" in target:
         return _UNKNOWN_FOLDER
     target = re.sub(r"^\$\{?HOME\}?(?=/|$)", lambda m: home, target)
+    target = _win_spelling(target) or target        # Windows: cd /c/…, cd //localhost/c$/…
     if "$" in target:
         return _UNKNOWN_FOLDER
     target = os.path.expanduser(target)
@@ -3113,7 +3332,13 @@ def _parse_into(command, res, cwd, env, read_file, exists, depth, output_runs=Fa
                 if program in _SHELLS or program in (".", "source"):
                     if not any(re.match(r"^-[A-Za-z]*c$", a) for a in args):
                         ran = next((a for a in args if not a.startswith("-")), None)
-                elif start < len(simple) and os.sep in simple[start] and not simple[start].startswith("$"):
+                elif os.name == "nt" and program in _WIN_SHELLS:
+                    # cmd //c x.bat, powershell -File x.ps1, pwsh ./x.ps1: a script this command wrote
+                    pieces = [p for a in args for p in re.findall(r"[^\s'\"]+", a)]
+                    ran = next((p for p in pieces if res.full(p) in res.written or (
+                        res.cd_seen and os.path.basename(res.full(p)) in {os.path.basename(w) for w in res.written})),
+                        None)
+                elif start < len(simple) and _has_sep(simple[start]) and not simple[start].startswith("$"):
                     ran = simple[start]
                 if ran and not _STDIN_PATH.match(ran):
                     full = res.full(ran)
@@ -3251,7 +3476,7 @@ def parse_install_commands(command, cwd=None, env=None, read_file=None, exists=N
         if _PROCESS_SUBST_SCRIPT.search(_squash(command)):
             res.ask("remote_script", command.strip()[:200])       # bash <(curl …)
         for path in sorted(res.written):
-            if os.path.basename(path) in INDEX_CONFIG_FILES:
+            if (index_config_file(path) if os.name == "nt" else os.path.basename(path) in INDEX_CONFIG_FILES):
                 res.ask("index_config", os.path.basename(path))
         _parse_into(command, res, cwd, dict(env or {}), read_file or _default_read,
                     exists or os.path.exists, 0)
@@ -5087,11 +5312,37 @@ def main():
     sys.exit(run_hook(sys.stdin.read()))
 
 
+def _safe_script_streams():
+    """The bare-script path (`python -I -S <this file>`, how Claude Code runs it)
+    cannot import the package, so the entry points' make_output_safe() never ran
+    here: on a Windows code page a non-ASCII warning (→, —) raised
+    UnicodeEncodeError and crashed the process (found on a real windows-latest
+    runner 2026-11-21). What reads these streams is Claude Code, which decodes
+    them as UTF-8 — so a stream that is not UTF-8 is switched to UTF-8 (the
+    status line's 🛡 arrives as 🛡, not as an ASCII tag). Windows only: on
+    Linux and macOS nothing here runs, in any locale, so their output is
+    exactly what it was."""
+    if os.name != "nt":
+        return
+    for stream in (sys.stdout, sys.stderr):
+        name = (getattr(stream, "encoding", "") or "").lower().replace("-", "").replace("_", "")
+        if name in ("utf8", "utf8sig"):
+            continue
+        try:
+            stream.reconfigure(encoding="utf-8", errors="backslashreplace")
+        except (AttributeError, ValueError, OSError):
+            try:
+                stream.reconfigure(errors="backslashreplace")
+            except (AttributeError, ValueError, OSError):
+                continue
+
+
 def _script_main():
     """Run as the hook process (`python -I -S <this file>`). The decision is
     printed and flushed by run_hook; the process then ends at once, so a
     lookup thread still waiting on the network can never hold the hook past
     its deadline."""
+    _safe_script_streams()
     code = run_hook(sys.stdin.read())
     for stream in (sys.stdout, sys.stderr):
         try:
