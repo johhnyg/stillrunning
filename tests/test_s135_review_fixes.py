@@ -332,11 +332,11 @@ def test_installer_registers_the_file_tools_and_uninstall_restores_exactly(home)
     original = b'{\n\t"theme": "dark",\n\t"hooks": {"SessionStart": [{"hooks": [{"type": "command", "command": "x"}]}]}\n}\n'
     settings.write_bytes(original)
     ch.install(statusline=True)
-    group = json.loads(settings.read_text())["hooks"]["PreToolUse"][0]
+    group = json.loads(settings.read_text(encoding="utf-8"))["hooks"]["PreToolUse"][0]
     assert set(group["matcher"].split("|")) == {"Bash", "Write", "Edit", "MultiEdit", "NotebookEdit"}
-    assert json.loads(settings.read_text())["hooks"]["SessionStart"][0]["hooks"][0]["command"] == "x"
+    assert json.loads(settings.read_text(encoding="utf-8"))["hooks"]["SessionStart"][0]["hooks"][0]["command"] == "x"
     ch.install(statusline=True)                      # re-install: still one entry
-    assert len(json.loads(settings.read_text())["hooks"]["PreToolUse"]) == 1
+    assert len(json.loads(settings.read_text(encoding="utf-8"))["hooks"]["PreToolUse"]) == 1
     ch.uninstall()
     assert settings.read_bytes() == original
 
@@ -347,7 +347,7 @@ def test_reinstall_replaces_the_old_bash_only_entry(home):
     settings.write_text(json.dumps({"hooks": {"PreToolUse": [{"matcher": "Bash", "hooks": [
         {"type": "command", "command": ch.hook_command(), "timeout": 30}]}]}}))
     ch.install()
-    groups = json.loads(settings.read_text())["hooks"]["PreToolUse"]
+    groups = json.loads(settings.read_text(encoding="utf-8"))["hooks"]["PreToolUse"]
     assert len(groups) == 1 and "Write" in groups[0]["matcher"]
 
 

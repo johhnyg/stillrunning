@@ -98,7 +98,7 @@ def test_nothing_to_remember(home):
 @pytest.mark.parametrize("content", ["{not json", "[]", '{"commands": []}', '{"commands": {"short": {}}}'])
 def test_a_damaged_file_means_nothing_is_remembered(home, content):
     cid = remembered.command_id("pip install -e .", "/proj")
-    with open(remembered.path(), "w") as handle:
+    with open(remembered.path(), "w", encoding="utf-8") as handle:
         handle.write(content)
     assert remembered.is_remembered(cid) is False
     assert remembered.list_all() == []

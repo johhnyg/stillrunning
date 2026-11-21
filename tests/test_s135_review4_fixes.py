@@ -354,7 +354,7 @@ def work(home):
 def plain(work):
     """A work folder whose requirements files name nothing listed."""
     for path in ("requirements.txt", os.path.join("app", "requirements.txt")):
-        with open(os.path.join(work, path), "w") as handle:
+        with open(os.path.join(work, path), "w", encoding="utf-8") as handle:
             handle.write("requests\n")
     return work
 
@@ -593,7 +593,7 @@ def test_a_requirements_file_is_read_however_the_flag_is_written(command, plain)
 
 
 def test_a_cluster_ending_in_c_marks_the_versions_as_uncertain(plain):
-    with open(os.path.join(plain, "constraints.txt"), "w") as handle:
+    with open(os.path.join(plain, "constraints.txt"), "w", encoding="utf-8") as handle:
         handle.write("requests<3\n")
     parsed = ch.parse_install_commands("pip install -Uc constraints.txt requests", cwd=plain, env={})
     assert [(p["name"], p.get("uncertain")) for p in parsed["packages"]] == [("requests", True)]
@@ -614,7 +614,7 @@ def test_shell_options_are_not_script_files(after, operands):
 
 
 def test_a_script_file_that_is_there_keeps_stdin_as_data(plain):
-    with open(os.path.join(plain, "process.sh"), "w") as handle:
+    with open(os.path.join(plain, "process.sh"), "w", encoding="utf-8") as handle:
         handle.write("cat\n")
     d = decide("bash process.sh <<EOF\npip install evilx\nEOF", plain)
     assert d["action"] == "allow" and d["records"] == []
@@ -630,7 +630,7 @@ def test_npx_dash_c_runs_its_string_as_a_command(work):
 @pytest.fixture
 def project(work):
     os.makedirs(os.path.join(work, ".claude"))
-    with open(os.path.join(work, ".claude", "settings.json"), "w") as handle:
+    with open(os.path.join(work, ".claude", "settings.json"), "w", encoding="utf-8") as handle:
         handle.write("{}")
     return work
 
@@ -734,7 +734,7 @@ def test_the_hook_script_blocks_a_package_hidden_behind_a_flag(home, work):
     planted in the local list (no server)."""
     import json
     import subprocess
-    with open(os.path.join(str(home), ".stillrunning", "known_bad_packages.json"), "w") as handle:
+    with open(os.path.join(str(home), ".stillrunning", "known_bad_packages.json"), "w", encoding="utf-8") as handle:
         json.dump({"npm": {"evilx": ["any"]}, "pip": {"evilx": ["any"]}}, handle)
     env = dict(os.environ, HOME=str(home), STILLRUNNING_API_BASE="http://127.0.0.1:9")
     for command, action in (("pnpm add -w evilx", "deny"),

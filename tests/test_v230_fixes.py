@@ -75,13 +75,13 @@ class TestUvInterception:
     def test_uv_in_allowed_managers(self):
         """uv must be in the list of intercepted managers."""
         # Read intercept.py and check
-        with open(_PKG + "/intercept.py") as f:
+        with open(_PKG + "/intercept.py", encoding="utf-8") as f:
             content = f.read()
         assert '"uv"' in content or "'uv'" in content
 
     def test_uv_pip_handling_exists(self):
         """uv pip install handling code must exist."""
-        with open(_PKG + "/intercept.py") as f:
+        with open(_PKG + "/intercept.py", encoding="utf-8") as f:
             content = f.read()
         assert "is_uv_pip" in content
         assert 'args[0] == "pip"' in content
@@ -97,7 +97,7 @@ class TestNamespacePackages:
 
     def test_full_path_checking_in_find_spec(self):
         """find_spec must check full dotted path."""
-        with open(_PKG + "/hook.py") as f:
+        with open(_PKG + "/hook.py", encoding="utf-8") as f:
             content = f.read()
         # Check that we're iterating through namespace parts
         assert "namespace =" in content or "namespace=" in content

@@ -684,13 +684,13 @@ def test_strict_mode_and_the_decision_log_keep_the_fields(store, home, capsys, m
     event = json.dumps({"tool_name": "Bash", "cwd": "/tmp", "tool_input": {"command": REMEMBERED}})
     assert ch.run_hook(event) == 0
     capsys.readouterr()
-    rows = [json.loads(line) for line in open(ch.decisions_path())]
+    rows = [json.loads(line) for line in open(ch.decisions_path(), encoding="utf-8")]
     assert rows[-1]["can_remember"] is True and len(rows[-1]["cmd_id"]) == 32
     event = json.dumps({"tool_name": "Write", "cwd": "/tmp",
                         "tool_input": {"file_path": "~/.stillrunning/remembered_commands.json"}})
     assert ch.run_hook(event) == 0
     assert json.loads(capsys.readouterr().out)["hookSpecificOutput"]["permissionDecision"] == "ask"
-    rows = [json.loads(line) for line in open(ch.decisions_path())]
+    rows = [json.loads(line) for line in open(ch.decisions_path(), encoding="utf-8")]
     assert rows[-1]["can_remember"] is False and rows[-1]["cmd_id"] is None
 
 
@@ -707,7 +707,7 @@ def test_remembering_works_end_to_end_in_the_bare_script_the_hook_runs_as(home):
     pkg = home / "pkgcopy"
     shutil.copytree(os.path.dirname(ch.__file__), pkg, ignore=shutil.ignore_patterns("__pycache__"))
     script = pkg / "claude_hook.py"
-    text = script.read_text()
+    text = script.read_text(encoding="utf-8")
     assert text.count("REMEMBER_ENABLED = False") == 1
     script.write_text(text.replace("REMEMBER_ENABLED = False", "REMEMBER_ENABLED = True"))
 
@@ -720,7 +720,7 @@ def test_remembering_works_end_to_end_in_the_bare_script_the_hook_runs_as(home):
 
     first, _ = run(str(home))
     assert first["hookSpecificOutput"]["permissionDecision"] == "ask"
-    row = [json.loads(line) for line in open(ch.decisions_path())][-1]
+    row = [json.loads(line) for line in open(ch.decisions_path(), encoding="utf-8")][-1]
     assert row["can_remember"] is True and row["cmd_id"] == remembered.command_id(command, str(home))
     remembered.remember(row["cmd_id"])
     second, stderr = run(str(home))

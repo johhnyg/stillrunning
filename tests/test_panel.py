@@ -180,10 +180,10 @@ def test_protection_off_when_hook_missing_and_on_after_install(home, monkeypatch
 def test_protection_flags_a_hook_that_no_longer_watches_edits(home):
     claude_hook.install()
     path = claude_hook._settings_path()
-    data = json.loads(open(path).read())
+    data = json.loads(open(path, encoding="utf-8").read())
     for group in data["hooks"]["PreToolUse"]:
         group["matcher"] = "Bash"
-    open(path, "w").write(json.dumps(data))
+    open(path, "w", encoding="utf-8").write(json.dumps(data))
     state = panel.protection()
     assert state["state"] == "on" and state["watches_edits"] is False
     assert "file edits" in state["problems"][0]
@@ -192,10 +192,10 @@ def test_protection_flags_a_hook_that_no_longer_watches_edits(home):
 def test_protection_off_when_matcher_no_longer_covers_commands(home):
     claude_hook.install()
     path = claude_hook._settings_path()
-    data = json.loads(open(path).read())
+    data = json.loads(open(path, encoding="utf-8").read())
     for group in data["hooks"]["PreToolUse"]:
         group["matcher"] = "Read"
-    open(path, "w").write(json.dumps(data))
+    open(path, "w", encoding="utf-8").write(json.dumps(data))
     assert panel.protection()["state"] == "off"
 
 
