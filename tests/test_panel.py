@@ -1,5 +1,6 @@
 """Side-panel data: protection state and the project / installed scan."""
 import json
+import os
 
 import pytest
 
@@ -25,7 +26,7 @@ def project(tmp_path, files):
     for name, text in files.items():
         path = root / name
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(text)
+        path.write_text(text, encoding="utf-8")
     return root
 
 
@@ -127,7 +128,8 @@ def test_manifests_two_levels_deep_are_found_and_vendor_folders_skipped(home):
                           "node_modules/x/package.json": json.dumps({"dependencies": {"evil": "1.0.0"}}),
                           "notes.txt": "not-a-package\n", "a/b/c/requirements.txt": "too-deep\n"})
     result, calls = run(root, {})
-    assert sorted(m["file"] for m in result["manifests"]) == ["api/requirements-dev.txt", "requirements.txt"]
+    # the report shows each path in this platform's own form (api\\requirements-dev.txt on Windows)
+    assert sorted(m["file"].replace(os.sep, "/") for m in result["manifests"]) == ["api/requirements-dev.txt", "requirements.txt"]
     assert sorted(n for _, n in calls) == ["a-one", "b-two"]
 
 

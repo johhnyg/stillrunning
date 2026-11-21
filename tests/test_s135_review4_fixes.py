@@ -327,10 +327,10 @@ PACKAGE_SILENT = [
 def home(monkeypatch, tmp_path):
     root = tmp_path / "home"
     (root / ".claude").mkdir(parents=True)
-    (root / ".claude" / "settings.json").write_text("{}")
+    (root / ".claude" / "settings.json").write_text("{}", encoding="utf-8")
     (root / ".stillrunning").mkdir(mode=0o700)
-    (root / ".stillrunning" / "overrides.json").write_text("{}")
-    (root / ".npmrc").write_text("")
+    (root / ".stillrunning" / "overrides.json").write_text("{}", encoding="utf-8")
+    (root / ".npmrc").write_text("", encoding="utf-8")
     monkeypatch.setenv("HOME", str(root))
     for name in list(os.environ):
         if name.startswith(("STILLRUNNING_", "PIP_", "UV_", "NPM_CONFIG_", "npm_config_", "POETRY_",
@@ -339,8 +339,8 @@ def home(monkeypatch, tmp_path):
     work = tmp_path / "work"
     for sub in ("app", "docs", "build"):
         (work / sub).mkdir(parents=True)
-    (work / "requirements.txt").write_text("evilx\n")
-    (work / "app" / "requirements.txt").write_text("evilx\n")
+    (work / "requirements.txt").write_text("evilx\n", encoding="utf-8")
+    (work / "app" / "requirements.txt").write_text("evilx\n", encoding="utf-8")
     monkeypatch.chdir(work)
     return root
 
@@ -736,7 +736,7 @@ def test_the_hook_script_blocks_a_package_hidden_behind_a_flag(home, work):
     import subprocess
     with open(os.path.join(str(home), ".stillrunning", "known_bad_packages.json"), "w", encoding="utf-8") as handle:
         json.dump({"npm": {"evilx": ["any"]}, "pip": {"evilx": ["any"]}}, handle)
-    env = dict(os.environ, HOME=str(home), STILLRUNNING_API_BASE="http://127.0.0.1:9")
+    env = dict(os.environ, HOME=str(home), **({"USERPROFILE": str(home)} if os.name == "nt" else {}), STILLRUNNING_API_BASE="http://127.0.0.1:9")
     for command, action in (("pnpm add -w evilx", "deny"),
                             ("npm install -w evilx", "deny"),
                             ("pip install --target evilx", "deny"),

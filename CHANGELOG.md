@@ -75,6 +75,27 @@ against the 30 s timeout), so a blocked install padded that way went through.
   runner's real profile. The tests now set `USERPROFILE` on Windows, skip the
   shell-wrapper and POSIX-permission tests there by name, and read files as
   UTF-8. Whatever still fails after that is triaged before any Windows claim.
+- **Windows product fixes** found by that runner (the simulated tests missed
+  all of them). Each has a regression test in `tests/test_windows_real.py` that
+  runs on every OS; Linux behaviour and the hook's answers are unchanged.
+  - **Fail-open, security:** a blocklisted install inside a script that the same
+    command writes and then runs (`cat > x.sh <<EOF … EOF; ./x.sh`) was
+    ALLOWED on Windows. The hook tested shell words for `os.sep` (`\` on
+    Windows), so `./x.sh`, written with `/` as bash writes it, was never read.
+    Shell words now count `/` everywhere and also `\` on Windows. The same
+    check also had `"$VIRTUAL_ENV/bin/pip"` asking on Windows instead of
+    denying.
+  - **Crash:** the hook and the status line, run as bare scripts
+    (`python -I -S …`) the way Claude Code runs them, never applied the
+    encoding fix, so on a Windows code page `→` or `—` raised
+    UnicodeEncodeError (the status line exited 1). They now load the package's
+    `_stdio.py` by absolute path.
+  - **CVE monitoring was always UNKNOWN on Windows:** the safe-folder pattern
+    accepted only `/…`, so every Windows folder read "checked for another
+    folder". Windows drive-letter folders are now accepted (UNC paths still
+    are not); the POSIX pattern is unchanged. The status line also ignored a
+    Windows folder from Claude Code.
+  - `cve --schedule` on Windows now says plainly that there is no crontab.
 
 ### Python 3.15, CI, and a Python 3.8 fix
 

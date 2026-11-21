@@ -157,16 +157,16 @@ def test_local_and_manifest_installs_are_noted_not_blocked(command):
 
 
 def test_requirements_file_is_read(tmp_path):
-    (tmp_path / "more.txt").write_text("flask>=2\n")
+    (tmp_path / "more.txt").write_text("flask>=2\n", encoding="utf-8")
     (tmp_path / "reqs.txt").write_text(
         "# comment\nrequests==2.32.3 \\\n    --hash=sha256:abc\nnumpy  # inline\n-r more.txt\n"
-        "-e .\ngit+https://example.com/x.git\n")
+        "-e .\ngit+https://example.com/x.git\n", encoding="utf-8")
     packages, unverifiable, notes = parse("pip install -r reqs.txt", cwd=str(tmp_path))
     assert packages == [("pip", "requests", "2.32.3"), ("pip", "numpy", None), ("pip", "flask", None)]
     assert unverifiable == ["remote_url"] and notes
-    (tmp_path / "idx.txt").write_text("--index-url https://evil.example/simple\nrequests\n")
+    (tmp_path / "idx.txt").write_text("--index-url https://evil.example/simple\nrequests\n", encoding="utf-8")
     assert "custom_index" in parse("pip install -r idx.txt", cwd=str(tmp_path))[1]
-    (tmp_path / "big.txt").write_text("\n".join(f"pkg{i}" for i in range(80)))
+    (tmp_path / "big.txt").write_text("\n".join(f"pkg{i}" for i in range(80)), encoding="utf-8")
     assert "requirements_large" in parse("pip install -r big.txt", cwd=str(tmp_path))[1]
 
 
@@ -453,7 +453,7 @@ def test_local_blocklist_needs_no_network():
 def test_one_time_override_is_used_up(home, monkeypatch):
     (home / ".stillrunning").mkdir()
     path = home / ".stillrunning" / "overrides.json"
-    path.write_text(json.dumps({"allow": ["Kept_Pkg"], "once": ["somepkg"]}))
+    path.write_text(json.dumps({"allow": ["Kept_Pkg"], "once": ["somepkg"]}), encoding="utf-8")
     monkeypatch.setattr(ch, "_blocklist_only_lookup",
                         lambda *a, **k: {"status": "miss_unconfirmed"})   # answered: not listed
     assert ch.lookup(PKG) == {"status": "override"}
@@ -554,7 +554,7 @@ def test_colour_is_opt_in_for_hook_lines(monkeypatch):
 
 def test_hook_file_runs_standalone_in_isolated_mode(home):
     """The settings.json command runs the file by path with -I -S."""
-    env = {"HOME": str(home), "PATH": "/usr/bin:/bin"}
+    env = {"HOME": str(home), **({"USERPROFILE": str(home), "SYSTEMROOT": os.environ.get("SYSTEMROOT", "")} if os.name == "nt" else {}), "PATH": "/usr/bin:/bin"}
     r = subprocess.run([sys.executable, "-I", "-S", ch.__file__], input=event("ls -la"),
                        capture_output=True, text=True, env=env, timeout=30)
     assert r.returncode == 0 and r.stdout == "" and r.stderr == ""
@@ -577,12 +577,12 @@ def test_counters_and_decision_log(hook, home):
     records = [json.loads(line) for line in log.read_text(encoding="utf-8").splitlines()]
     assert [r["verdict"] for r in records] == ["no_known_threat", "blocked", "needs_approval"]
     assert all(r["v"] == 1 and r["evidence"] for r in records)
-    assert stat.S_IMODE(log.stat().st_mode) == 0o600
+    assert os.name == "nt" or stat.S_IMODE(log.stat().st_mode) == 0o600   # Windows: no POSIX modes
     # the command is kept for the side panel's "needs you" card: one line, cut to
     # 400 characters, credentials removed (see show_command); the file is 0600
     stored = [json.loads(line)["command"] for line in log.read_text(encoding="utf-8").splitlines()]
     assert set(stored) == {"pip install requests reqeusts", "pip install flask"}
-    assert oct(log.stat().st_mode & 0o777) == "0o600"
+    assert os.name == "nt" or oct(log.stat().st_mode & 0o777) == "0o600"
     assert not list((home / ".stillrunning").glob("*.tmp"))
 
 
@@ -604,7 +604,7 @@ def test_counters_roll_over_at_midnight_and_keep_14_days(home):
 
 def test_a_corrupt_counter_file_never_breaks_the_hook(hook, home):
     (home / ".stillrunning").mkdir()
-    (home / ".stillrunning" / "hook_stats.json").write_text("{broken")
+    (home / ".stillrunning" / "hook_stats.json").write_text("{broken", encoding="utf-8")
     code, out = hook(event("pip install requests"))
     assert code == 0 and "no known threat" in out["systemMessage"]
 
@@ -637,7 +637,7 @@ def test_status_line_fallback_and_counts(home):
 
 def test_status_line_file_runs_standalone(home):
     r = subprocess.run([sys.executable, "-I", "-S", statusline.__file__], input="{}",
-                       capture_output=True, text=True, env={"HOME": str(home), "NO_COLOR": "1"},
+                       capture_output=True, text=True, env={"HOME": str(home), **({"USERPROFILE": str(home), "SYSTEMROOT": os.environ.get("SYSTEMROOT", "")} if os.name == "nt" else {}), "NO_COLOR": "1"},
                        timeout=30)
     assert r.returncode == 0 and r.stdout.strip() == statusline.FALLBACK
 
@@ -672,7 +672,7 @@ def test_install_merges_keeps_everything_else_and_backs_up(home):
                 "hooks": {"PostToolUse": [{"matcher": "Edit", "hooks": [{"type": "command", "command": "fmt"}]}],
                           "PreToolUse": [{"matcher": "Bash", "hooks": [{"type": "command", "command": "other"}]}]}}
     path = home / ".claude" / "settings.json"
-    path.write_text(json.dumps(original))
+    path.write_text(json.dumps(original), encoding="utf-8")
     messages = ch.install(statusline=True)
     ch.install(statusline=True)                                   # re-run: no duplicate
     data = settings(home)
@@ -700,7 +700,7 @@ def test_status_line_is_added_only_on_request_and_only_when_absent(home):
 def test_install_refuses_a_settings_file_it_cannot_parse(home, content):
     (home / ".claude").mkdir()
     path = home / ".claude" / "settings.json"
-    path.write_text(content)
+    path.write_text(content, encoding="utf-8")
     with pytest.raises(ch.InstallError):
         ch.install()
     assert path.read_text(encoding="utf-8") == content
@@ -712,11 +712,11 @@ def test_install_removes_only_its_own_dead_hooks_json_entry(home):
     legacy = home / ".claude" / "hooks.json"
     ours = {"matcher": {"tool_name": "Bash"}, "hooks": [{"type": "preToolUse", "command": "stillrunning hook"}]}
     theirs = {"matcher": {"tool_name": "Edit"}, "hooks": [{"type": "x", "command": "theirs"}]}
-    legacy.write_text(json.dumps({"hooks": [ours, theirs]}))
+    legacy.write_text(json.dumps({"hooks": [ours, theirs]}), encoding="utf-8")
     assert ch.installed_state() == "legacy"
     ch.install()
     assert json.loads(legacy.read_text(encoding="utf-8")) == {"hooks": [theirs]}
-    legacy.write_text(json.dumps({"hooks": [ours]}))
+    legacy.write_text(json.dumps({"hooks": [ours]}), encoding="utf-8")
     ch.install()
     assert not legacy.exists()
 
@@ -724,7 +724,7 @@ def test_install_removes_only_its_own_dead_hooks_json_entry(home):
 def test_uninstall_removes_only_ours(home):
     (home / ".claude").mkdir()
     other = {"matcher": "Bash", "hooks": [{"type": "command", "command": "other"}]}
-    (home / ".claude" / "settings.json").write_text(json.dumps({"hooks": {"PreToolUse": [other]}, "x": 1}))
+    (home / ".claude" / "settings.json").write_text(json.dumps({"hooks": {"PreToolUse": [other]}, "x": 1}), encoding="utf-8")
     ch.install(statusline=True)
     ch.uninstall()
     assert settings(home) == {"hooks": {"PreToolUse": [other]}, "x": 1}
@@ -734,7 +734,7 @@ def test_uninstall_removes_only_ours(home):
 
 def test_cli_install_reports_a_broken_settings_file(home, capsys):
     (home / ".claude").mkdir()
-    (home / ".claude" / "settings.json").write_text("{nope")
+    (home / ".claude" / "settings.json").write_text("{nope", encoding="utf-8")
     with pytest.raises(SystemExit) as exc:
         cli._install_claude_code_hook()
     assert exc.value.code == 1 and "NOT installed" in capsys.readouterr().out
@@ -803,14 +803,14 @@ def test_shield_week_adds_up_days(home):
 
 def test_shield_survives_a_corrupt_log(home):
     (home / ".stillrunning").mkdir()
-    (home / ".stillrunning" / "hook_decisions.jsonl").write_text('{broken\n{"verdict": "nope"}\n')
-    (home / ".stillrunning" / "hook_stats.json").write_text("[]")
+    (home / ".stillrunning" / "hook_decisions.jsonl").write_text('{broken\n{"verdict": "nope"}\n', encoding="utf-8")
+    (home / ".stillrunning" / "hook_stats.json").write_text("[]", encoding="utf-8")
     assert shield.collect(now=NOW)["has_data"] is False
 
 
 # ── F3: shipped wrappers ─────────────────────────────────────────────────
 def _exe(path, text):
-    path.write_text(text)
+    path.write_text(text, encoding="utf-8")
     path.chmod(0o755)
     return path
 
@@ -996,7 +996,7 @@ def test_wrappers_pass_through_everything_else(tmp_path):
 def test_cli_status_reports_the_dead_legacy_hook(home, capsys):
     (home / ".claude").mkdir()
     (home / ".claude" / "hooks.json").write_text(json.dumps(
-        {"hooks": [{"hooks": [{"type": "preToolUse", "command": "stillrunning hook"}]}]}))
+        {"hooks": [{"hooks": [{"type": "preToolUse", "command": "stillrunning hook"}]}]}), encoding="utf-8")
     assert ch.installed_state() == "legacy"
     ch.install()
     assert ch.installed_state() == "active"
@@ -1097,11 +1097,11 @@ def test_token_precedence(home, monkeypatch):
     sr = home / ".stillrunning"
     sr.mkdir()
     assert ch.resolve_token() == (None, "no token (anonymous tier)")
-    (sr / ".env").write_text('STILLRUNNING_TOKEN="from-env-file"\n')
+    (sr / ".env").write_text('STILLRUNNING_TOKEN="from-env-file"\n', encoding="utf-8")
     assert ch.resolve_token() == ("from-env-file", "~/.stillrunning/.env")
-    (sr / "stillrunning.yaml").write_text("alert_channel: silent\ntoken: from-yaml\n")
+    (sr / "stillrunning.yaml").write_text("alert_channel: silent\ntoken: from-yaml\n", encoding="utf-8")
     assert ch.resolve_token()[0] == "from-yaml"
-    (sr / "config.json").write_text(json.dumps({"token": "from-config"}))
+    (sr / "config.json").write_text(json.dumps({"token": "from-config"}), encoding="utf-8")
     assert ch.resolve_token() == ("from-config", "~/.stillrunning/config.json")
     monkeypatch.setenv("STILLRUNNING_TOKEN", "from-env")
     assert ch.resolve_token()[0] == "from-env"
@@ -1110,15 +1110,15 @@ def test_token_precedence(home, monkeypatch):
 def test_every_command_reads_the_token_the_same_way(home, monkeypatch):
     from stillrunning import hook as import_hook
     (home / ".stillrunning").mkdir()
-    (home / ".stillrunning" / "config.json").write_text(json.dumps({"token": "tok-1"}))
+    (home / ".stillrunning" / "config.json").write_text(json.dumps({"token": "tok-1"}), encoding="utf-8")
     assert cli._get_customer_token() == import_hook._get_api_token() == ch._token() == "tok-1"
-    (home / ".stillrunning" / "config.json").write_text("{broken")
+    (home / ".stillrunning" / "config.json").write_text("{broken", encoding="utf-8")
     assert cli._get_customer_token() is None and import_hook._get_api_token() is None
 
 
 def test_an_empty_setup_yaml_is_not_a_token(home):
     (home / ".stillrunning").mkdir()
-    (home / ".stillrunning" / "stillrunning.yaml").write_text("api_token: ''\ntoken:\n")
+    (home / ".stillrunning" / "stillrunning.yaml").write_text("api_token: ''\ntoken:\n", encoding="utf-8")
     assert ch.resolve_token()[0] is None
 
 
@@ -1132,13 +1132,13 @@ def test_hook_is_on_only_when_the_entry_and_the_script_both_exist(home):
     entry = data["hooks"]["PreToolUse"][0]["hooks"][0]
     good = entry["command"]
     entry["command"] = good.replace("claude_hook.py", "gone/claude_hook.py")
-    path.write_text(json.dumps(data))
+    path.write_text(json.dumps(data), encoding="utf-8")
     state, reason = ch.verify_install()
     assert state == "off" and "no longer exists" in reason
     entry["command"] = "/nonexistent/python -I -S /x/stillrunning/claude_hook.py"
-    path.write_text(json.dumps(data))
+    path.write_text(json.dumps(data), encoding="utf-8")
     assert ch.verify_install()[0] == "off"
-    path.write_text("{broken")
+    path.write_text("{broken", encoding="utf-8")
     assert ch.verify_install()[0] == "not_verified"
     assert layers.protection_layers()[0]["state"] == layers.NOT_VERIFIED
 
@@ -1146,7 +1146,7 @@ def test_hook_is_on_only_when_the_entry_and_the_script_both_exist(home):
 def test_dead_hooks_json_is_never_reported_active(home, capsys):
     (home / ".claude").mkdir()
     (home / ".claude" / "hooks.json").write_text(json.dumps(
-        {"hooks": [{"hooks": [{"type": "preToolUse", "command": "stillrunning hook"}]}]}))
+        {"hooks": [{"hooks": [{"type": "preToolUse", "command": "stillrunning hook"}]}]}), encoding="utf-8")
     assert cli._status() == 0
     out = capsys.readouterr().out
     assert "[OFF] Claude Code hook" in out and "does not read" in out
@@ -1192,9 +1192,9 @@ def test_import_hook_layer_needs_the_pth_file_and_a_token(home, monkeypatch, tmp
     monkeypatch.setattr(layers.site, "getusersitepackages", lambda: str(tmp_path / "nouser"))
     get = lambda: {l["key"]: l for l in layers.protection_layers()}["import_hook"]
     assert get()["state"] == layers.OFF and "not installed" in get()["reason"]
-    (site_dir / "stillrunning.pth").write_text("x")          # the name status used to look for
+    (site_dir / "stillrunning.pth").write_text("x", encoding="utf-8")          # the name status used to look for
     assert get()["state"] == layers.OFF
-    (site_dir / layers.PTH_NAME).write_text("import stillrunning.hook\n")
+    (site_dir / layers.PTH_NAME).write_text("import stillrunning.hook\n", encoding="utf-8")
     assert get()["state"] == layers.OFF and "only run with an API token" in get()["reason"]
     monkeypatch.setenv("STILLRUNNING_TOKEN", "tok")
     assert get()["state"] == layers.ON
@@ -1291,11 +1291,11 @@ def test_interactive_setup_respects_no(home, capsys, monkeypatch):
 def test_setup_copies_a_legacy_token_to_the_canonical_file(home, capsys, monkeypatch):
     monkeypatch.setattr(cli, "_run_alert_setup", lambda autonomous=False: None)
     (home / ".stillrunning").mkdir()
-    (home / ".stillrunning" / "stillrunning.yaml").write_text("token: legacy-tok\n")
+    (home / ".stillrunning" / "stillrunning.yaml").write_text("token: legacy-tok\n", encoding="utf-8")
     cli.run_setup_wizard(autonomous=True)
     config = home / ".stillrunning" / "config.json"
     assert json.loads(config.read_text(encoding="utf-8"))["token"] == "legacy-tok"
-    assert stat.S_IMODE(config.stat().st_mode) == 0o600
+    assert os.name == "nt" or stat.S_IMODE(config.stat().st_mode) == 0o600   # Windows: no POSIX modes
     assert ch.resolve_token() == ("legacy-tok", "~/.stillrunning/config.json")
 
 
@@ -1464,14 +1464,14 @@ def test_pth_line_survives_the_package_being_uninstalled(tmp_path):
     assert import_hook.PTH_LINE.startswith("import ") and "\n" not in import_hook.PTH_LINE
     site_dir = tmp_path / "site"
     site_dir.mkdir()
-    (site_dir / "stillrunning-hook.pth").write_text(import_hook.PTH_LINE + "\n")
+    (site_dir / "stillrunning-hook.pth").write_text(import_hook.PTH_LINE + "\n", encoding="utf-8")
     code = f"import site; site.addsitedir({str(site_dir)!r}); print('started')"
     r = subprocess.run([_sys.executable, "-I", "-S", "-c", code], capture_output=True, text=True,
                        cwd=str(tmp_path), timeout=30)
     assert r.returncode == 0 and r.stdout.strip() == "started" and r.stderr == ""
     # what pip really leaves: the package directory with only the config --setup wrote
     (site_dir / "stillrunning").mkdir()
-    (site_dir / "stillrunning" / "stillrunning.yaml").write_text("app_name: x\n")
+    (site_dir / "stillrunning" / "stillrunning.yaml").write_text("app_name: x\n", encoding="utf-8")
     r = subprocess.run([_sys.executable, "-I", "-S", "-c", code], capture_output=True, text=True,
                        cwd=str(tmp_path), timeout=30)
     assert r.returncode == 0 and r.stdout.strip() == "started" and r.stderr == ""
@@ -1524,7 +1524,7 @@ def _fake_tools(tmp_path, home):
     log = tmp_path / "calls.log"
     for tool in ("pip", "pip3", "npm"):
         w = home / ".stillrunning" / "bin" / tool
-        w.write_text(f'#!/bin/bash\n# stillrunning {tool} wrapper — test stand-in\necho "WRAPPED {tool} $*" >> {log}\n')
+        w.write_text(f'#!/bin/bash\n# stillrunning {tool} wrapper — test stand-in\necho "WRAPPED {tool} $*" >> {log}\n', encoding="utf-8")
         w.chmod(0o755)
     return log
 
@@ -1536,13 +1536,13 @@ def test_activating_a_venv_afterwards_does_not_bypass_the_wrapper(home, tmp_path
     log = _fake_tools(tmp_path, home)
     venv_bin = tmp_path / "venv" / "bin"
     venv_bin.mkdir(parents=True)
-    (venv_bin / "pip").write_text(f'#!/bin/bash\necho "UNCHECKED venv pip $*" >> {log}\n')
+    (venv_bin / "pip").write_text(f'#!/bin/bash\necho "UNCHECKED venv pip $*" >> {log}\n', encoding="utf-8")
     (venv_bin / "pip").chmod(0o755)
     script = (f'source "$HOME/.stillrunning/activate.sh"; source "$HOME/.stillrunning/activate.sh"; '
               f'export PATH="{venv_bin}:$PATH"; pip install six; bash -c "pip install seven"; '
               f'echo "$PATH" | tr ":" "\\n" | grep -c "\\.stillrunning/bin"')
     r = subprocess.run(["bash", "-c", script], capture_output=True, text=True,
-                       env={"HOME": str(home), "PATH": "/usr/bin:/bin"})
+                       env={"HOME": str(home), **({"USERPROFILE": str(home), "SYSTEMROOT": os.environ.get("SYSTEMROOT", "")} if os.name == "nt" else {}), "PATH": "/usr/bin:/bin"})
     assert r.returncode == 0, r.stderr
     assert log.read_text(encoding="utf-8").splitlines() == ["WRAPPED pip install six", "WRAPPED pip install seven"]
     assert r.stdout.strip() == "1"                       # sourced twice, on PATH once
@@ -1552,18 +1552,18 @@ def test_rc_line_is_harmless_in_plain_sh_and_when_the_files_are_gone(home, tmp_p
     """~/.profile is read by dash on Debian/Ubuntu: `source` is not a command
     there and activate.sh is bash syntax."""
     monkeypatch.setattr(cli, "_venv_install_silent", lambda: False)
-    (home / ".profile").write_text("# mine\n")
+    (home / ".profile").write_text("# mine\n", encoding="utf-8")
     assert cli._shell_install() == 0
     assert cli._SHELL_ACTIVATE_MARKER in (home / ".profile").read_text(encoding="utf-8")
     for shell in ("sh", "dash"):
         if not __import__("shutil").which(shell):
             continue
         r = subprocess.run([shell, "-c", '. "$HOME/.profile"; echo ok'], capture_output=True, text=True,
-                           env={"HOME": str(home), "PATH": "/usr/bin:/bin"})
+                           env={"HOME": str(home), **({"USERPROFILE": str(home), "SYSTEMROOT": os.environ.get("SYSTEMROOT", "")} if os.name == "nt" else {}), "PATH": "/usr/bin:/bin"})
         assert r.stdout.strip() == "ok" and r.stderr == "", (shell, r.stderr)
     __import__("shutil").rmtree(home / ".stillrunning")
     r = subprocess.run(["bash", "-c", 'source "$HOME/.profile"; echo ok'], capture_output=True, text=True,
-                       env={"HOME": str(home), "PATH": "/usr/bin:/bin"})
+                       env={"HOME": str(home), **({"USERPROFILE": str(home), "SYSTEMROOT": os.environ.get("SYSTEMROOT", "")} if os.name == "nt" else {}), "PATH": "/usr/bin:/bin"})
     assert r.stdout.strip() == "ok" and r.stderr == ""
 
 
@@ -1583,7 +1583,7 @@ def test_shell_uninstall_puts_rc_files_back_byte_for_byte(home, monkeypatch):
 
 def test_shell_uninstall_still_removes_the_pre_135_rc_block(home, monkeypatch):
     monkeypatch.setattr(cli, "_venv_uninstall", lambda: 0)
-    (home / ".bashrc").write_text("export A=1\n" + cli._SHELL_RC_BLOCK_LEGACY)
+    (home / ".bashrc").write_text("export A=1\n" + cli._SHELL_RC_BLOCK_LEGACY, encoding="utf-8")
     assert cli._shell_uninstall() == 0
     assert (home / ".bashrc").read_text(encoding="utf-8") == "export A=1\n"
 

@@ -275,14 +275,42 @@ def _cwd_from_stdin():
         data = json.loads(sys.stdin.read(200_000) or "{}")
         space = data.get("workspace") if isinstance(data.get("workspace"), dict) else {}
         for value in (space.get("project_dir"), space.get("current_dir"), data.get("cwd")):
-            if isinstance(value, str) and value.startswith("/"):
+            # Windows folders (C:\\…) were ignored, so the line was built for the
+            # wrong folder there; POSIX keeps exactly the old test.
+            if isinstance(value, str) and (value.startswith("/") or (os.name == "nt" and os.path.isabs(value))):
                 return value
     except (OSError, ValueError, AttributeError):
         return None
     return None
 
 
+def _safe_script_streams():
+    """The bare-script path (`python -I -S <this file>`, how Claude Code runs it)
+    cannot import the package, so the entry points' make_output_safe() never ran
+    here: on a Windows code page a non-ASCII warning (→, —) raised
+    UnicodeEncodeError and crashed the process (found on a real windows-latest
+    runner 2026-11-21). Load the package's own _stdio.py by absolute path (never
+    from the current folder: -I keeps that off sys.path) and apply it. UTF-8
+    streams are left untouched, so nothing changes where they already are UTF-8
+    (Linux, macOS)."""
+    try:
+        import importlib.util
+        spec = importlib.util.spec_from_file_location(
+            "_stillrunning_stdio", os.path.join(os.path.dirname(os.path.abspath(__file__)), "_stdio.py"))
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        module.make_output_safe()
+    except Exception:  # _stdio.py missing or broken: still never crash on output
+        for stream in (sys.stdout, sys.stderr):
+            try:
+                if (getattr(stream, "encoding", "") or "").lower().replace("-", "") not in ("utf8", "utf8sig"):
+                    stream.reconfigure(errors="backslashreplace")
+            except (AttributeError, ValueError, OSError):
+                continue
+
+
 if __name__ == "__main__":
+    _safe_script_streams()
     try:
         sys.stdout.write(render(cwd=_cwd_from_stdin()) + "\n")
     except Exception:  # a status line must never print a traceback into the UI

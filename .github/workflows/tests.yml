@@ -54,7 +54,7 @@ jobs:
         # Three tests fail on main and are tracked separately; they are
         # skipped here so a red run always means something new broke.
         run: >
-          python -m pytest -q -p no:cacheprovider tests/
+          python -m pytest -q -p no:cacheprovider -rxs tests/
           --deselect tests/test_v230_fixes.py::TestScanCommand::test_scan_blocked_package_returns_1
           --deselect tests/test_v230_fixes.py::TestScanCommand::test_scan_nonexistent_package_returns_2
           --deselect tests/test_v250_fixes.py::TestVersionUpdate::test_version_is_250
