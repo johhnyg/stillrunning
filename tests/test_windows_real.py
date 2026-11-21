@@ -82,20 +82,28 @@ def test_status_line_runs_as_a_bare_script_with_non_ascii_output(tmp_path):
 
 
 def test_bare_hook_streams_survive_a_code_page(tmp_path):
-    """The hook's own stream set-up, under cp1252 (forced here so it also runs
-    on Linux; on Windows that is the real default for a pipe). → and — raised
-    UnicodeEncodeError before the fix; now the stream is UTF-8."""
+    """The hook's own stream set-up under cp1252 (on Windows the real default
+    for a pipe). Before the fix → and — raised UnicodeEncodeError there; now the
+    stream is UTF-8. Off Windows the set-up does nothing at all, in any locale
+    (Linux output stays exactly what it was)."""
     driver = tmp_path / "driver.py"
     driver.write_text(
         "import importlib.util, sys\n"
         f"spec = importlib.util.spec_from_file_location('hook', {os.path.join(PKG, 'claude_hook.py')!r})\n"
         "hook = importlib.util.module_from_spec(spec); spec.loader.exec_module(hook)\n"
+        "before = (sys.stdout.encoding, sys.stdout.errors, sys.stderr.encoding, sys.stderr.errors)\n"
         "hook._safe_script_streams()\n"
+        "after = (sys.stdout.encoding, sys.stdout.errors, sys.stderr.encoding, sys.stderr.errors)\n"
+        "if hook.os.name != 'nt':\n"
+        "    print('UNCHANGED' if before == after else 'CHANGED'); sys.exit(0)\n"
         "hook._warn('install → checked — ok')\n"
         "print('result → done — ok')\n", encoding="utf-8")
     env = dict(os.environ, PYTHONIOENCODING="cp1252", HOME=str(tmp_path), USERPROFILE=str(tmp_path))
     r = subprocess.run([sys.executable, "-S", str(driver)], capture_output=True, env=env, timeout=60)
     assert r.returncode == 0, r.stderr.decode("cp1252", "replace")[-500:]
+    if not WINDOWS:
+        assert r.stdout.strip() == b"UNCHANGED"
+        return
     # a non-UTF-8 stream is switched to UTF-8 (Claude Code reads these as UTF-8)
     assert "result → done — ok" in r.stdout.decode("utf-8")
     assert "install → checked — ok" in r.stderr.decode("utf-8")
@@ -163,35 +171,211 @@ def test_schedule_says_windows_has_no_crontab(capsys, monkeypatch):
     assert "Windows does not have" in capsys.readouterr().out
 
 
-# ── investigation: does the hook see its OWN files named in bash-accepted forms? ──
+# ── 4. self-protection: stillrunning's own files under every Windows spelling ──
+# Found on the real runner 2026-11-21: `rm /d/…/claude_hook.py` (Git Bash's own
+# spelling) changed the hook's code without asking. Every spelling below must
+# now be seen, for every operation that is seen on Linux. On Windows real Git
+# Bash is asked first (`[ a -ef b ]`) that the spelling is that file, so the
+# test can never pass by testing spellings that name something else.
 
-def _forms(path):
-    """Ways a bash command can name this file. Windows (Git Bash) accepts the
-    quoted backslash form, forward slashes and the /d/… form; an unquoted
-    backslash path is mangled by bash itself (D:\\a\\b → D:ab) and is listed
-    only for the record."""
+def _git_bash():
+    import shutil
+    git = shutil.which("git")
+    for candidate in ([os.path.join(os.path.dirname(os.path.dirname(git)), "bin", "bash.exe")] if git else []) + \
+            [r"C:\Program Files\Git\bin\bash.exe"]:
+        if os.path.isfile(candidate):
+            return candidate          # never System32\bash.exe (the WSL stub)
+    return None
+
+
+def _short(path):
+    import ctypes
+    buf = ctypes.create_unicode_buffer(32768)
+    if ctypes.windll.kernel32.GetShortPathNameW(path, buf, len(buf)) and buf.value.lower() != path.lower():
+        return buf.value
+    return None
+
+
+def _spellings(path):
+    """name → (the word as typed in a bash command, the same name as one argument)."""
     if not WINDOWS:
-        return {"plain": path, "quoted": f"'{path}'"}
+        return {"plain": (path, path), "quoted": (f"'{path}'", path)}
     drive, rest = os.path.splitdrive(path)
-    fwd = path.replace("\\", "/")
-    return {"quoted backslash": f"'{path}'", "forward slash": fwd,
-            "msys /d/": "/" + drive[0].lower() + rest.replace("\\", "/"),
-            "unquoted backslash (bash mangles it)": path}
+    fwd, msys = path.replace("\\", "/"), rest.replace("\\", "/")
+    d = drive[0].lower()
+    host = os.environ.get("COMPUTERNAME", "localhost")
+    out = {
+        "quoted D:\\": (f"'{path}'", path), "D:/": (fwd, fwd), "d:/ (lower drive)": (d + fwd[1:], d + fwd[1:]),
+        "/d/ (Git Bash)": ("/" + d + msys, "/" + d + msys), "/D/": ("/" + d.upper() + msys, "/" + d.upper() + msys),
+        "/cygdrive/d/": ("/cygdrive/" + d + msys, "/cygdrive/" + d + msys),
+        "/proc/cygdrive/d/": ("/proc/cygdrive/" + d + msys, "/proc/cygdrive/" + d + msys),
+        "UPPER CASE": (fwd.upper(), fwd.upper()), "mixed separators": (f"'{drive}{rest.replace(os.sep, '/', 2)}'", drive + rest.replace(os.sep, "/", 2)),
+        "//?/D:/": ("//?/" + fwd, "//?/" + fwd), "//./D:/": ("//./" + fwd, "//./" + fwd),
+        "quoted \\\\?\\D:\\": (f"'\\\\?\\{path}'", "\\\\?\\" + path),
+        "//localhost/d$/": (f"'//localhost/{d}$'{msys}", f"//localhost/{d}$" + msys),
+        "//127.0.0.1/d$/": (f"'//127.0.0.1/{d}$'{msys}", f"//127.0.0.1/{d}$" + msys),
+        "//COMPUTERNAME/d$/": (f"'//{host}/{d}$'{msys}", f"//{host}/{d}$" + msys),
+        "//?/UNC/localhost/d$/": (f"'//?/UNC/localhost/{d}$'{msys}", f"//?/UNC/localhost/{d}$" + msys),
+        "/d/ doubled slashes": ("/" + d + msys.replace("/", "//"), "/" + d + msys.replace("/", "//")),
+        "trailing dot": (fwd + ".", fwd + "."), "trailing space": (f"'{fwd} '", fwd + " "),
+        "::$DATA": (f"'{fwd}::$DATA'", fwd + "::$DATA"),
+    }
+    short = _short(path)
+    if short:
+        out["8.3 short name"] = (short.replace("\\", "/"), short.replace("\\", "/"))
+    return out
 
 
-_TARGET = os.path.join(PKG, "claude_hook.py")
+_FILE_OPS = ["rm {t}", "rm -f {t}", "unlink {t}", "shred -u {t}", "mv {t} /tmp/x", "mv /tmp/x {t}",
+             "cp /tmp/x {t}", "ln -sf /tmp/x {t}", "install /tmp/x {t}", "truncate -s0 {t}", "chmod 000 {t}",
+             "sed -i s/a/b/ {t}", "sed -i.bak s/a/b/ {t}", "perl -pi -e s/a/b/ {t}", "echo x > {t}",
+             "echo x >> {t}", ": > {t}", "cat /tmp/x > {t}", "tee {t} < /tmp/x", "tee -a {t} < /tmp/x",
+             "dd if=/tmp/x of={t}", "printf x >| {t}", "exec 3>{t}", "touch {t}", "patch {t} < /tmp/p",
+             "rsync /tmp/x {t}", "git checkout -- {t}", "env rm {t}", "command rm {t}", "sudo rm {t}",
+             "nohup rm {t}", "rm.exe {t}", "/usr/bin/rm {t}", "cat > {t} <<E\nx\nE"]
+_QUOTING_OPS = ["bash -c 'rm {t}'", "python3 -c \"open('{t}','w')\""]   # only for unquoted spellings
+_FOLDER_OPS = ["rm -rf {d}", "find {d} -delete", "cp -r /tmp/d {d}", "cd {d} && rm {n}",
+               "pushd {d}; rm {n}", "rm {d}/*", "cp /tmp/x {d}/", "mv /tmp/x {d}", "git -C {d} checkout ."]
+_WINDOWS_OPS = ["cmd //c del {w}", "cmd //c \"del /f {w}\"", "cmd.exe /c del {w}", "cmd //c \"type nul > {w}\"",
+                "cmd //c \"echo x >> {w}\"", "cmd //c \"copy /y x {w}\"", "cmd //c \"move x {w}\"",
+                "cmd //c \"ren {w} y\"", "powershell -c \"Remove-Item {w}\"",
+                "powershell -Command \"Set-Content -Path {w} -Value x\"", "pwsh -c \"Add-Content {w} x\"",
+                "powershell -c \"'' | Out-File {w}\"", "powershell -c \"ri -Force {w}\"",
+                "icacls {w} //deny Everyone:F", "attrib +r {w}", "takeown //f {w}", "xcopy x {w}",
+                "certutil -decode x {w}"]
 
 
-@pytest.mark.parametrize("form", list(_forms(_TARGET)))
-@pytest.mark.parametrize("verb", ["rm {}", "sed -i s/a/b/ {}", "echo x >> {}"])
-def test_investigate_own_files_in_bash_path_forms(form, verb, capsys):
-    named = _forms(_TARGET)[form]
-    command = verb.format(named)
-    seen = ch.touches_protection(command, os.path.dirname(PKG))
-    print(f"SELF-PROTECTION {sys.platform} | {form} | {command} -> {'PROTECTED' if seen else 'NOT SEEN'}")
-    if not WINDOWS or "mangles" in form:
-        if not WINDOWS:
-            assert seen, command                  # POSIX: must hold (regression)
-        return
-    if not seen:
-        pytest.xfail(f"investigation: {form} not recognised as the hook's own file")
+@pytest.fixture
+def home(monkeypatch, tmp_path):
+    """A temporary home on every OS (never the real ~/.stillrunning or ~/.claude)."""
+    folder = tmp_path / "home"
+    folder.mkdir()
+    monkeypatch.setenv("HOME", str(folder))      # conftest moves USERPROFILE with it on Windows
+    monkeypatch.setenv("USERPROFILE", str(folder))
+    assert os.path.realpath(ch._home()) == os.path.realpath(str(folder))
+    return folder
+
+
+def _targets():
+    home = os.path.realpath(ch._home())
+    state = os.path.join(home, ".stillrunning", "config.json")
+    settings = os.path.join(home, ".claude", "settings.json")
+    for path in (state, settings):           # real files, so bash and 8.3 names can see them
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        if not os.path.exists(path):
+            open(path, "w").close()
+    return {"the hook's code": os.path.join(PKG, "claude_hook.py"), "the state folder": state,
+            "Claude Code settings": settings}
+
+
+def _same_file_per_bash(bash, a, b):
+    r = subprocess.run([bash, "-c", '[ "$1" -ef "$2" ]', "_", a, b], capture_output=True, timeout=30)
+    return r.returncode == 0
+
+
+_MUST_BE_SAME = ("quoted D:\\", "D:/", "/d/ (Git Bash)", "d:/ (lower drive)", "UPPER CASE")
+
+
+@pytest.mark.parametrize("target", ["the hook's code", "the state folder", "Claude Code settings"])
+def test_own_files_are_protected_in_every_bash_spelling(target, home):
+    """REQUIRED (was an expected failure): every operation x every spelling asks."""
+    path = _targets()[target]
+    folder, name = os.path.split(path)
+    bash = _git_bash() if WINDOWS else None
+    missed, checked, bash_says = [], 0, {}
+    for label, (word, arg) in _spellings(path).items():
+        if bash:
+            bash_says[label] = _same_file_per_bash(bash, arg, path.replace("\\", "/"))
+        ops = _FILE_OPS + ([] if "'" in word else _QUOTING_OPS)
+        commands = [op.format(t=word) for op in ops]
+        if label not in ("trailing dot", "trailing space", "::$DATA"):
+            fword = _spellings(folder)[label][0] if label in _spellings(folder) else None
+            if fword:
+                commands += [op.format(d=fword, n=name) for op in _FOLDER_OPS]
+        for command in commands:
+            checked += 1
+            if not ch.touches_protection(command, os.path.dirname(PKG)):
+                missed.append(f"{label}: {command!r}")
+    for label, same in sorted(bash_says.items()):
+        print(f"SELF-PROTECTION {target} | {label} | Git Bash says same file: {same}")
+    print(f"SELF-PROTECTION {target}: {checked - len(missed)}/{checked} protected")
+    if bash:
+        not_same = [label for label in _MUST_BE_SAME if not bash_says.get(label)]
+        assert not not_same, f"Git Bash did not see these as the file (test would be vacuous): {not_same}"
+    assert not missed, f"{len(missed)} of {checked} not protected:\n" + "\n".join(missed[:40])
+
+
+@pytest.mark.skipif(not WINDOWS, reason="cmd / PowerShell / Windows tools exist only on Windows")
+@pytest.mark.parametrize("target", ["the hook's code", "the state folder", "Claude Code settings"])
+def test_windows_tools_changing_own_files_ask(target, home):
+    path = _targets()[target]
+    spellings = _spellings(path)
+    missed = []
+    for label in ("quoted D:\\", "D:/", "/d/ (Git Bash)", "UPPER CASE"):
+        word = spellings[label][0].strip("'")
+        for op in _WINDOWS_OPS:
+            command = op.format(w=word if "\"" in op else f"'{word}'" if "\\" in word else word)
+            if not ch.touches_protection(command, os.path.dirname(PKG)):
+                missed.append(f"{label}: {command!r}")
+    assert not missed, "\n".join(missed)
+
+
+@pytest.mark.skipif(not WINDOWS, reason="Windows variables and tools")
+def test_windows_variables_and_encoded_powershell_ask(home):
+    _targets()
+    for command in ["rm -rf $USERPROFILE/.stillrunning", "rm -rf \"$USERPROFILE\\.stillrunning\"",
+                    "echo x > ${USERPROFILE}/.claude/settings.json", "rm -rf ~/.STILLRUNNING",
+                    "echo x > ~/.claude/Settings.JSON", "cd $USERPROFILE && rm -rf .stillrunning",
+                    "cmd //c \"rmdir /s /q %USERPROFILE%\\.stillrunning\"",
+                    "powershell -c \"Remove-Item -Recurse $env:USERPROFILE\\.stillrunning\"",
+                    "powershell -c \"rm -r ~\\.stillrunning\"", "powershell -e SQBFAFgA",
+                    "powershell -EncodedCommand SQBFAFgA"]:
+        assert ch.touches_protection(command, os.path.dirname(PKG)), command
+
+
+@pytest.mark.parametrize("target", ["the hook's code", "the state folder", "Claude Code settings"])
+def test_write_and_edit_tools_see_own_files_in_every_spelling(target, home):
+    path = _targets()[target]
+    missed = [label for label, (word, arg) in _spellings(path).items()
+              if not ch.protected_path(arg, os.path.dirname(PKG))]
+    assert not missed, missed
+
+
+# ── 5. fail-open, the Windows spellings of "a script this command wrote, then runs" ──
+
+@pytest.mark.skipif(not WINDOWS, reason="Windows path spellings")
+@pytest.mark.parametrize("make", [
+    lambda d: f"cat > x.sh <<EOF\npip install evilx\nEOF\n{d['msys']}/x.sh",
+    lambda d: f"cat > x.sh <<EOF\npip install evilx\nEOF\nbash {d['msys']}/x.sh",
+    lambda d: f"cat > x.sh <<EOF\npip install evilx\nEOF\n{d['fwd']}/x.sh",
+    lambda d: f"cat > x.sh <<EOF\npip install evilx\nEOF\n{d['fwd'].lower()}/x.sh",
+    lambda d: f"cat > x.sh <<EOF\npip install evilx\nEOF\n{d['fwd'].upper()}/X.SH",
+    lambda d: f"cat > {d['msys']}/x.sh <<EOF\npip install evilx\nEOF\n./x.sh",
+    lambda d: "cat > X.sh <<EOF\npip install evilx\nEOF\n./x.sh",
+    lambda d: "cat > X.sh <<EOF\npip install evilx\nEOF\nbash x.sh",
+    lambda d: f"cd {d['msys']} && cat > x.sh <<EOF\npip install evilx\nEOF\n./x.sh",
+    lambda d: "echo pip install evilx > x.bat && cmd //c x.bat",
+    lambda d: "echo pip install evilx > x.cmd && ./x.cmd",
+    lambda d: "echo 'pip install evilx' > x.ps1 && powershell -ExecutionPolicy Bypass -File x.ps1",
+    lambda d: "echo 'pip install evilx' > x.ps1 && pwsh ./x.ps1",
+], ids=["/c/…/x.sh", "bash /c/…", "C:/…", "c:/… lower", "C:/…/X.SH case", "write /c/… run ./",
+        "X.sh then ./x.sh", "X.sh then bash x.sh", "cd /c/… then ./x.sh", "x.bat via cmd", "./x.cmd",
+        "x.ps1 via powershell", "x.ps1 via pwsh"])
+def test_windows_spellings_of_a_written_then_run_script_are_denied(make, tmp_path):
+    here = os.path.realpath(str(tmp_path))
+    drive, rest = os.path.splitdrive(here)
+    d = {"fwd": here.replace("\\", "/"), "msys": "/" + drive[0].lower() + rest.replace("\\", "/")}
+    command = make(d)
+    assert _decide(command, here)["action"] == "deny", command
+
+
+@pytest.mark.parametrize("command", [
+    "cat > x.sh <<EOF\npip install evilx\nEOF\nsh -c ./x.sh",
+    "cat > x.sh <<EOF\npip install evilx\nEOF\nbash -c 'bash x.sh'",
+    "cat > x.sh <<EOF\npip install evilx\nEOF\n$PWD/x.sh",
+    "cat > x.sh <<EOF\npip install evilx\nEOF\n\"$(pwd)/x.sh\"",
+])
+def test_known_gap_on_every_os_written_script_run_through_c_or_pwd(command, tmp_path):
+    """Known gap on every OS (not Windows-specific), kept visible for its own fix."""
+    if _decide(command, str(tmp_path))["action"] != "deny":
+        pytest.xfail("known gap on every OS: -c strings and $PWD paths are not matched to written files")

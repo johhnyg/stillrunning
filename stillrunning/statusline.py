@@ -291,12 +291,15 @@ def _safe_script_streams():
     UnicodeEncodeError and crashed the process (found on a real windows-latest
     runner 2026-11-21). What reads these streams is Claude Code, which decodes
     them as UTF-8 — so a stream that is not UTF-8 is switched to UTF-8 (the
-    status line's 🛡 arrives as 🛡, not as an ASCII tag). Streams that already
-    are UTF-8 are left untouched, so nothing changes on Linux or macOS."""
+    status line's 🛡 arrives as 🛡, not as an ASCII tag). Windows only: on
+    Linux and macOS nothing here runs, in any locale, so their output is
+    exactly what it was."""
+    if os.name != "nt":
+        return
     for stream in (sys.stdout, sys.stderr):
         name = (getattr(stream, "encoding", "") or "").lower().replace("-", "").replace("_", "")
         if name in ("utf8", "utf8sig"):
-            continue                        # Linux, macOS: unchanged
+            continue
         try:
             stream.reconfigure(encoding="utf-8", errors="backslashreplace")
         except (AttributeError, ValueError, OSError):
