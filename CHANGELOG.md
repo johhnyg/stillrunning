@@ -11,6 +11,31 @@
 
 Two batches since 2.14.3. Neither changes what is checked or blocked.
 
+### The hook fails closed on its own failure (fuzz findings F3, F4, R1, R2)
+
+Claude Code lets a tool call through when a PreToolUse hook crashes, exits
+with anything but 0 or 2, or runs past its timeout, unless the hook is
+registered with `"onFailure": "block"` (hooks reference). A long enough
+command made the hook time out (a 40,000-character comment took 42-59 s
+against the 30 s timeout), so a blocked install padded that way went through.
+
+- The hook is registered with `"onFailure": "block"` (Claude Code 2.1.295 or
+  later). Existing installs get it when `stillrunning --hook-claude-code`
+  (or `--setup`) is run again.
+- Any unhandled failure of the hook process exits 2 (blocks), with the reason
+  on stderr; deeply nested input no longer crashes with exit 1.
+- On Linux and macOS the hook stops itself after 25 s and blocks, even in the
+  middle of a slow regular expression (Windows has no such timer; there the
+  registration covers it).
+- Commands over 128 KiB are asked about without being read.
+- Linear time where it was quadratic: the redaction of the command for the
+  decision log (only commands over 4,096 characters are shown differently:
+  runs of more than 256 non-space characters appear as `[N characters]`),
+  long pipelines (2,000 pipes: 187 s → 1.6 s), repeated path checks, and the
+  dynamic-install pattern.
+- Stricter on purpose: a crash or timeout now blocks even a harmless command.
+  Every other decision, reason and message is unchanged.
+
 ### Python 3.15, CI, and a Python 3.8 fix
 
 - **Python 3.15:** tested on python:3.15-slim (3.15.2). The full test suite

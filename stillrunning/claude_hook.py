@@ -33,6 +33,12 @@ API_URL = api_url("/api/check-package")
 USER_AGENT = "stillrunning-claude-hook/2"
 CHECK_DEADLINE_S = 12.0
 HOOK_TIMEOUT_S = 30
+# Claude Code lets a tool call through when a PreToolUse hook fails or times
+# out, unless the hook is registered with "onFailure": "block" (v2.1.295+;
+# hooks reference, "Block the action when a hook fails"). Fuzz finding F4.
+HOOK_ON_FAILURE = "block"
+# The hook answers by itself before Claude Code's timeout: past this, it blocks.
+HOOK_DEADLINE_S = HOOK_TIMEOUT_S - 5
 MAX_REQ_FILE_PACKAGES = 40
 SHIELD = "\U0001F6E1"
 
@@ -124,6 +130,16 @@ def _squash(command):
     return re.sub(r"[\\'\"]", "", re.sub(r"\\\r?\n", "", command or ""))
 
 
+# _DYNAMIC_INSTALL can only match where an install verb follows whitespace;
+# without one it gives no match, so it is not run (on `$($($(…` with no verb
+# it took quadratic time — fuzz finding F3). Same answers.
+_DYNAMIC_VERB = re.compile(r"\s(?:install|add|i|download|wheel|update|up|upgrade)\b")
+
+
+def _dynamic_install(text):
+    return bool(_DYNAMIC_VERB.search(text)) and bool(_DYNAMIC_INSTALL.search(text))
+
+
 def looks_like_install(command):
     """Cheap gate: could this command be an install (or change where installs
     download from) at all?"""
@@ -131,7 +147,7 @@ def looks_like_install(command):
         return False
     squashed = _squash(command)
     return bool(_INSTALLER_HINT.search(command) or _INSTALLER_HINT.search(squashed)
-                or _DYNAMIC_INSTALL.search(command) or _DYNAMIC_INSTALL.search(squashed)
+                or _dynamic_install(command) or _dynamic_install(squashed)
                 or _INDEX_CONFIG_HINT.search(squashed) or _REMOTE_SCRIPT_HINT.search(squashed)
                 or _HIDDEN_SCRIPT_HINT.search(squashed))
 
@@ -173,11 +189,28 @@ def _relation(pattern, target):
     return "ancestor" if len(pattern) < len(target) else "inside"
 
 
+_REALPATHS = None      # {path: realpath} for the duration of one touches_protection() call
+
+
+def _realpath(path, parent=False):
+    """os.path.realpath, remembered within one touches_protection() call: a
+    5,000-line command resolved the same few folders 50,000 times (fuzz R2).
+    Outside such a call it is plain realpath. `parent`: the folder of `path`
+    (as _package_dir() gives it)."""
+    if _REALPATHS is None:
+        real = os.path.realpath(path)
+    else:
+        real = _REALPATHS.get(path)
+        if real is None:
+            real = _REALPATHS[path] = os.path.realpath(path)
+    return os.path.dirname(real) if parent else real
+
+
 def _path_kinds(word, cwds):
     """Which protected places a command word could name: any of "state",
     "settings", "claude_dir", "pkg", "ancestor"."""
     kinds = set()
-    home = os.path.realpath(_home())
+    home = _realpath(_home())
     text = word.strip()
     if not text or len(text) > 4096 or "\n" in text:
         return kinds
@@ -208,7 +241,7 @@ def _path_kinds(word, cwds):
             # make every relative path look protected, so only what the word
             # itself spells counts: `.stillrunning/…`, `.claude/settings.json`.
             parts = _comps(os.path.normpath(text))
-            state_name = os.path.basename(os.path.realpath(_state_dir()))
+            state_name = os.path.basename(_realpath(_state_dir()))
             if any(_comp_match(part, state_name) for part in parts):
                 kinds.add("state")
             for at, part in enumerate(parts):
@@ -218,10 +251,10 @@ def _path_kinds(word, cwds):
                     elif any(_comp_match(parts[at + 1], name) for name in _SETTINGS_NAMES):
                         kinds.add("settings")
     if not has_glob:
-        candidates += [os.path.realpath(c) for c in list(candidates)]
-    state = _comps(os.path.realpath(_state_dir()))
+        candidates += [_realpath(c) for c in list(candidates)]
+    state = _comps(_realpath(_state_dir()))
     claude = _comps(os.path.join(home, ".claude"))
-    pkg = _comps(_package_dir())
+    pkg = _comps(_realpath(__file__, parent=True))
     for candidate in candidates:
         parts = _comps(candidate)
         rel = _relation(parts, state)
@@ -587,6 +620,10 @@ def touches_protection(command, cwd=None):
     own code, or a STILLRUNNING_* switch?"""
     if not command:
         return False
+    global _REALPATHS
+    outer = _REALPATHS
+    if outer is None:
+        _REALPATHS = {}
     try:
         here = os.path.realpath(cwd) if cwd else os.getcwd()
         return _paths_touch_protection(command, [here], 0)
@@ -594,6 +631,8 @@ def touches_protection(command, cwd=None):
         _warn(f"could not work out which files this command touches ({type(exc).__name__}) — "
               "judged on its text")
         return bool(_SELF_PROTECT_TEXT.search(_squash(command)))
+    finally:
+        _REALPATHS = outer
 
 
 def index_config_file(path):
@@ -738,6 +777,12 @@ EXPLANATIONS = {
         "what runs on this machine, and stillrunning cannot see what the script installs, so "
         "nothing was checked. Approve only if you recognise the address and trust who controls "
         "it."),
+    "too_large": (
+        "This command is too long to check in the time Claude Code gives the hook, so it "
+        "was not checked. Approve it only if you know what it runs."),
+    "hook_deadline": (
+        "The check did not finish in the time Claude Code gives the hook, so the command "
+        "was stopped rather than let through unchecked."),
     "hook_error": (
         "stillrunning hit an internal error while checking this install, so nothing was "
         "checked. Approve only if you already trust every package in the command."),
@@ -1443,10 +1488,34 @@ def _without_comments(text):
     return "\n".join(out)
 
 
+# Several redaction patterns take quadratic time on one long run of
+# non-space characters (a 40,000-character comment took 42-59 s, past the
+# hook's 30 s timeout — fuzz finding F3). Up to _SHOW_EXACT characters the
+# command is redacted as before. In a longer one, any run of non-space
+# characters longer than _SHOW_RUN is first replaced WHOLE by a length note
+# (so no piece of a long secret can show), then a prefix cut at whitespace is
+# redacted.
+# Only 400 characters are shown either way.
+_SHOW_EXACT = 4096
+_SHOW_RUN = 256
+_LONG_RUN = re.compile(r"\S{%d,}" % (_SHOW_RUN + 1))
+
+
+def _bounded_for_display(text):
+    text = _LONG_RUN.sub(lambda m: f"[{len(m.group(0))} characters]", text)    # linear
+    head = text[:_SHOW_EXACT]
+    if len(text) > _SHOW_EXACT and not text[_SHOW_EXACT].isspace():
+        cut = max(head.rfind(" "), head.rfind("\t"), head.rfind("\n"))
+        head = head[:cut] if cut > 0 else ""
+    return head
+
+
 def show_command(command, limit=400):
     """The command as the decision log and side panel may show it: one line,
     credentials removed, cut to `limit`. For display only; never parsed."""
     text = str(command or "")
+    if len(text) > _SHOW_EXACT:
+        text = _bounded_for_display(text)
     for pattern, replacement in _REDACTIONS:
         text = pattern.sub(replacement, text)
     text = " ".join(_without_comments(text).split())
@@ -2924,20 +2993,34 @@ def _is_pipe(op):
     return "|" in op and "||" not in op
 
 
-def _stdin_consumer(commands, j, there=None):
+def _stdin_consumer(commands, j, there=None, memo=None):
     """What the pipeline that starts by piping into command j ends up feeding:
     "shell" (the text is run as commands), "code" (an interpreter runs it) or
-    None. Programs in between (`tee`, `cat`, `sed`) pass the text along."""
-    k = j
+    None. Programs in between (`tee`, `cat`, `sed`) pass the text along.
+
+    `memo` (a dict, one per pipeline list and folder state) remembers the
+    answer for every command the walk passed: asking again for each command
+    of an n-command pipeline was O(n^2) (2,000 pipes took 187 s, past the
+    hook's 30 s timeout — fuzz finding R2). The answers are the same."""
+    k, walked, result = j, [], None
     while k < len(commands):
+        if memo is not None and k in memo:
+            result = memo[k]
+            break
+        walked.append(k)
         if _reads_stdin_as_shell(commands[k], there):
-            return "shell"
+            result = "shell"
+            break
         if _runs_stdin_as_code(commands[k]):
-            return "code"
+            result = "code"
+            break
         k += 1
         if k >= len(commands) or not _is_pipe(commands[k].op) or ")" in commands[k].op:
-            return None
-    return None
+            break
+    if memo is not None:
+        for step in walked:
+            memo[step] = result
+    return result
 
 
 def _shell_fed(commands, there=None):
@@ -2947,13 +3030,14 @@ def _shell_fed(commands, there=None):
     count = len(commands)
     fed = [False] * count
     stack = []
+    memo = {}
     for i, cmd in enumerate(commands):
         op = cmd.op
         for pos, ch in enumerate(op):
             if ch == ")" and stack:
                 kind, begin = stack.pop()
                 piped_on = _is_pipe(op[pos + 1:])
-                if kind == "psub" or (piped_on and _stdin_consumer(commands, i, there) == "shell"):
+                if kind == "psub" or (piped_on and _stdin_consumer(commands, i, there, memo) == "shell"):
                     for k in range(begin, i):
                         fed[k] = True
             elif ch == "(":
@@ -2970,11 +3054,11 @@ def _shell_fed(commands, there=None):
         if cmd and cmd[0] == "}" and stack and stack[-1][0] == "brace":
             _, begin = stack.pop()
             if i + 1 < count and _is_pipe(commands[i + 1].op) and \
-                    _stdin_consumer(commands, i + 1, there) == "shell":
+                    _stdin_consumer(commands, i + 1, there, memo) == "shell":
                 for k in range(begin, i + 1):
                     fed[k] = True
         if i + 1 < count and _is_pipe(commands[i + 1].op) and ")" not in commands[i + 1].op \
-                and _stdin_consumer(commands, i + 1, there) == "shell":
+                and _stdin_consumer(commands, i + 1, there, memo) == "shell":
             fed[i] = True
     for kind, begin in stack:                   # `bash <(echo …` with the bracket left open
         if kind == "psub":
@@ -3056,6 +3140,7 @@ def _parse_into(command, res, cwd, env, read_file, exists, depth, output_runs=Fa
     here = _UNKNOWN_FOLDER if res.cwd_unknown else cwd
     outer_cwd, outer_unknown = res.cwd, res.cwd_unknown
     scopes, pushed, variables = [], [], {}
+    consumer_memo = {}      # per folder state: what `there` sees depends on it
     try:
         for index, simple in enumerate(commands):
             for ch in simple.op:                    # a subshell keeps its `cd` to itself
@@ -3091,7 +3176,8 @@ def _parse_into(command, res, cwd, env, read_file, exists, depth, output_runs=Fa
                 here = pushed.pop() if pushed else _UNKNOWN_FOLDER
             consumer = None
             if index + 1 < len(commands) and _is_pipe(commands[index + 1].op):
-                consumer = _stdin_consumer(commands, index + 1, there)
+                consumer = _stdin_consumer(commands, index + 1, there,
+                                           consumer_memo.setdefault((res.cwd, res.cwd_unknown), {}))
             if program in ("curl", "wget") and (feeds or consumer in ("shell", "code")):
                 res.ask("remote_script", raw)                       # curl … | sh
             if _is_decoder(program, args) and (feeds or consumer in ("shell", "code")):
@@ -4602,7 +4688,9 @@ def _emit(decision):
             _warn(f"could not hand the decision to Claude Code ({type(exc).__name__})")
             if decision["action"] != "allow":
                 sys.stderr.write(decision["reason"] + "\n")
+                _ANSWERED.append(2)
                 return 2
+    _ANSWERED.append(0)
     return 0
 
 
@@ -4642,10 +4730,28 @@ def _run_file_tool(tool_input, cwd):
     return _emit(decision)
 
 
+MAX_COMMAND_CHARS = 128 * 1024    # longer: asked without being read (see run_hook)
+
+
+def _unread_decision(kind, subject):
+    text = explain(kind)
+    return {"action": "ask", "reason": "stillrunning: " + text, "stats": {"unverified": 1}, "protect": True,
+            "lines": [status_line("unverified", subject, "approval needed", color=_color_enabled()),
+                      "   " + text],
+            "records": [{"v": 1, "ts": time.time(), "verdict": "needs_approval", "subject": subject,
+                         "eco": None, "name": None, "version": None, "ms": None, "explanation": text,
+                         "evidence": [_ev("blocklist", "not_checked", "blocklist_not_checked",
+                                          why="server")]}]}
+
+
 def run_hook(stdin_text):
     """Exit code for one PreToolUse event. Prints the decision JSON."""
     try:
         event = json.loads(stdin_text) if stdin_text.strip() else {}
+    except RecursionError:      # nested too deeply to read: block, never crash (fuzz R1)
+        sys.stderr.write("stillrunning: hook input nested too deeply to read — stopped. "
+                         + explain("hook_error") + "\n")
+        return 2
     except ValueError:
         if looks_like_install(stdin_text):
             sys.stderr.write("stillrunning: unreadable hook input for what looks like an "
@@ -4665,6 +4771,12 @@ def run_hook(stdin_text):
     command = tool_input.get("command") or ""
     if not isinstance(command, str):
         return 0
+    if len(command) > MAX_COMMAND_CHARS:
+        # Too long to read before Claude Code gives up on the hook (whose
+        # timeout would let it through): put it to the user, unread. `protect`
+        # keeps STILLRUNNING_ALLOW_UNVERIFIED from waving it through.
+        decision = _unread_decision("too_large", "command too long to check")
+        return _finish(decision)
     try:
         relevant = looks_like_install(command) or touches_protection(command, cwd)
     except Exception as exc:    # cannot tell → evaluate it rather than wave it through
@@ -4686,6 +4798,11 @@ def run_hook(stdin_text):
                                  "explanation": explain("hook_error"),
                                  "evidence": [_ev("blocklist", "not_checked",
                                                   "blocklist_not_checked", why="server")]}]}
+    return _finish(decision)
+
+
+def _finish(decision):
+    """The opt-in switches, the stats and the log, then the answer to Claude Code."""
     if decision["action"] == "ask":
         if os.environ.get("STILLRUNNING_HOOK_STRICT", "") in ("1", "true", "yes"):
             decision["action"] = "deny"
@@ -4969,7 +5086,8 @@ def install(statusline=False, panel=True):
     hooks = data.setdefault("hooks", {})
     groups = _strip_ours(hooks.get("PreToolUse", []))
     groups.append({"matcher": HOOK_MATCHER, "hooks": [
-        {"type": "command", "command": hook_command(), "timeout": HOOK_TIMEOUT_S}]})
+        {"type": "command", "command": hook_command(), "timeout": HOOK_TIMEOUT_S,
+         "onFailure": HOOK_ON_FAILURE}]})
     hooks["PreToolUse"] = groups
     if statusline:
         if "statusLine" in data and not _is_our_statusline(data["statusLine"]):
@@ -5081,10 +5199,74 @@ def installed_state():
     return "legacy" if "hooks.json" in reason else "absent"
 
 
+# ── fail closed on the hook's own failure (fuzz findings F3, F4, R1, R2) ──
+# A hook that crashes, exits with anything but 0 or 2, or runs past Claude
+# Code's timeout lets the tool call through (hooks reference). So: any
+# unhandled exception, and running past HOOK_DEADLINE_S, exit 2 — the code
+# that blocks a PreToolUse call — with the reason on stderr.
+_ANSWERED = []      # the exit code, once the decision has been handed to Claude Code
+
+
+def _block_now(why, kind="hook_error"):
+    try:
+        sys.stderr.write(f"stillrunning: {why} — the command was stopped. {explain(kind)}\n")
+        sys.stderr.flush()
+    except Exception:  # lint: allowed-silent(stderr gone: exit 2 still blocks)
+        pass
+    os._exit(2)
+
+
+def _on_deadline(signum, frame):
+    if _ANSWERED:
+        os._exit(_ANSWERED[-1])          # the answer is out: end with it
+    _block_now(f"the check did not finish within {HOOK_DEADLINE_S} s", "hook_deadline")
+
+
+def _arm_deadline():
+    """POSIX: a SIGALRM that interrupts even a long regex. Windows has no
+    SIGALRM; there the registration's onFailure covers a timeout."""
+    try:
+        import signal
+        import threading
+        if hasattr(signal, "setitimer") and threading.current_thread() is threading.main_thread():
+            signal.signal(signal.SIGALRM, _on_deadline)
+            signal.setitimer(signal.ITIMER_REAL, HOOK_DEADLINE_S)
+            return True
+    except (ImportError, ValueError, OSError, AttributeError):  # lint: allowed-silent(no deadline; onFailure covers it)
+        pass
+    return False
+
+
+def _disarm_deadline():
+    try:
+        import signal
+        if hasattr(signal, "setitimer"):
+            signal.setitimer(signal.ITIMER_REAL, 0)
+    except (ImportError, ValueError, OSError, AttributeError):  # lint: allowed-silent(nothing armed)
+        pass
+
+
+def _guarded_run():
+    """run_hook on stdin; any failure of the hook itself blocks (exit 2)."""
+    _arm_deadline()
+    try:
+        return run_hook(sys.stdin.read())
+    except SystemExit:
+        raise
+    except BaseException as exc:      # RecursionError, MemoryError, KeyboardInterrupt, …
+        try:
+            _warn(f"hook failed ({type(exc).__name__}) — blocking")
+        except Exception:  # lint: allowed-silent(stderr gone: exit 2 still blocks)
+            pass
+        _block_now(f"the hook failed ({type(exc).__name__})")
+    finally:
+        _disarm_deadline()
+
+
 def main():
     from ._stdio import make_output_safe
     make_output_safe()   # never crash on a non-UTF-8 console (Windows code pages)
-    sys.exit(run_hook(sys.stdin.read()))
+    sys.exit(_guarded_run())
 
 
 def _script_main():
@@ -5092,7 +5274,7 @@ def _script_main():
     printed and flushed by run_hook; the process then ends at once, so a
     lookup thread still waiting on the network can never hold the hook past
     its deadline."""
-    code = run_hook(sys.stdin.read())
+    code = _guarded_run()
     for stream in (sys.stdout, sys.stderr):
         try:
             stream.flush()

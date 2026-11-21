@@ -658,6 +658,7 @@ def test_install_writes_a_pretooluse_bash_hook(home):
     assert group["matcher"] == "Bash|Write|Edit|MultiEdit|NotebookEdit"
     entry = group["hooks"][0]
     assert entry["type"] == "command" and entry["timeout"] == ch.HOOK_TIMEOUT_S
+    assert entry["onFailure"] == "block"          # a crashed or timed-out hook blocks (fuzz F4)
     assert "claude_hook.py" in entry["command"] and " -I -S " in entry["command"]
     assert "statusLine" not in data
     assert ch.installed_state() == "active"
