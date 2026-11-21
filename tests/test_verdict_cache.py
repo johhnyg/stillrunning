@@ -535,7 +535,7 @@ def test_the_same_pin_with_two_different_hashes_has_no_hash(tmp_path):
 def test_a_local_wheel_is_not_looked_up_and_not_cached(tmp_path):
     wheel = tmp_path / "six-1.16.0-py3-none-any.whl"
     wheel.write_bytes(b"PK\x03\x04")
-    out = ch.decide(f"pip install {wheel}", cwd=str(tmp_path), lookup_fn=blk(OK),
+    out = ch.decide(f"pip install {str(wheel).replace(os.sep, '/')}", cwd=str(tmp_path), lookup_fn=blk(OK),
                     cve_fn=cve_none, now=T0)
     assert out["action"] == "allow" and rows() == []
 

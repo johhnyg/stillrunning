@@ -171,7 +171,7 @@ def test_requirements_file_is_read(tmp_path):
 
 
 def test_npx_of_a_locally_installed_binary_is_not_looked_up():
-    assert parse("npx tsc --noEmit", exists=lambda p: p.endswith("node_modules/.bin/tsc")) == ([], [], [])
+    assert parse("npx tsc --noEmit", exists=lambda p: p.replace(os.sep, "/").endswith("node_modules/.bin/tsc")) == ([], [], [])
     assert parse("npx tsc --noEmit")[0] == [("npm", "tsc", None)]
 
 
@@ -556,10 +556,10 @@ def test_hook_file_runs_standalone_in_isolated_mode(home):
     """The settings.json command runs the file by path with -I -S."""
     env = {"HOME": str(home), **({"USERPROFILE": str(home), "SYSTEMROOT": os.environ.get("SYSTEMROOT", "")} if os.name == "nt" else {}), "PATH": "/usr/bin:/bin"}
     r = subprocess.run([sys.executable, "-I", "-S", ch.__file__], input=event("ls -la"),
-                       capture_output=True, text=True, env=env, timeout=30)
+                       capture_output=True, text=True, encoding="utf-8", env=env, timeout=30)
     assert r.returncode == 0 and r.stdout == "" and r.stderr == ""
     r = subprocess.run([sys.executable, "-I", "-S", ch.__file__], input=event("npm i axois"),
-                       capture_output=True, text=True, env=env, timeout=30)
+                       capture_output=True, text=True, encoding="utf-8", env=env, timeout=30)
     out = json.loads(r.stdout)                      # hardcoded blocklist: no network needed
     assert out["hookSpecificOutput"]["permissionDecision"] == "deny"
     assert (home / ".stillrunning" / "hook_stats.json").exists()
@@ -637,7 +637,7 @@ def test_status_line_fallback_and_counts(home):
 
 def test_status_line_file_runs_standalone(home):
     r = subprocess.run([sys.executable, "-I", "-S", statusline.__file__], input="{}",
-                       capture_output=True, text=True, env={"HOME": str(home), **({"USERPROFILE": str(home), "SYSTEMROOT": os.environ.get("SYSTEMROOT", "")} if os.name == "nt" else {}), "NO_COLOR": "1"},
+                       capture_output=True, text=True, encoding="utf-8", env={"HOME": str(home), **({"USERPROFILE": str(home), "SYSTEMROOT": os.environ.get("SYSTEMROOT", "")} if os.name == "nt" else {}), "NO_COLOR": "1"},
                        timeout=30)
     assert r.returncode == 0 and r.stdout.strip() == statusline.FALLBACK
 

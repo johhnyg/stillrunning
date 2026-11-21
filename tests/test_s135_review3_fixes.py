@@ -618,7 +618,7 @@ def test_a_folder_decided_at_run_time_asks_for_relative_files(command, nested):
 
 def test_an_absolute_file_is_still_read_after_an_unknown_cd(nested):
     path = os.path.join(nested, "app", "requirements.txt")
-    assert decide(f"cd $X && pip install -r {path}", nested)["action"] == "deny"
+    assert decide(f"cd $X && pip install -r {path.replace(os.sep, '/')}", nested)["action"] == "deny"   # bash form of the path
     assert decide("cd $X && pip install evilx", nested)["action"] == "deny"
     assert decide("cd $X && pip install requests", nested)["action"] == "allow"
 
