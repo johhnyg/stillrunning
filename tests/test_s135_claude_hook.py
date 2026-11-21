@@ -1437,7 +1437,7 @@ def test_hook_file_runs_as_a_bare_script_without_the_package(tmp_path):
     not importable there, so the API-base module is loaded by path."""
     import subprocess, sys as _sys
     r = subprocess.run([_sys.executable, "-I", "-S", ch.__file__], input='{"tool_name":"Bash","tool_input":{"command":"ls"}}',
-                       capture_output=True, text=True, cwd=str(tmp_path), timeout=20)
+                       capture_output=True, text=True, encoding="utf-8", cwd=str(tmp_path), timeout=20)
     assert r.returncode == 0 and "Traceback" not in r.stderr
 
 
@@ -1465,13 +1465,13 @@ def test_pth_line_survives_the_package_being_uninstalled(tmp_path):
     site_dir.mkdir()
     (site_dir / "stillrunning-hook.pth").write_text(import_hook.PTH_LINE + "\n", encoding="utf-8")
     code = f"import site; site.addsitedir({str(site_dir)!r}); print('started')"
-    r = subprocess.run([_sys.executable, "-I", "-S", "-c", code], capture_output=True, text=True,
+    r = subprocess.run([_sys.executable, "-I", "-S", "-c", code], capture_output=True, text=True, encoding="utf-8",
                        cwd=str(tmp_path), timeout=30)
     assert r.returncode == 0 and r.stdout.strip() == "started" and r.stderr == ""
     # what pip really leaves: the package directory with only the config --setup wrote
     (site_dir / "stillrunning").mkdir()
     (site_dir / "stillrunning" / "stillrunning.yaml").write_text("app_name: x\n", encoding="utf-8")
-    r = subprocess.run([_sys.executable, "-I", "-S", "-c", code], capture_output=True, text=True,
+    r = subprocess.run([_sys.executable, "-I", "-S", "-c", code], capture_output=True, text=True, encoding="utf-8",
                        cwd=str(tmp_path), timeout=30)
     assert r.returncode == 0 and r.stdout.strip() == "started" and r.stderr == ""
 

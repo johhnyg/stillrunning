@@ -316,12 +316,12 @@ def test_status_line_still_runs_standalone_with_a_state_file(tmp_path, feed, no_
     cve.refresh(project(tmp_path, "requests==2.5.0\n"))
     payload = json.dumps({"cwd": "/", "workspace": {"project_dir": CURRENT["root"]}})
     r = subprocess.run([sys.executable, "-I", "-S", statusline.__file__], capture_output=True,
-                       text=True, env={"HOME": os.environ["HOME"], **({"USERPROFILE": os.environ["HOME"], "SYSTEMROOT": os.environ.get("SYSTEMROOT", "")} if os.name == "nt" else {}), "NO_COLOR": "1"}, timeout=30,
+                       text=True, encoding="utf-8", env={"HOME": os.environ["HOME"], **({"USERPROFILE": os.environ["HOME"], "SYSTEMROOT": os.environ.get("SYSTEMROOT", "")} if os.name == "nt" else {}), "NO_COLOR": "1"}, timeout=30,
                        input=payload, cwd="/")
     assert r.returncode == 0 and "CVEs: 1 affected (1 critical) · feed just now" in r.stdout
     # another folder: never the other project's answer
     r = subprocess.run([sys.executable, "-I", "-S", statusline.__file__], capture_output=True,
-                       text=True, env={"HOME": os.environ["HOME"], **({"USERPROFILE": os.environ["HOME"], "SYSTEMROOT": os.environ.get("SYSTEMROOT", "")} if os.name == "nt" else {}), "NO_COLOR": "1"}, timeout=30,
+                       text=True, encoding="utf-8", env={"HOME": os.environ["HOME"], **({"USERPROFILE": os.environ["HOME"], "SYSTEMROOT": os.environ.get("SYSTEMROOT", "")} if os.name == "nt" else {}), "NO_COLOR": "1"}, timeout=30,
                        input=json.dumps({"workspace": {"project_dir": "/tmp"}}), cwd="/")
     assert "CVEs: unknown · checked for another folder" in r.stdout
 
@@ -513,7 +513,7 @@ def test_the_hook_as_a_bare_script_loads_the_osv_module_by_path(tmp_path):
                       "assert 'stillrunning' not in sys.modules\n"
                       "print(g['_osv_module']().USER_AGENT)\n", encoding="utf-8")
     r = subprocess.run([sys.executable, "-I", "-S", str(driver), ch.__file__], capture_output=True,
-                       text=True, timeout=30, cwd=str(tmp_path))
+                       text=True, encoding="utf-8", timeout=30, cwd=str(tmp_path))
     assert r.stdout.strip() == "stillrunning-cve/1", r.stderr
 
 
