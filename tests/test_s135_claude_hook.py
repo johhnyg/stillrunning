@@ -457,7 +457,7 @@ def test_one_time_override_is_used_up(home, monkeypatch):
     monkeypatch.setattr(ch, "_blocklist_only_lookup",
                         lambda *a, **k: {"status": "miss_unconfirmed"})   # answered: not listed
     assert ch.lookup(PKG) == {"status": "override"}
-    assert json.loads(path.read_text())["once"] == []
+    assert json.loads(path.read_text(encoding="utf-8"))["once"] == []
     assert ch.consume_override("pip", "kept-pkg") and ch.consume_override("pip", "kept-pkg")
     assert not ch.consume_override("pip", "somepkg")
 
@@ -569,18 +569,18 @@ def test_hook_file_runs_standalone_in_isolated_mode(home):
 def test_counters_and_decision_log(hook, home):
     hook(event("pip install requests reqeusts"))
     hook(event("pip install flask"))
-    stats = json.loads((home / ".stillrunning" / "hook_stats.json").read_text())
+    stats = json.loads((home / ".stillrunning" / "hook_stats.json").read_text(encoding="utf-8"))
     assert (stats["checked"], stats["blocked"], stats["unverified"]) == (3, 1, 1)
     assert stats["days"][stats["date"]] == {"checked": 3, "blocked": 1, "unverified": 1, "ok": 1}
     assert stats["feed_size"] == 214000
     log = home / ".stillrunning" / "hook_decisions.jsonl"
-    records = [json.loads(line) for line in log.read_text().splitlines()]
+    records = [json.loads(line) for line in log.read_text(encoding="utf-8").splitlines()]
     assert [r["verdict"] for r in records] == ["no_known_threat", "blocked", "needs_approval"]
     assert all(r["v"] == 1 and r["evidence"] for r in records)
     assert stat.S_IMODE(log.stat().st_mode) == 0o600
     # the command is kept for the side panel's "needs you" card: one line, cut to
     # 400 characters, credentials removed (see show_command); the file is 0600
-    stored = [json.loads(line)["command"] for line in log.read_text().splitlines()]
+    stored = [json.loads(line)["command"] for line in log.read_text(encoding="utf-8").splitlines()]
     assert set(stored) == {"pip install requests reqeusts", "pip install flask"}
     assert oct(log.stat().st_mode & 0o777) == "0o600"
     assert not list((home / ".stillrunning").glob("*.tmp"))
@@ -590,7 +590,7 @@ def test_decision_log_keeps_the_last_500(home):
     record = {"v": 1, "ts": 1.0, "verdict": "no_known_threat", "subject": "x", "evidence": []}
     ch.log_decisions([dict(record, subject=f"p{i}") for i in range(498)])
     ch.log_decisions([dict(record, subject=f"q{i}") for i in range(5)])
-    lines = (home / ".stillrunning" / "hook_decisions.jsonl").read_text().splitlines()
+    lines = (home / ".stillrunning" / "hook_decisions.jsonl").read_text(encoding="utf-8").splitlines()
     assert len(lines) == 500
     assert json.loads(lines[0])["subject"] == "p3" and json.loads(lines[-1])["subject"] == "q4"
 
@@ -598,7 +598,7 @@ def test_decision_log_keeps_the_last_500(home):
 def test_counters_roll_over_at_midnight_and_keep_14_days(home):
     for day in range(20):
         ch.record_stats({"checked": 1, "blocked": 0, "unverified": 0}, now=NOW + 86400 * day)
-    stats = json.loads((home / ".stillrunning" / "hook_stats.json").read_text())
+    stats = json.loads((home / ".stillrunning" / "hook_stats.json").read_text(encoding="utf-8"))
     assert stats["checked"] == 1 and stats["total_checked"] == 20 and len(stats["days"]) == 14
 
 
@@ -644,7 +644,7 @@ def test_status_line_file_runs_standalone(home):
 
 # ── F1: settings.json installer ──────────────────────────────────────────
 def settings(home):
-    return json.loads((home / ".claude" / "settings.json").read_text())
+    return json.loads((home / ".claude" / "settings.json").read_text(encoding="utf-8"))
 
 
 def our_entries(data):
@@ -684,7 +684,7 @@ def test_install_merges_keeps_everything_else_and_backs_up(home):
     assert any("already have a status line" in m for m in messages)
     backups = sorted((home / ".claude").glob("settings.json.stillrunning-bak-*"), key=lambda p: len(p.name))
     assert len(backups) == 2                                      # one per run, none overwritten
-    assert json.loads(backups[0].read_text()) == original
+    assert json.loads(backups[0].read_text(encoding="utf-8")) == original
     assert not list((home / ".claude").glob("*.tmp"))
 
 
@@ -703,7 +703,7 @@ def test_install_refuses_a_settings_file_it_cannot_parse(home, content):
     path.write_text(content)
     with pytest.raises(ch.InstallError):
         ch.install()
-    assert path.read_text() == content
+    assert path.read_text(encoding="utf-8") == content
     assert list((home / ".claude").iterdir()) == [path]
 
 
@@ -715,7 +715,7 @@ def test_install_removes_only_its_own_dead_hooks_json_entry(home):
     legacy.write_text(json.dumps({"hooks": [ours, theirs]}))
     assert ch.installed_state() == "legacy"
     ch.install()
-    assert json.loads(legacy.read_text()) == {"hooks": [theirs]}
+    assert json.loads(legacy.read_text(encoding="utf-8")) == {"hooks": [theirs]}
     legacy.write_text(json.dumps({"hooks": [ours]}))
     ch.install()
     assert not legacy.exists()
@@ -838,7 +838,7 @@ def run_wrapper(tmp_path, which, args, scan_rc=0, env=None, real=True, extra_pat
     full_env.update(env or {})
     r = subprocess.run(["/bin/bash", str(script)] + args, capture_output=True, text=True,
                        env=full_env, stdin=subprocess.DEVNULL, timeout=30)
-    calls = log.read_text().splitlines() if log.exists() else []
+    calls = log.read_text(encoding="utf-8").splitlines() if log.exists() else []
     log.unlink(missing_ok=True)
     return r, calls
 
@@ -911,9 +911,9 @@ def test_pip3_wrapper_runs_pip3(tmp_path):
 def test_shell_install_writes_working_wrappers(home, capsys, monkeypatch):
     monkeypatch.setattr(cli, "_venv_install_silent", lambda: False)
     assert cli._shell_install() == 0
-    pip3 = (home / ".stillrunning" / "bin" / "pip3").read_text()
+    pip3 = (home / ".stillrunning" / "bin" / "pip3").read_text(encoding="utf-8")
     assert '__sr_tool="pip3"' in pip3 and "/usr/bin" not in pip3
-    activate = (home / ".stillrunning" / "activate.sh").read_text()
+    activate = (home / ".stillrunning" / "activate.sh").read_text(encoding="utf-8")
     # the python functions run whatever python the shell would have run
     assert 'command "$tool" "$@"' in activate
     assert "__stillrunning_python python3" in activate and "__stillrunning_python python " in activate
@@ -1128,7 +1128,7 @@ def test_hook_is_on_only_when_the_entry_and_the_script_both_exist(home):
     ch.install()
     assert ch.verify_install()[0] == "on"
     path = home / ".claude" / "settings.json"
-    data = json.loads(path.read_text())
+    data = json.loads(path.read_text(encoding="utf-8"))
     entry = data["hooks"]["PreToolUse"][0]["hooks"][0]
     good = entry["command"]
     entry["command"] = good.replace("claude_hook.py", "gone/claude_hook.py")
@@ -1294,7 +1294,7 @@ def test_setup_copies_a_legacy_token_to_the_canonical_file(home, capsys, monkeyp
     (home / ".stillrunning" / "stillrunning.yaml").write_text("token: legacy-tok\n")
     cli.run_setup_wizard(autonomous=True)
     config = home / ".stillrunning" / "config.json"
-    assert json.loads(config.read_text())["token"] == "legacy-tok"
+    assert json.loads(config.read_text(encoding="utf-8"))["token"] == "legacy-tok"
     assert stat.S_IMODE(config.stat().st_mode) == 0o600
     assert ch.resolve_token() == ("legacy-tok", "~/.stillrunning/config.json")
 
@@ -1544,7 +1544,7 @@ def test_activating_a_venv_afterwards_does_not_bypass_the_wrapper(home, tmp_path
     r = subprocess.run(["bash", "-c", script], capture_output=True, text=True,
                        env={"HOME": str(home), "PATH": "/usr/bin:/bin"})
     assert r.returncode == 0, r.stderr
-    assert log.read_text().splitlines() == ["WRAPPED pip install six", "WRAPPED pip install seven"]
+    assert log.read_text(encoding="utf-8").splitlines() == ["WRAPPED pip install six", "WRAPPED pip install seven"]
     assert r.stdout.strip() == "1"                       # sourced twice, on PATH once
 
 
@@ -1554,7 +1554,7 @@ def test_rc_line_is_harmless_in_plain_sh_and_when_the_files_are_gone(home, tmp_p
     monkeypatch.setattr(cli, "_venv_install_silent", lambda: False)
     (home / ".profile").write_text("# mine\n")
     assert cli._shell_install() == 0
-    assert cli._SHELL_ACTIVATE_MARKER in (home / ".profile").read_text()
+    assert cli._SHELL_ACTIVATE_MARKER in (home / ".profile").read_text(encoding="utf-8")
     for shell in ("sh", "dash"):
         if not __import__("shutil").which(shell):
             continue
@@ -1585,7 +1585,7 @@ def test_shell_uninstall_still_removes_the_pre_135_rc_block(home, monkeypatch):
     monkeypatch.setattr(cli, "_venv_uninstall", lambda: 0)
     (home / ".bashrc").write_text("export A=1\n" + cli._SHELL_RC_BLOCK_LEGACY)
     assert cli._shell_uninstall() == 0
-    assert (home / ".bashrc").read_text() == "export A=1\n"
+    assert (home / ".bashrc").read_text(encoding="utf-8") == "export A=1\n"
 
 
 @pytest.mark.parametrize("platform,feature,stops", [

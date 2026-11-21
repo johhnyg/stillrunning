@@ -271,7 +271,7 @@ def test_unlistable_venv_is_unresolved(tmp_path, feed, monkeypatch):
                                      json.dumps({"schema": 1, "summary": {"affected_packages": "2"}})])
 def test_a_malformed_state_file_is_unknown(content):
     os.makedirs(os.path.dirname(state_file()), exist_ok=True)
-    with open(state_file(), "w") as handle:
+    with open(state_file(), "w", encoding="utf-8") as handle:
         handle.write(content)
     assert cve.load(NOW)["state"] == "UNKNOWN"
     text = line(NOW, color=True)
@@ -340,7 +340,7 @@ def test_hostile_strings_from_osv_never_reach_any_output(tmp_path, feed, no_inst
     root = project(tmp_path, "badlib==1.0.0\n")
     cve.refresh(root, now=NOW)
     here = CURRENT["root"]
-    out = [open(state_file()).read(), json.dumps(cve.load(NOW, root=here)),
+    out = [open(state_file(), encoding="utf-8").read(), json.dumps(cve.load(NOW, root=here)),
            cve.render(cve.load(NOW, root=here)), line(NOW)]
     assert cve.main(["--json", "--cwd", here]) == 0
     monkeypatch.setattr(ch, "_latest_version", lambda *a: "1.0.0")
@@ -368,7 +368,7 @@ def test_a_hostile_state_file_is_filtered_too():
                                     "fixed": "2.0; curl evil"}]}],
            "summary": {"affected_packages": 2, "critical": 1, "worst": "CRITICAL",
                        "inventory_complete": True, "check_complete": True}}
-    with open(state_file(), "w") as handle:
+    with open(state_file(), "w", encoding="utf-8") as handle:
         json.dump({"schema": 2, "projects": {"/p": doc}}, handle)
     data = cve.load(NOW, root="/p")
     text = json.dumps(data) + cve.render(data) + line(NOW, cwd="/p")
@@ -577,7 +577,7 @@ else exit 2; fi
 def test_schedule_adds_one_line_is_idempotent_and_unschedule_removes_only_its_own(
         fake_crontab, tmp_path, capsys):
     assert cve.main(["--schedule", "--cwd", str(tmp_path)]) == 0
-    lines = fake_crontab.read_text().splitlines()
+    lines = fake_crontab.read_text(encoding="utf-8").splitlines()
     assert len(lines) == 1 and lines[0].endswith(cve.CRON_MARK)
     assert "flock -n" in lines[0] and "timeout 600" in lines[0] and "*/6" in lines[0]
     assert "cve --refresh --cwd" in lines[0]
@@ -587,13 +587,13 @@ def test_schedule_adds_one_line_is_idempotent_and_unschedule_removes_only_its_ow
     fake_crontab.write_text("\n".join(other + lines) + "\n")
     assert cve.main(["--schedule", "--cwd", str(tmp_path)]) == 0
     assert "Already scheduled" in capsys.readouterr().out
-    assert fake_crontab.read_text().splitlines() == other + lines
+    assert fake_crontab.read_text(encoding="utf-8").splitlines() == other + lines
 
     assert cve.main(["--unschedule"]) == 0
-    assert fake_crontab.read_text().splitlines() == other
+    assert fake_crontab.read_text(encoding="utf-8").splitlines() == other
     assert "Removed" in capsys.readouterr().out
     assert cve.main(["--unschedule"]) == 0
-    assert fake_crontab.read_text().splitlines() == other
+    assert fake_crontab.read_text(encoding="utf-8").splitlines() == other
 
 
 def test_schedule_refuses_when_crontab_cannot_be_read(tmp_path, monkeypatch, capsys):
@@ -634,13 +634,13 @@ def test_a_detail_that_fails_once_is_retried_and_a_lasting_failure_is_reported(t
 
 # ─────────────────── review round 1: no false green (failing first) ───────────────────
 def _entry():
-    with open(state_file()) as handle:
+    with open(state_file(), encoding="utf-8") as handle:
         doc = json.load(handle)
     return doc, doc["projects"][CURRENT["root"]]
 
 
 def _write(doc):
-    with open(state_file(), "w") as handle:
+    with open(state_file(), "w", encoding="utf-8") as handle:
         json.dump(doc, handle)
 
 

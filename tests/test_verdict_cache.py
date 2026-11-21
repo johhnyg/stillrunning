@@ -246,7 +246,7 @@ def test_ttl_parsing():
 # ─────────────────────────── blocklist wins ───────────────────────────
 def test_local_shipped_list_wins(tmp_path):
     command = verify(tmp_path)
-    with open(os.path.join(state(), "known_bad_packages.json"), "w") as handle:
+    with open(os.path.join(state(), "known_bad_packages.json"), "w", encoding="utf-8") as handle:
         json.dump({"pip": {"six": {}}}, handle)
     assert run(tmp_path, command, OFFLINE, cve_failed, T0 + 60)["action"] == "ask"
 
@@ -343,14 +343,14 @@ def test_saved_cve_state_hold_is_never_overridden(tmp_path, severity):
     command = verify(tmp_path)
     doc = {"schema": 2, "projects": {"/p": {"feed_updated_at": T0 - 30 * 86400, "results": {
         "pip:six@1.16.0": [{"id": "GHSA-hhhh-iiii-jjjj", "severity": severity, "fixed": None}]}}}}
-    with open(os.path.join(state(), "cve_state.json"), "w") as handle:
+    with open(os.path.join(state(), "cve_state.json"), "w", encoding="utf-8") as handle:
         json.dump(doc, handle)
     assert run(tmp_path, command, OFFLINE, cve_failed, T0 + 60)["action"] == "ask"
 
 
 def test_unreadable_cve_state_holds(tmp_path):
     command = verify(tmp_path)
-    with open(os.path.join(state(), "cve_state.json"), "w") as handle:
+    with open(os.path.join(state(), "cve_state.json"), "w", encoding="utf-8") as handle:
         handle.write("{not json")
     assert run(tmp_path, command, OFFLINE, cve_failed, T0 + 60)["action"] == "ask"
 
@@ -647,7 +647,7 @@ def test_db_readable_by_others_is_tightened_and_still_ours(tmp_path):
 @pytest.mark.parametrize("content", ["{not json", "[]", '{"pip": 5}'])
 def test_unreadable_local_blocklist_means_no_cached_pass(tmp_path, content):
     command = verify(tmp_path)
-    with open(os.path.join(state(), "known_bad_packages.json"), "w") as handle:
+    with open(os.path.join(state(), "known_bad_packages.json"), "w", encoding="utf-8") as handle:
         handle.write(content)
     assert run(tmp_path, command, OFFLINE, cve_failed, T0 + 60)["action"] == "ask"
 

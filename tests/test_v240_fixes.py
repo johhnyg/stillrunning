@@ -153,7 +153,7 @@ class TestHookPathFix:
 
     def test_no_hardcoded_root_paths(self):
         """hook.py should not have hardcoded /root/my-app paths."""
-        with open(_PKG + "/hook.py") as f:
+        with open(_PKG + "/hook.py", encoding="utf-8") as f:
             content = f.read()
 
         # Check the constants section only
@@ -173,7 +173,7 @@ class TestHookPathFix:
 
     def test_uses_home_directory(self):
         """hook.py should use Path.home() for paths."""
-        with open(_PKG + "/hook.py") as f:
+        with open(_PKG + "/hook.py", encoding="utf-8") as f:
             content = f.read()
         assert "Path.home()" in content or "_STILLRUNNING_DIR" in content
 

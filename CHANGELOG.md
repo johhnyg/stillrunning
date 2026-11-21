@@ -9,9 +9,9 @@
 
 ## Unreleased (not published)
 
-Three batches since 2.14.3. The first (the hook failing closed) changes
+Four batches since 2.14.3. The first (the hook failing closed) changes
 what is blocked: a crash or timeout of the hook now blocks, and a command
-over the 128K-character limit is asked about. The other two change nothing
+over the 128K-character limit is asked about. The other three change nothing
 that is checked or blocked.
 
 ### The hook fails closed on its own failure (fuzz findings F3, F4, R1, R2)
@@ -56,6 +56,25 @@ against the 30 s timeout), so a blocked install padded that way went through.
   the hook.
 - Stricter on purpose: a crash or timeout now blocks even a harmless command.
   Every other decision, reason and message is unchanged.
+
+### CI on real Windows and macOS runners; macOS claimed
+
+- **CI matrix** (`.github/workflows/tests.yml`): `windows-latest` and
+  `macos-latest` run the full suite on Python 3.12, alongside the Linux
+  python:3.8/3.12/3.15-slim jobs. `actions/checkout` (v5.1.0) and
+  `actions/setup-python` (v7.1.0) are pinned to full commit SHAs, with
+  `persist-credentials: false`.
+- **macOS:** the full suite passed on a real `macos-latest` runner
+  (3409 passed, the 3 known failures deselected). Classifier
+  "Operating System :: MacOS" added.
+- **Windows: not claimed, not yet verified.** On a real `windows-latest`
+  runner the package installs, imports and runs `--version`, but the suite
+  failed. Most failures were the tests, not the product: 44 run the POSIX
+  shell wrappers (unsupported on Windows), and the rest isolate state through
+  `HOME`, which Windows ignores (it uses `USERPROFILE`), so they shared the
+  runner's real profile. The tests now set `USERPROFILE` on Windows, skip the
+  shell-wrapper and POSIX-permission tests there by name, and read files as
+  UTF-8. Whatever still fails after that is triaged before any Windows claim.
 
 ### Python 3.15, CI, and a Python 3.8 fix
 
