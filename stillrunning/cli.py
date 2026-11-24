@@ -64,18 +64,67 @@ if os.environ.get("STILLRUNNING_DEBUG", "").lower() in ("1", "true", "yes"):
 # ---------------------------------------------------------------------------
 # Config
 # ---------------------------------------------------------------------------
-CONFIG_FILE = Path(__file__).parent / "stillrunning.yaml"
+PACKAGE_CONFIG_FILE = Path(__file__).parent / "stillrunning.yaml"
 CONFIG: dict = {}
+
+
+def config_file() -> Path:
+    """The --setup config: next to the package when this user can write there
+    (root, venv and --user installs), else ~/.stillrunning/stillrunning.yaml
+    (a normal user running a package root installed)."""
+    if os.access(PACKAGE_CONFIG_FILE.parent, os.W_OK):
+        return PACKAGE_CONFIG_FILE
+    return Path.home() / ".stillrunning" / "stillrunning.yaml"
+
+
+class SetupSaveError(Exception):
+    pass
+
+
+def _save_setup_config(config: dict) -> Path:
+    """Write the setup config atomically. In the per-user file, owner-only (it
+    can hold a Telegram token), keeping a legacy `token:` / `api_token:`."""
+    path = config_file()
+    in_home = path != PACKAGE_CONFIG_FILE
+    tmp = path.with_suffix(".yaml.tmp")
+    try:
+        if in_home:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            try:
+                with open(path) as f:
+                    old = yaml.safe_load(f)
+            except FileNotFoundError:
+                old = None
+            except (OSError, yaml.YAMLError) as e:
+                print(f"  WARNING: could not read the old {path} ({type(e).__name__}); replacing it.")
+                old = None
+            if isinstance(old, dict):
+                config = {**{k: old[k] for k in ("token", "api_token") if old.get(k)}, **config}
+            fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+            f = os.fdopen(fd, "w")
+        else:
+            f = open(tmp, "w")
+        with f:
+            yaml.dump(config, f, default_flow_style=False, sort_keys=False)
+        os.replace(tmp, path)
+    except OSError as e:
+        try:
+            tmp.unlink()
+        except OSError:
+            pass
+        raise SetupSaveError(f"could not save the setup config to {path}: {e.strerror or e}") from e
+    return path
 
 
 def load_config() -> dict:
     global CONFIG
-    if not CONFIG_FILE.exists():
-        print(f"ERROR: Config file not found: {CONFIG_FILE}")
+    config_path = config_file()
+    if not config_path.exists():
+        print(f"ERROR: Config file not found: {config_path}")
         print("Copy stillrunning.yaml.example to stillrunning.yaml and fill in your config.")
         sys.exit(1)
 
-    with open(CONFIG_FILE) as f:
+    with open(config_path) as f:
         CONFIG = yaml.safe_load(f) or {}
 
     # Set defaults
@@ -1325,6 +1374,13 @@ def run_setup_wizard(autonomous: bool = False) -> None:
         funnel.track_step("setup_aborted_interrupt")
         print("\n\n  Setup cancelled. Run `stillrunning --setup` anytime.\n")
         sys.exit(130)
+    except SetupSaveError as e:
+        funnel.track_step("setup_failed_config_save")
+        print(f"\n  ERROR: {e}")
+        print("  Your alert settings were NOT saved. Make sure your home directory is writable,")
+        print("  or install stillrunning for your own user (`pip install --user stillrunning`")
+        print("  or a virtualenv), then run `stillrunning --setup` again.\n")
+        sys.exit(EXIT_ERROR)
     _finish_setup(interactive=not autonomous)
 
 
@@ -1361,11 +1417,7 @@ def _run_alert_setup(autonomous: bool = False) -> None:
             "intervals": {"process_check_sec": 30, "resource_check_sec": 60},
         }
 
-        config_path = Path(__file__).parent / "stillrunning.yaml"
-        config_tmp = config_path.with_suffix(".yaml.tmp")
-        with open(config_tmp, "w") as f:
-            yaml.dump(config, f, default_flow_style=False, sort_keys=False)
-        os.replace(config_tmp, config_path)
+        config_path = _save_setup_config(config)
 
         _post_early_signup("", "autonomous", machine_id_hash)
         print(f"Config saved to: {config_path}")
@@ -1388,16 +1440,12 @@ def _run_alert_setup(autonomous: bool = False) -> None:
     channel = channel_map.get(alert_choice, "email")
     funnel.track_step(f"alert_channel_{channel}")
 
-    config_path = Path(__file__).parent / "stillrunning.yaml"
     cwd = Path.cwd()
 
     # === SKIP PATH ===
     if alert_choice == "4":
         config = {"setup_skipped": True, "alert_channel": "skipped"}
-        config_tmp = config_path.with_suffix(".yaml.tmp")
-        with open(config_tmp, "w") as f:
-            yaml.dump(config, f, default_flow_style=False, sort_keys=False)
-        os.replace(config_tmp, config_path)
+        config_path = _save_setup_config(config)
         _post_early_signup("", "skipped", machine_id_hash)
         funnel.track_step("setup_skipped")
         print("  Skipped. Run `stillrunning --setup` anytime to enable.\n")
@@ -1412,10 +1460,7 @@ def _run_alert_setup(autonomous: bool = False) -> None:
             "log_files": [],
             "thresholds": {"cpu_percent": 85, "mem_percent": 85, "disk_percent": 85},
         }
-        config_tmp = config_path.with_suffix(".yaml.tmp")
-        with open(config_tmp, "w") as f:
-            yaml.dump(config, f, default_flow_style=False, sort_keys=False)
-        os.replace(config_tmp, config_path)
+        config_path = _save_setup_config(config)
         _post_early_signup("", "silent", machine_id_hash)
         funnel.track_step("setup_completed")
         print("  Silent mode. Scans will log to ~/.stillrunning/scan.log")
@@ -1444,10 +1489,7 @@ def _run_alert_setup(autonomous: bool = False) -> None:
                 "log_files": [],
                 "thresholds": {"cpu_percent": 85, "mem_percent": 85, "disk_percent": 85},
             }
-            config_tmp = config_path.with_suffix(".yaml.tmp")
-            with open(config_tmp, "w") as f:
-                yaml.dump(config, f, default_flow_style=False, sort_keys=False)
-            os.replace(config_tmp, config_path)
+            config_path = _save_setup_config(config)
             _post_early_signup(user_email, "email", machine_id_hash)
             funnel.track_step("email_captured")
             funnel.track_step("setup_completed")
@@ -1466,10 +1508,7 @@ def _run_alert_setup(autonomous: bool = False) -> None:
                 "log_files": [],
                 "thresholds": {"cpu_percent": 85, "mem_percent": 85, "disk_percent": 85},
             }
-            config_tmp = config_path.with_suffix(".yaml.tmp")
-            with open(config_tmp, "w") as f:
-                yaml.dump(config, f, default_flow_style=False, sort_keys=False)
-            os.replace(config_tmp, config_path)
+            config_path = _save_setup_config(config)
             _post_early_signup("", "silent", machine_id_hash)
             funnel.track_step("setup_completed")
             print("  Silent mode enabled. Run `stillrunning scan <package>` to try a scan.\n")
@@ -1536,10 +1575,7 @@ def _run_alert_setup(autonomous: bool = False) -> None:
             "max_consecutive_failures": 3,
         }
 
-        config_tmp = config_path.with_suffix(".yaml.tmp")
-        with open(config_tmp, "w") as f:
-            yaml.dump(config, f, default_flow_style=False, sort_keys=False)
-        os.replace(config_tmp, config_path)
+        config_path = _save_setup_config(config)
         funnel.track_step("config_saved")
         funnel.track_step("setup_completed")
 
@@ -3844,7 +3880,7 @@ def main_cli() -> None:
         run_setup_wizard(autonomous=args.autonomous)
     else:
         # First-run detection: no config → run setup wizard
-        if not CONFIG_FILE.exists():
+        if not config_file().exists():
             print()
             print("  No configuration found. Starting setup wizard...")
             print()
