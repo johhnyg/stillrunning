@@ -81,6 +81,24 @@ class SetupSaveError(Exception):
     pass
 
 
+class SetupInputError(Exception):
+    pass
+
+
+MENU_ATTEMPTS = 5
+
+
+def _ask_menu_choice(choices: dict) -> str:
+    """Ask until the answer is one of `choices` (Enter = "1"); give up after
+    MENU_ATTEMPTS so piped junk cannot loop forever."""
+    for _ in range(MENU_ATTEMPTS):
+        answer = input("  Choose [1]: ").strip() or "1"
+        if answer in choices:
+            return answer
+        print(f"  {answer[:20]!r} is not one of the choices. Type {', '.join(choices)} and press Enter.")
+    raise SetupInputError(f"no valid choice after {MENU_ATTEMPTS} tries")
+
+
 def _save_setup_config(config: dict) -> Path:
     """Write the setup config atomically. In the per-user file, owner-only (it
     can hold a Telegram token), keeping a legacy `token:` / `api_token:`."""
@@ -1374,6 +1392,11 @@ def run_setup_wizard(autonomous: bool = False) -> None:
         funnel.track_step("setup_aborted_interrupt")
         print("\n\n  Setup cancelled. Run `stillrunning --setup` anytime.\n")
         sys.exit(130)
+    except SetupInputError as e:
+        funnel.track_step("setup_aborted_invalid_input")
+        print(f"\n  Setup stopped: {e}. Nothing was saved.")
+        print("  Run `stillrunning --setup` again and answer with one of the numbers shown.\n")
+        sys.exit(EXIT_USAGE)
     except SetupSaveError as e:
         funnel.track_step("setup_failed_config_save")
         print(f"\n  ERROR: {e}")
@@ -1432,13 +1455,10 @@ def _run_alert_setup(autonomous: bool = False) -> None:
     print("    3) silent mode  - just scan and log, no alerts")
     print("    4) skip for now")
     print()
-    alert_choice = input("  Choose [1]: ").strip() or "1"
-    print()
-
-    # Track the choice
     channel_map = {"1": "email", "2": "telegram", "3": "silent", "4": "skipped"}
-    channel = channel_map.get(alert_choice, "email")
-    funnel.track_step(f"alert_channel_{channel}")
+    alert_choice = _ask_menu_choice(channel_map)
+    print()
+    funnel.track_step(f"alert_channel_{channel_map[alert_choice]}")
 
     cwd = Path.cwd()
 

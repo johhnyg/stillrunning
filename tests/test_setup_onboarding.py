@@ -110,9 +110,65 @@ def test_fuzz_setup_on_unwritable_package_dir_never_raises(env, monkeypatch):
         _feed(monkeypatch, _random_answers(rnd))
         try:
             cli._run_alert_setup()
-        except EOFError:
+        except (EOFError, cli.SetupInputError):
             pass
         path = cli.config_file()
         if path.exists():
             assert isinstance(yaml.safe_load(path.read_text()), dict)
+            path.unlink()
+
+
+# --- Bug: an answer outside 1-4 saved nothing, ended normally, logged "email" ----
+
+JUNK_CHOICES = ["5", "0", "x", "１", "\x1b[A", "4\x00", "3;rm -rf /", "a" * 5000, "é", "-1", "1.0"]
+
+
+@pytest.mark.parametrize("junk", JUNK_CHOICES)
+def test_junk_menu_answer_is_rejected_then_a_valid_one_is_used(env, monkeypatch, capsys, junk):
+    home, steps = env
+    _feed(monkeypatch, [junk, "3"])
+    cli._run_alert_setup()
+    assert "is not one of the choices" in capsys.readouterr().out
+    assert yaml.safe_load(cli.config_file().read_text())["alert_channel"] == "silent"
+    assert [s for s in steps if s.startswith("alert_channel_")] == ["alert_channel_silent"]
+
+
+@pytest.mark.parametrize("junk", JUNK_CHOICES)
+def test_only_junk_menu_answers_stop_setup_loudly(env, monkeypatch, capsys, junk):
+    home, steps = env
+    _feed(monkeypatch, [junk] * 60)
+    with pytest.raises(SystemExit) as e:
+        cli.run_setup_wizard()
+    out = capsys.readouterr().out
+    assert e.value.code == cli.EXIT_USAGE
+    assert "Nothing was saved" in out and "Traceback" not in out
+    assert not cli.config_file().exists()
+    assert "setup_aborted_invalid_input" in steps
+    assert not [s for s in steps if s.startswith("alert_channel_")]
+
+
+def test_fuzz_menu_never_saves_nothing_silently(env, monkeypatch):
+    """Every random answer sequence ends in exactly one of: a saved config with
+    a logged channel, a loud invalid-input stop, or the no-input stop."""
+    rnd = random.Random(1124)
+    for _ in range(300):
+        _, steps = env
+        steps.clear()
+        _feed(monkeypatch, _random_answers(rnd))
+        try:
+            cli._run_alert_setup()
+            ended = "returned"
+        except cli.SetupInputError:
+            ended = "invalid"
+        except EOFError:
+            ended = "eof"
+        channels = [s for s in steps if s.startswith("alert_channel_")]
+        path = cli.config_file()
+        if ended == "returned":
+            assert path.exists() and len(channels) == 1
+            assert yaml.safe_load(path.read_text())["alert_channel"] == channels[0][len("alert_channel_"):] \
+                or channels == ["alert_channel_email"]
+        if ended == "invalid":
+            assert not path.exists() and not channels
+        if path.exists():
             path.unlink()
