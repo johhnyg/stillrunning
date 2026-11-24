@@ -237,3 +237,48 @@ def test_fuzz_setup_ends_protected_or_fails_loudly(env, monkeypatch, capsys):
         claude_hook.uninstall() if (home / ".claude").exists() else None
         if cli.config_file().exists():
             cli.config_file().unlink()
+
+
+# --- Review follow-ups -------------------------------------------------------
+
+def test_undecodable_old_home_config_is_replaced_not_a_traceback(env, monkeypatch):
+    home, _ = env
+    (home / ".stillrunning").mkdir()
+    (home / ".stillrunning" / "stillrunning.yaml").write_bytes(b"token: \xff\xfe\n")
+    _feed(monkeypatch, ["3"])
+    cli._run_alert_setup()
+    assert yaml.safe_load((home / ".stillrunning" / "stillrunning.yaml").read_text())["alert_channel"] == "silent"
+
+
+@pytest.mark.skipif(os.name != "posix", reason="file modes and symlinks")
+def test_stale_or_symlinked_tmp_cannot_widen_or_redirect_the_home_config(env, monkeypatch, tmp_path):
+    home, _ = env
+    state = home / ".stillrunning"
+    state.mkdir()
+    tmp = state / "stillrunning.yaml.tmp"
+    tmp.write_text("stale")
+    os.chmod(tmp, 0o644)
+    _feed(monkeypatch, ["3"])
+    cli._run_alert_setup()
+    saved = state / "stillrunning.yaml"
+    assert stat.S_IMODE(saved.stat().st_mode) == 0o600
+
+    target = tmp_path / "elsewhere.yaml"
+    target.write_text("untouched")
+    tmp.symlink_to(target)
+    _feed(monkeypatch, ["4"])
+    cli._run_alert_setup()
+    assert target.read_text() == "untouched"
+    assert not saved.is_symlink() and stat.S_IMODE(saved.stat().st_mode) == 0o600
+
+
+def test_user_without_own_config_still_reads_the_package_config(env, monkeypatch, tmp_path):
+    home, _ = env
+    pkg_dir = tmp_path / "root-owned"
+    pkg_dir.mkdir()
+    (pkg_dir / "stillrunning.yaml").write_text("alert_channel: silent\napp_name: from-root\n")
+    monkeypatch.setattr(cli, "PACKAGE_CONFIG_FILE", pkg_dir / "stillrunning.yaml")
+    monkeypatch.setattr(cli.os, "access", lambda p, mode: False if str(p) == str(pkg_dir) else os.path.exists(p))
+    assert cli.config_file() == pkg_dir / "stillrunning.yaml"
+    assert cli.config_file(for_write=True) == home / ".stillrunning" / "stillrunning.yaml"
+    assert cli.load_config()["app_name"] == "from-root"

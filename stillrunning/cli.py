@@ -69,13 +69,17 @@ PACKAGE_CONFIG_FILE = Path(__file__).parent / "stillrunning.yaml"
 CONFIG: dict = {}
 
 
-def config_file() -> Path:
+def config_file(for_write: bool = False) -> Path:
     """The --setup config: next to the package when this user can write there
     (root, venv and --user installs), else ~/.stillrunning/stillrunning.yaml
-    (a normal user running a package root installed)."""
+    (a normal user running a package root installed). Reading falls back to
+    the package copy when the user has none of their own."""
     if os.access(PACKAGE_CONFIG_FILE.parent, os.W_OK):
         return PACKAGE_CONFIG_FILE
-    return Path.home() / ".stillrunning" / "stillrunning.yaml"
+    user = Path.home() / ".stillrunning" / "stillrunning.yaml"
+    if for_write or user.exists() or not PACKAGE_CONFIG_FILE.exists():
+        return user
+    return PACKAGE_CONFIG_FILE
 
 
 class SetupSaveError(Exception):
@@ -103,7 +107,7 @@ def _ask_menu_choice(choices: dict) -> str:
 def _save_setup_config(config: dict) -> Path:
     """Write the setup config atomically. In the per-user file, owner-only (it
     can hold a Telegram token), keeping a legacy `token:` / `api_token:`."""
-    path = config_file()
+    path = config_file(for_write=True)
     in_home = path != PACKAGE_CONFIG_FILE
     tmp = path.with_suffix(".yaml.tmp")
     try:
@@ -114,12 +118,18 @@ def _save_setup_config(config: dict) -> Path:
                     old = yaml.safe_load(f)
             except FileNotFoundError:
                 old = None
-            except (OSError, yaml.YAMLError) as e:
+            except (OSError, ValueError, yaml.YAMLError) as e:
                 print(f"  WARNING: could not read the old {path} ({type(e).__name__}); replacing it.")
                 old = None
             if isinstance(old, dict):
                 config = {**{k: old[k] for k in ("token", "api_token") if old.get(k)}, **config}
-            fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+            try:
+                tmp.unlink()
+            except FileNotFoundError:
+                pass
+            fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0), 0o600)
+            if hasattr(os, "fchmod"):
+                os.fchmod(fd, 0o600)
             f = os.fdopen(fd, "w")
         else:
             f = open(tmp, "w")
