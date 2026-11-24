@@ -27,6 +27,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Install the package and pytest
+        env:
+          STILLRUNNING_DEV: "1"  # telemetry: mark this run as internal; step-only, it also disables the venv hook
         run: |
           python -m pip install --disable-pip-version-check -q -e . pytest
           python -c "import sys, stillrunning; print(sys.version.split()[0], stillrunning.__file__)"
