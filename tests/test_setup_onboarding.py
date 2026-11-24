@@ -172,3 +172,68 @@ def test_fuzz_menu_never_saves_nothing_silently(env, monkeypatch):
             assert not path.exists() and not channels
         if path.exists():
             path.unlink()
+
+
+# --- Bug: piped setup never offered the hook and ended "normally" unprotected ---
+
+from stillrunning import claude_hook, layers as layers_mod
+
+
+@pytest.fixture
+def no_layers(monkeypatch):
+    monkeypatch.setenv("PATH", "/usr/bin:/bin")
+    monkeypatch.setattr(cli, "_run_alert_setup", lambda autonomous=False: None)
+
+
+def _protected():
+    return layers_mod.install_time_protection(layers_mod.protection_layers())
+
+
+@pytest.mark.parametrize("tty,answer", [(False, None), (True, "n"), (True, EOFError), (True, KeyboardInterrupt)])
+def test_setup_that_ends_unprotected_exits_non_zero_and_says_how(env, no_layers, monkeypatch, capsys, tty, answer):
+    monkeypatch.setattr(sys.stdin, "isatty", lambda: tty, raising=False)
+
+    def fake_input(prompt=""):
+        if isinstance(answer, type):
+            raise answer
+        return answer
+    monkeypatch.setattr(builtins, "input", fake_input)
+    with pytest.raises(SystemExit) as e:
+        cli.run_setup_wizard(autonomous=False)
+    out = capsys.readouterr().out
+    assert e.value.code == cli.EXIT_NOT_PROTECTED
+    assert "YOU ARE NOT PROTECTED" in out and "stillrunning --hook-claude-code" in out
+    assert "Traceback" not in out
+    assert "setup_ended_unprotected" in env[1]
+    assert not _protected()
+    assert not (env[0] / ".claude").exists()  # never installed without a typed yes
+
+
+def test_setup_that_ends_protected_exits_normally(env, no_layers, monkeypatch, capsys):
+    monkeypatch.setattr(sys.stdin, "isatty", lambda: True, raising=False)
+    monkeypatch.setattr(builtins, "input", lambda prompt="": "")
+    cli.run_setup_wizard(autonomous=False)
+    out = capsys.readouterr().out
+    assert claude_hook.verify_install()[0] == "on" and "YOU ARE NOT PROTECTED" not in out
+
+
+def test_fuzz_setup_ends_protected_or_fails_loudly(env, monkeypatch, capsys):
+    """Whole wizard, real menu, random answers, terminal or pipe: it must end
+    protected with exit 0, or exit non-zero. Never exit 0 unprotected."""
+    monkeypatch.setenv("PATH", "/usr/bin:/bin")
+    rnd = random.Random(424)
+    home = env[0]
+    for _ in range(150):
+        tty = rnd.random() < 0.5
+        monkeypatch.setattr(sys.stdin, "isatty", lambda: tty, raising=False)
+        _feed(monkeypatch, _random_answers(rnd) + (["", "y", "n"][rnd.randrange(3):][:1] if rnd.random() < 0.5 else []))
+        try:
+            cli.run_setup_wizard(autonomous=False)
+            code = 0
+        except SystemExit as e:
+            code = e.code
+        assert "Traceback" not in capsys.readouterr().out
+        assert code != 0 or _protected(), "setup exited 0 while nothing checks installs"
+        claude_hook.uninstall() if (home / ".claude").exists() else None
+        if cli.config_file().exists():
+            cli.config_file().unlink()

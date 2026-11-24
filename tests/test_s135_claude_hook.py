@@ -1284,8 +1284,11 @@ def test_interactive_setup_respects_no(home, capsys, monkeypatch):
     monkeypatch.setattr(cli, "_run_alert_setup", lambda autonomous=False: None)
     monkeypatch.setattr(sys.stdin, "isatty", lambda: True, raising=False)
     monkeypatch.setattr("builtins.input", lambda prompt="": "n")
-    cli.run_setup_wizard(autonomous=False)
-    assert ch.verify_install()[0] == "off" and "NOT PROTECTED YET" in capsys.readouterr().out
+    with pytest.raises(SystemExit) as e:
+        cli.run_setup_wizard(autonomous=False)
+    out = capsys.readouterr().out
+    assert e.value.code == cli.EXIT_NOT_PROTECTED
+    assert ch.verify_install()[0] == "off" and "YOU ARE NOT PROTECTED" in out
 
 
 def test_setup_copies_a_legacy_token_to_the_canonical_file(home, capsys, monkeypatch):

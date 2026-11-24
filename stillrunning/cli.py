@@ -45,6 +45,7 @@ EXIT_RATE_LIMITED = 12
 EXIT_WITHDRAWN = 13
 EXIT_NEEDS_PERSON = 14  # part of it IS on the blocklist (some versions, or a local override
                         # allows a listed package): only a person at the keyboard may continue
+EXIT_NOT_PROTECTED = 4  # --setup ended with no layer checking installs
 
 # v2.5.0: Simple logger for exception visibility
 import logging
@@ -1404,7 +1405,9 @@ def run_setup_wizard(autonomous: bool = False) -> None:
         print("  or install stillrunning for your own user (`pip install --user stillrunning`")
         print("  or a virtualenv), then run `stillrunning --setup` again.\n")
         sys.exit(EXIT_ERROR)
-    _finish_setup(interactive=not autonomous)
+    if not _finish_setup(interactive=not autonomous) and not autonomous:
+        funnel.track_step("setup_ended_unprotected")
+        sys.exit(EXIT_NOT_PROTECTED)
 
 
 def _run_alert_setup(autonomous: bool = False) -> None:
@@ -2357,7 +2360,7 @@ def run_doctor() -> int:
     return 0
 
 
-def _finish_setup(interactive: bool) -> None:
+def _finish_setup(interactive: bool) -> bool:
     """End of --setup: say exactly what is protected and what is not. Setup
     used to stop after the alert questions with nothing checking installs."""
     from . import claude_hook, layers as layers_mod
@@ -2386,8 +2389,12 @@ def _finish_setup(interactive: bool) -> None:
     hook_on = any(l["key"] == "claude_hook" and l["state"] == layers_mod.ON for l in layers)
     if interactive and not hook_on and sys.stdin.isatty():
         print("  Package checks are not switched on yet.")
-        answer = input("  Install the Claude Code hook now, so every install Claude Code "
-                       "runs is looked up first? [Y/n]: ").strip().lower()
+        try:
+            answer = input("  Install the Claude Code hook now, so every install Claude Code "
+                           "runs is looked up first? [Y/n]: ").strip().lower()
+        except (EOFError, KeyboardInterrupt):
+            answer = "n"
+            print("\n  No answer, so the Claude Code hook was not installed.")
         print()
         if answer in ("", "y", "yes"):
             try:
@@ -2403,6 +2410,18 @@ def _finish_setup(interactive: bool) -> None:
     for line in layers_mod.render(layers).splitlines():
         print("  " + line)
     print()
+    if layers_mod.install_time_protection(layers):
+        return True
+    print("  " + "!" * 60)
+    print("  YOU ARE NOT PROTECTED. Setup finished, but nothing checks the packages you install.")
+    if not (interactive and sys.stdin.isatty()):
+        print("  (Setup changes your Claude Code settings only when you type yes in a terminal.)")
+    print("  To get protected, run one of:")
+    print("      stillrunning --hook-claude-code    (installs made by Claude Code)")
+    print("      stillrunning shell-install         (installs typed in your terminal)")
+    print("  " + "!" * 60)
+    print()
+    return False
 
 
 # ---------------------------------------------------------------------------
