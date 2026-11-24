@@ -166,10 +166,13 @@ def test_fuzz_menu_never_saves_nothing_silently(env, monkeypatch):
         path = cli.config_file()
         if ended == "returned":
             assert path.exists() and len(channels) == 1
-            assert yaml.safe_load(path.read_text())["alert_channel"] == channels[0][len("alert_channel_"):] \
-                or channels == ["alert_channel_email"]
+            saved = yaml.safe_load(path.read_text())["alert_channel"]
+            logged = channels[0][len("alert_channel_"):]
+            # email with no address given falls back to silent; nothing else may differ
+            assert saved == logged or (logged == "email" and saved == "silent")
         if ended == "invalid":
-            assert not path.exists() and not channels
+            # the menu gave up (nothing logged) or the email prompt did (email logged)
+            assert not path.exists() and channels in ([], ["alert_channel_email"])
         if path.exists():
             path.unlink()
 
@@ -282,3 +285,74 @@ def test_user_without_own_config_still_reads_the_package_config(env, monkeypatch
     assert cli.config_file() == pkg_dir / "stillrunning.yaml"
     assert cli.config_file(for_write=True) == home / ".stillrunning" / "stillrunning.yaml"
     assert cli.load_config()["app_name"] == "from-root"
+
+
+# --- Bug: invalid emails re-prompted forever (`yes junk | stillrunning --setup`) ---
+
+INVALID_EMAILS = ["bad", "a@b.c", "ü@example.de", "a@example.com\x00", "\"a\"@example.com", "@", "x" * 300]
+
+
+def _endless(monkeypatch, first, then, limit=100):
+    calls = {"n": 0}
+
+    def fake_input(prompt=""):
+        calls["n"] += 1
+        if calls["n"] > limit:
+            raise AssertionError(f"setup asked {limit} times: it would loop forever")
+        return first.pop(0) if first else then
+    monkeypatch.setattr(builtins, "input", fake_input)
+    return calls
+
+
+@pytest.mark.parametrize("junk", INVALID_EMAILS)
+def test_endless_invalid_emails_stop_loudly_after_the_limit(env, monkeypatch, capsys, junk):
+    home, steps = env
+    calls = _endless(monkeypatch, ["1"], junk)
+    with pytest.raises(SystemExit) as e:
+        cli.run_setup_wizard()
+    out = capsys.readouterr().out
+    assert e.value.code == cli.EXIT_USAGE
+    assert calls["n"] == 1 + cli.MENU_ATTEMPTS
+    assert "no valid email address" in out and "Nothing was saved" in out and "Traceback" not in out
+    assert not cli.config_file().exists()
+    assert "setup_aborted_invalid_input" in steps and "setup_completed" not in steps
+
+
+def test_valid_email_on_the_last_allowed_try_is_saved(env, monkeypatch):
+    _feed(monkeypatch, ["1"] + ["bad"] * (cli.MENU_ATTEMPTS - 1) + ["a@example.com"])
+    cli._run_alert_setup()
+    assert yaml.safe_load(cli.config_file().read_text())["email"] == "a@example.com"
+
+
+@pytest.mark.parametrize("answers", [["1"], ["1", "bad"], ["1", "bad", "bad"]])
+def test_eof_at_the_email_prompt_exits_cleanly(env, monkeypatch, capsys, answers):
+    _feed(monkeypatch, answers)
+    with pytest.raises(SystemExit) as e:
+        cli.run_setup_wizard()
+    out = capsys.readouterr().out
+    assert e.value.code == cli.EXIT_USAGE
+    assert "none came (no input)" in out and "Traceback" not in out
+    assert not cli.config_file().exists()
+
+
+def test_fuzz_email_prompt_always_terminates(env, monkeypatch):
+    """Random email answers followed by an endless junk tail: every run ends
+    within MENU_ATTEMPTS email prompts, saved or stopped, never spinning."""
+    rnd = random.Random(5150)
+    for _ in range(200):
+        head = ["".join(rnd.choice(JUNK_ALPHABET) for _ in range(rnd.randint(0, 15)))
+                for _ in range(rnd.randint(0, 7))]
+        tail = rnd.choice(INVALID_EMAILS + ["", None])
+        if tail is None:
+            _feed(monkeypatch, ["1"] + head)
+            calls = None
+        else:
+            calls = _endless(monkeypatch, ["1"] + head, tail)
+        try:
+            cli._run_alert_setup()
+        except (EOFError, cli.SetupInputError):
+            pass
+        if calls is not None:
+            assert calls["n"] <= 1 + cli.MENU_ATTEMPTS
+        if cli.config_file().exists():
+            cli.config_file().unlink()

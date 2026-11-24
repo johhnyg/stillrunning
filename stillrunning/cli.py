@@ -1509,9 +1509,13 @@ def _run_alert_setup(autonomous: bool = False) -> None:
         print("  Enter your email for weekly digest:")
         user_email = input("  > ").strip()
 
+        tries = 1
         while user_email and not _validate_email(user_email):
+            if tries >= MENU_ATTEMPTS:
+                raise SetupInputError(f"no valid email address after {MENU_ATTEMPTS} tries")
             print("  Invalid email format. Try again (or press Enter to skip):")
             user_email = input("  > ").strip()
+            tries += 1
 
         if user_email:
             config = {
