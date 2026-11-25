@@ -9,10 +9,35 @@
 
 ## Unreleased (not published)
 
-Four batches since 2.14.3. The first (the hook failing closed) changes
-what is blocked: a crash or timeout of the hook now blocks, and a command
-over the 128K-character limit is asked about. The other three change nothing
-that is checked or blocked.
+Five batches since 2.14.3, newest first below. Two change behaviour: the
+hook failing closed changes what is blocked (a crash or timeout of the hook
+now blocks, and a command over the 128K-character limit is asked about), and
+setup changes the exit code of `--setup` (BREAKING, below). The other three
+change nothing that is checked or blocked.
+
+### Setup never ends silently unprotected (setup fuzz, 2026-11-24)
+
+**BREAKING:** `stillrunning --setup` now exits **4** when it ends with
+nothing checking installs, where it used to exit 0. That includes piped or
+scripted setup (it never installs the Claude Code hook without a typed yes),
+answering "n" to the hook question, and choosing "skip". It prints
+"YOU ARE NOT PROTECTED" and the command to fix it. Scripts that ran
+`stillrunning --setup` and expected 0 should run
+`stillrunning --hook-claude-code` (or `shell-install`) afterwards, or accept
+4. `--autonomous` still exits 0.
+
+- A normal user running `--setup` on a package root installed no longer gets
+  a PermissionError traceback: the config goes to
+  `~/.stillrunning/stillrunning.yaml` (owner-only; an existing `token:` is
+  kept). Root, virtualenv and `--user` installs keep the package-directory
+  file. If neither can be written, setup says so and exits 1.
+- An answer outside 1-4 at the first question is refused and asked again
+  (it used to save nothing, end normally and be counted as "email"); after 5
+  invalid answers setup stops with exit 2 and "Nothing was saved". Invalid
+  email addresses get the same limit (they were asked for forever).
+- Ctrl-D or Ctrl-C at the hook question counts as "no" instead of a
+  traceback.
+- `--setup` exit codes are listed in the README.
 
 ### The hook fails closed on its own failure (fuzz findings F3, F4, R1, R2)
 
