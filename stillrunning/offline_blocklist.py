@@ -69,10 +69,14 @@ def _key(folder):
         pass
     key = secrets.token_hex(32).encode("ascii")
     tmp = "%s.%d.tmp" % (path, os.getpid())
-    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-    with os.fdopen(fd, "wb") as handle:
-        handle.write(key)
-    os.replace(tmp, path)
+    try:
+        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, "wb") as handle:
+            handle.write(key)
+        os.replace(tmp, path)
+    except BaseException:            # also Ctrl-C: no temp key file is left behind
+        _remove_quietly(tmp)
+        raise
     return key
 
 
@@ -398,7 +402,7 @@ def _write_manifest(folder, manifest):
     tmp = "%s.%d.tmp" % (path, os.getpid())
     try:
         _write_manifest_to(path, tmp, manifest)
-    except Exception:
+    except BaseException:            # also Ctrl-C: the temporary manifest is taken back
         _remove_quietly(tmp)
         raise
 

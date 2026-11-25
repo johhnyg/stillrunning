@@ -6,6 +6,7 @@ Stdlib only. The hook runs THIS FILE BY PATH (`python -I -S claude_hook.py`),
 never through the `stillrunning` package, so a command that installs nothing
 costs one interpreter start and no network call.
 """
+import fnmatch
 import json
 import os
 import re
@@ -582,8 +583,86 @@ _SELF_ARGS = {"allow", "--allow", "--block", "--untrust", "--trust", "remember",
 _ENV_WORDS = {"export", "declare", "typeset", "readonly", "local", "unset", "set", "setenv"}
 _ARG_FEEDERS = {"xargs", "parallel"}
 # `stillrunning blocklist --force` (accept a list that drops or halves part of the
-# blocklist) and `--unschedule` (stop refreshing it) change the protection itself
-_BLOCKLIST_SWITCH = re.compile(r"^--(force|unschedule)(=.*)?$|^--(f|fo|for|forc|uns|unsc|unsch|unsche|unsched|unschedu|unschedul)$")
+# blocklist) and `--unschedule` (stop refreshing it) change the protection itself.
+# Every prefix from `--f` / `--u` up, with or without `=value`: which prefixes
+# argparse accepts depends on the Python version (3.15 passes `--u` and `--un` on
+# to the subcommand; 3.8 and 3.12 reject them as ambiguous with --uninstall-hook*).
+def _blocklist_switch(word):
+    head = word.split("=", 1)[0]
+    return len(head) >= 3 and any(full.startswith(head) for full in ("--force", "--unschedule"))
+
+
+# The own words a glob could expand to (`stillrunning blocklist --unsched*`).
+_OWN_WORDS = sorted(_SELF_ARGS | {"blocklist", "whitelist", "add", "remove", "--force", "--unschedule",
+                                  "uninstall", "shell-uninstall", "venv-uninstall"})
+_GLOB_CHARS = re.compile(r"[*?\[]")
+_BRACE = re.compile(r"\{([^{}]*)\}")
+
+
+def _brace_forms(word, limit=64):
+    """The words bash's brace expansion makes of `word` (`ad{d,x}` → add, adx;
+    `{a..c}`), at most `limit`. A word without a list or range is itself."""
+    for match in _BRACE.finditer(word):
+        inner = match.group(1)
+        if "," in inner:
+            alternatives = inner.split(",")
+        else:
+            seq = re.match(r"^(-?\d+|[A-Za-z])\.\.(-?\d+|[A-Za-z])(?:\.\.-?\d+)?$", inner)
+            if not seq:
+                continue
+            a, b = seq.group(1), seq.group(2)
+            if a.lstrip("-").isdigit() and b.lstrip("-").isdigit():
+                lo, hi = sorted((int(a), int(b)))
+                alternatives = [str(n) for n in range(lo, min(hi, lo + limit) + 1)]
+            elif a.isalpha() and b.isalpha():
+                lo, hi = sorted((ord(a), ord(b)))
+                alternatives = [chr(n) for n in range(lo, hi + 1)][:limit]
+            else:
+                continue
+        out = []
+        for alternative in alternatives:
+            out.extend(_brace_forms(word[:match.start()] + alternative + word[match.end():], limit))
+            if len(out) >= limit:
+                break
+        return out[:limit]
+    return [word]
+
+
+def _has_brace(word):
+    return "{" in word and _brace_forms(word, 2) != [word]
+
+
+def _runtime_word(word):
+    """A word whose final form the shell decides at run time: an expansion
+    (`$X`, `$(…)`, backticks, "$@"), a brace list or range, or a glob."""
+    return "$" in word or "`" in word or _has_brace(word) or bool(_GLOB_CHARS.search(word))
+
+
+def _expanded(words):
+    """The words as the shell could hand them over: brace lists expanded, and a
+    glob replaced by every own word it could match (`--unsched*` → --unschedule)."""
+    out = []
+    for word in words:
+        for form in _brace_forms(word):
+            if _GLOB_CHARS.search(form):
+                matches = [own for own in _OWN_WORDS if fnmatch.fnmatchcase(own, form)]
+                out.extend(matches or [form])
+            else:
+                out.append(form)
+    return out
+
+
+def _names_us(word):
+    """Does this program, module or package word name stillrunning? Also with a
+    version or extras (`stillrunning@latest`, `stillrunning==2.14.3`,
+    `stillrunning[cli]`), a path, a brace list or a glob that could be it."""
+    for form in _brace_forms(word):
+        name = _prog_name(form)
+        if re.match(r"^stillrunning(\[[^\]]*\])?\s*(@|[=<>~!]=?|$)", name):
+            return True
+        if _GLOB_CHARS.search(name) and fnmatch.fnmatchcase("stillrunning", name):
+            return True
+    return False
 
 
 def _own_subcommand(rest):
@@ -591,8 +670,9 @@ def _own_subcommand(rest):
     Matched among ALL the plain words, wherever they stand: an option that takes
     a value (`--token x`, `--name x`) puts that value first, so "the first plain
     word" is not the subcommand."""
+    rest = _expanded(rest)
     plain = [a for a in rest if not a.startswith("-")]
-    if "blocklist" in plain and any(_BLOCKLIST_SWITCH.match(a) for a in rest):
+    if "blocklist" in plain and any(_blocklist_switch(a) for a in rest):
         return True
     if "whitelist" in plain:
         after = plain[plain.index("whitelist") + 1:]
@@ -601,22 +681,116 @@ def _own_subcommand(rest):
     return False
 
 
-def _runs_stillrunning_at(cmd, start, program, lowered):
+# Python's own options that take a value (`-W ignore` / `-Wignore`, `-X dev`).
+_PY_VALUED = "WXQ"
+_PY_LONG_VALUED = {"--check-hash-based-pycs"}
+# Launchers that run a package's command: uvx = uv tool run; pipx run; uv run.
+# Their options that take a value (an unknown option is taken to be a flag; see
+# _launched_at for the one-word look-ahead that covers a valued one).
+_UV_VALUED = {
+    "--python", "-p", "--from", "--with", "-w", "--with-editable", "--with-requirements", "--index",
+    "--index-url", "-i", "--extra-index-url", "--default-index", "--find-links", "-f", "--directory",
+    "--project", "--config-file", "--cache-dir", "--color", "--env-file", "--extra", "--group",
+    "--only-group", "--no-group", "--package", "--constraints", "-c", "--constraint", "--overrides",
+    "--override", "--build-constraints", "--build-constraint", "-b", "--resolution", "--prerelease",
+    "--fork-strategy", "--exclude-newer", "--exclude-newer-package", "--link-mode", "--index-strategy",
+    "--keyring-provider", "--python-preference", "--python-platform", "--refresh-package",
+    "--reinstall-package", "--upgrade-package", "-P", "--no-binary-package", "--no-build-package",
+    "--no-build-isolation-package", "--config-setting", "-C", "--allow-insecure-host", "--trusted-host",
+    "--torch-backend", "--env", "--with-executables-from", "--no-sources-package",
+}
+_PIPX_VALUED = {"--spec", "--python", "--pip-args", "--index-url", "-i", "--backend", "--suffix"}
+
+
+def _python_module_at(cmd, i):
+    """After `python`: the index of the word naming the module of `-m stillrunning`
+    (attached or not, in a cluster such as `-IBm`), past options that take a
+    value (`-W ignore`, `-Wignore`, `-X dev`); None for a script, `-c` or another module."""
+    while i < len(cmd):
+        word = cmd[i]
+        if word in ("-", "--") or not word.startswith("-"):
+            return None                      # stdin, or a script file: not us
+        if word.startswith("--"):
+            i += 2 if word in _PY_LONG_VALUED else 1
+            continue
+        for j in range(1, len(word)):
+            letter = word[j]
+            if letter == "m":
+                if j + 1 < len(word):
+                    return i if _names_us(word[j + 1:]) else None
+                return i + 1 if i + 1 < len(cmd) and _names_us(cmd[i + 1]) else None
+            if letter == "c":
+                return None                  # `-c code`: judged by _code_touches
+            if letter in _PY_VALUED:
+                if j + 1 == len(word):
+                    i += 1                   # the value is the next word
+                break
+        i += 1
+    return None
+
+
+def _skip_options(cmd, i, valued):
+    """Past a launcher's options. → (index of the first other word, whether the
+    last option skipped was unknown and could have taken that word as its value)."""
+    unknown = False
+    while i < len(cmd) and cmd[i].startswith("-") and cmd[i] != "-":
+        word = cmd[i]
+        if word == "--":
+            return i + 1, False
+        name = word.split("=", 1)[0]
+        if "=" in word or name not in valued:
+            unknown = "=" not in word and name not in valued and name.startswith("--")
+            i += 1
+        else:
+            unknown = False
+            i += 2
+    return i, unknown
+
+
+def _launched_at(cmd, i, valued, depth):
+    i, unknown = _skip_options(cmd, i, valued)
+    for at in ([i, i + 1] if unknown else [i]):
+        found = _runs_stillrunning_at(cmd, at, depth=depth + 1)
+        if found is not None:
+            return found
+    return None
+
+
+def _runs_stillrunning_at(cmd, start, program=None, lowered=None, depth=0):
     """Index of the word that runs stillrunning in this command (the program
-    itself, or the module of `python -m stillrunning`), or None."""
-    if start >= len(cmd):
+    itself, the module of `python -m stillrunning`, or the command a launcher
+    such as uvx / pipx run / uv run / uv tool run starts), or None."""
+    if start >= len(cmd) or depth > 4:
         return None
-    if _prog_name(cmd[start]) == "stillrunning":
+    word = cmd[start]
+    name = _prog_name(word)
+    if _names_us(word):
         return start
-    if _CODE_RUNNERS.match(_prog_name(cmd[start]) or ""):
-        for index in range(start + 1, len(cmd)):
-            word = lowered[index]
-            if re.match(r"^-[a-z]*m$", word) and index + 1 < len(cmd):
-                return index + 1 if lowered[index + 1] == "stillrunning" else None
-            if re.match(r"^-[a-z]*mstillrunning$", word):
-                return index
-            if not word.startswith("-"):
-                return None              # a script file or another module: not us
+    if re.match(r"^(python|pypy)[\d.]*$", name):
+        return _python_module_at(cmd, start + 1)
+    if name == "uvx":
+        return _launched_at(cmd, start + 1, _UV_VALUED, depth)
+    if name == "pipx":
+        at, _ = _skip_options(cmd, start + 1, _PIPX_VALUED)
+        if at < len(cmd) and cmd[at] == "run":
+            return _launched_at(cmd, at + 1, _PIPX_VALUED, depth)
+        return None
+    if name == "uv":
+        at, _ = _skip_options(cmd, start + 1, _UV_VALUED)
+        if at < len(cmd) and cmd[at] == "tool":
+            at, _ = _skip_options(cmd, at + 1, _UV_VALUED)
+            if at < len(cmd) and cmd[at] in ("run",):
+                return _launched_at(cmd, at + 1, _UV_VALUED, depth)
+            return None
+        if at < len(cmd) and cmd[at] == "run":
+            at += 1
+            while at < len(cmd) and cmd[at].startswith("-") and cmd[at] not in ("-", "--"):
+                if cmd[at] in ("-m", "--module"):       # `uv run -m stillrunning`
+                    return at + 1 if at + 1 < len(cmd) and _names_us(cmd[at + 1]) else None
+                if cmd[at].startswith("--module="):
+                    return at if _names_us(cmd[at].split("=", 1)[1]) else None
+                at += 2 if cmd[at] in _UV_VALUED else 1
+            return _launched_at(cmd, at, _UV_VALUED, depth)
     return None
 
 
@@ -634,6 +808,7 @@ def _own_switch(cmd, start, program, args):
     lowered = [t.lower() for t in cmd]
 
     def switches(rest):
+        rest = _expanded(rest)
         return any(a in _SELF_ARGS or "uninstall" in a for a in rest) or _own_subcommand(rest)
 
     for index, name in enumerate(names):
@@ -652,9 +827,14 @@ def _own_switch(cmd, start, program, args):
     # merely is "stillrunning" (`grep -r stillrunning $DIR`):
     run_at = _runs_stillrunning_at(cmd, start, program, lowered)
     if run_at is not None:
-        # A word only known at run time (`$X`, `${X:-…}`, `$(…)`, `` `…` ``, "$@")
-        # could be any of the switches above: `X=allow; stillrunning $X evil`.
-        if any("$" in t or "`" in t for t in cmd[run_at + 1:]):
+        # The switches above behind a launcher or a version suffix
+        # (`uvx stillrunning@latest allow evil`).
+        if switches(lowered[run_at + 1:]):
+            return True
+        # A word only known at run time (`$X`, `${X:-…}`, `$(…)`, `` `…` ``, "$@",
+        # a brace list, a glob) could be any of the switches above:
+        # `X=allow; stillrunning $X evil`, `stillrunning blocklist --unschedul{e,e}`.
+        if any(_runtime_word(t) for t in cmd[run_at + 1:]):
             return True
         # Words handed over by another program (`… | xargs stillrunning`,
         # `parallel stillrunning ::: …`) are not on the command line at all.
@@ -663,7 +843,7 @@ def _own_switch(cmd, start, program, args):
     # `$sr remember last`, `$(which stillrunning) allow x`: the program is
     # only known at run time and the words after it are our own switches.
     if start < len(cmd) and cmd[start].startswith(("$", "`")):
-        rest = lowered[start + 1:]
+        rest = _expanded(lowered[start + 1:])
         plain = [a for a in rest if not a.startswith("-")]
         if plain[:1] and plain[0] in ("remember", "forget", "allow", "shell-uninstall",
                                       "venv-uninstall") \

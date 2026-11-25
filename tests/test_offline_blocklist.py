@@ -3,6 +3,7 @@ database's integrity is checked, and the builder replaces it atomically.
 
 tests/conftest.py makes every urlopen raise, so any test here that reaches the
 network fails: "blocks offline" is enforced, not assumed."""
+import contextlib
 import io
 import json
 import os
@@ -1288,3 +1289,149 @@ def test_r7_failure_over_an_existing_list_keeps_it_and_its_key(built, monkeypatc
     ch._OFFLINE_STATE.clear()
     assert ch._offline_db()[0] == "ok" and (folder / manifest["db"]).exists() and (folder / ch.OFFLINE_KEY).exists()
     assert len([f for f in os.listdir(str(folder)) if ch._OFFLINE_DB_NAME.match(f)]) == 1     # the new one taken back
+
+
+# ── review 8 ──
+
+@pytest.mark.parametrize("command", [
+    # python options that take a value, separate or attached, and clustered flags
+    "X=--unschedule; python3 -W ignore -m stillrunning blocklist $X",
+    "python3 -Wignore -m stillrunning blocklist $X", 'python3 -X dev -m stillrunning blocklist "$X"',
+    "python3 -Xdev -m stillrunning $X evil", "python3 -IW ignore -m stillrunning $X",
+    "python3 -IBm stillrunning $X", "python3 -mstillrunning $X", "python3 -W ignore -mstillrunning $X",
+    "python3 -W ignore -X dev -IB -m stillrunning $X", "python3 --check-hash-based-pycs never -m stillrunning $X",
+    "python3.12 -W ignore -m stillrunning $X", "/usr/bin/python3 -X dev -m stillrunning $X",
+    "env python3 -W ignore -m stillrunning $X", "env -u A python3 -Xdev -m stillrunning $X",
+    "python3 -W ignore -m stillrunning blocklist $(echo --unschedule)",
+    "echo --unschedule | xargs python3 -W ignore -m stillrunning blocklist",
+    "script -qc 'python3 -W ignore -m stillrunning blocklist --refresh $X' /dev/null",
+    "python3 -W ignore -m stillrunning $X evil", "X=allow; python3 -X dev -m stillrunning $X evil",
+])
+def test_r8_python_options_before_dash_m_still_ask(home, command):
+    """IMPORTANT (review 8): `python3 -W ignore -m stillrunning …` read `ignore` as
+    a script name, so the run-time-word rule never fired."""
+    assert ch.touches_protection(command), command
+    assert ch.decide(command, env={})["action"] == "ask", command
+
+
+@pytest.mark.parametrize("command", [
+    "uvx stillrunning blocklist $X", "uvx stillrunning@latest $X evil", "uvx stillrunning==2.14.3 $X",
+    "uvx 'stillrunning[cli]' $X", "uvx --python 3.12 stillrunning $X", "uvx -p 3.12 stillrunning $X",
+    "uvx --from stillrunning stillrunning $X", "uvx --from stillrunning==2.14.3 stillrunning blocklist $X",
+    "uvx --with requests --isolated stillrunning $X", "uvx --python=3.12 stillrunning $X",
+    "pipx run stillrunning $X", "pipx run --spec stillrunning stillrunning $X",
+    "pipx run --spec stillrunning==2.14.3 --python python3.12 stillrunning $X", "pipx run stillrunning==2.14.3 $X",
+    "uv run stillrunning $X", "uv run --with requests stillrunning $X", "uv run python -m stillrunning $X",
+    "uv run python3 -W ignore -m stillrunning $X", "uv run -m stillrunning $X", "uv run --module stillrunning $X",
+    "uv tool run stillrunning $X", "uv tool run --with requests stillrunning $X",
+    "uv tool run --from stillrunning@latest stillrunning $X", "uv -q tool run stillrunning $X",
+    "uv --directory /tmp run stillrunning $X", "uv run -- stillrunning $X",
+    "echo --unschedule | xargs uvx stillrunning blocklist", "nice uvx stillrunning $X",
+    "X=allow; uvx stillrunning $X evil",
+    # literal switches behind a launcher or a version suffix
+    "uvx stillrunning@latest allow evil", "uvx stillrunning==2.14.3 blocklist --unschedule",
+    "pipx run stillrunning --uninstall-hook-claude-code", "uv tool run stillrunning@latest remember last",
+])
+def test_r8_launchers_that_run_stillrunning_ask(home, command):
+    """IMPORTANT (review 8): uvx / pipx run / uv run / uv tool run were not seen as running stillrunning."""
+    assert ch.touches_protection(command), command
+    assert ch.decide(command, env={})["action"] == "ask", command
+
+
+@pytest.mark.parametrize("command", [
+    "uvx ruff check $X", "uvx --from black black $X", "uv run pytest $X", "pipx run black $X",
+    "uv run grep stillrunning $X", "uvx --python 3.12 ruff $X", "uv tool run ruff $X", "uv pip list",
+    "python3 -W ignore script.py stillrunning $X", "python3 -X dev other.py $X",
+    "python3 -m pytest stillrunning $X", "python3 -c 'print(1)' stillrunning $X", "python3 -W ignore -m pytest $X",
+    "uv run python -m pytest $X",
+])
+def test_r8_launchers_and_python_running_something_else_do_not_ask(home, command):
+    assert not ch.touches_protection(command), command
+
+
+@pytest.mark.parametrize("command", [
+    "stillrunning {allow,allow} evil", "stillrunning whitelist ad{d,d} evil", "stillrunning whitelist *",
+    "stillrunning blocklist --unschedul{e,e}", "script -qc 'stillrunning blocklist --refresh --forc{e,e}' /dev/null",
+    "stillrunning blocklist *", "stillrunning blocklist --unsched?le", "stillrunning blocklist --[u]nschedule",
+    "python3 -m stillrunning {allow,allow} evil", "uvx stillrunning blocklist --unschedul*",
+    "stillrunning blocklist --{force,refresh}", "stillrunning {remember,x} last",
+    # the program itself spelled with a brace or a glob
+    "stillrunnin{g,g} allow evil", "/usr/local/bin/stillrunnin? allow evil", "python3 -m stillrunnin{g,g} $X",
+    # rules that do not need the program to be proven: a word `stillrunning` (unknown wrapper),
+    # and a program known only at run time
+    "setsid stillrunning {allow,allow} evil", "setsid stillrunning whitelist ad{d,d} evil",
+    "$sr {allow,allow} evil", "$sr whitelist ad{d,d} evil", "$sr blocklist --unschedul{e,e}",
+    "$sr blocklist --unsched*",
+])
+def test_r8_braces_and_globs_count_as_run_time_words(home, command):
+    """Pre-existing gap widened by this PR's new switches (review 8): brace expansion
+    and globs were taken literally, so `--unschedul{e,e}` was not seen as `--unschedule`."""
+    assert ch.touches_protection(command), command
+    assert ch.decide(command, env={})["action"] == "ask", command
+
+
+@pytest.mark.parametrize("command", [
+    "echo {a,b}", "cp *.txt /tmp/", "ls stillrunning/*", "grep -r stillrunning *.py",
+    "stillrunning scan requests", "stillrunning blocklist --status", "$EDITOR *.py", "mv file.{txt,bak}",
+    "grep -r stillrunning src/{a,b}",
+])
+def test_r8_braces_and_globs_elsewhere_do_not_ask(home, command):
+    assert not ch.touches_protection(command), command
+
+
+# Every prefix of the two new switches, with and without `=value`.
+_R8_PREFIXES = ["--" + full[2:n] for full in ("--unschedule", "--force") for n in range(3, len(full) + 1)]
+
+
+@pytest.mark.parametrize("word", _R8_PREFIXES)
+def test_r8_each_prefix_argparse_accepts_makes_the_hook_ask(home, monkeypatch, word):
+    """UNVERIFIED in review 8, settled here: which prefixes of --unschedule / --force
+    reach the blocklist subcommand depends on the Python version (3.8 and 3.12 reject
+    `--u` and `--un` as ambiguous with the top-level --uninstall-hook*; 3.15 passes them
+    on). Whatever this Python's argparse accepts, the hook must ask for it."""
+    from stillrunning import cli
+    seen = []
+    monkeypatch.setattr(ob, "main", lambda flags: seen.append(flags) or 0)
+    monkeypatch.setattr(sys, "argv", ["stillrunning", "blocklist", word])
+    with pytest.raises(SystemExit):
+        with contextlib.redirect_stderr(io.StringIO()), contextlib.redirect_stdout(io.StringIO()):
+            cli.main_cli()
+    reached = any(set(flags) & {"--unschedule", "--force"} for flags in seen)
+    print("python %s: blocklist %s -> %s" % (sys.version.split()[0], word, seen or "rejected"))
+    if reached:
+        assert ch.touches_protection("stillrunning blocklist " + word), word
+
+
+@pytest.mark.parametrize("word", _R8_PREFIXES + [w + "=1" for w in _R8_PREFIXES])
+def test_r8_every_prefix_asks_on_every_python(home, word):
+    """3.15's argparse passes `blocklist --u` on to --unschedule: ask for every prefix,
+    whatever the Python version."""
+    assert ch.touches_protection("stillrunning blocklist " + word), word
+    assert ch.touches_protection("python3 -W ignore -m stillrunning blocklist " + word), word
+
+
+def test_r8_ctrl_c_while_writing_the_manifest_leaves_no_temp_file(built, monkeypatch, tmp_path):
+    """Nit (review 8): `_write_manifest` caught Exception only, so Ctrl-C left
+    blocklist.manifest.json.<pid>.tmp behind, although the CHANGELOG says it is taken back."""
+    folder, _ = built
+
+    def interrupted(path, tmp, manifest):      # the temp file is written, then Ctrl-C
+        with open(tmp, "w") as handle:
+            handle.write("{}")
+        raise KeyboardInterrupt
+    monkeypatch.setattr(ob, "_write_manifest_to", interrupted)
+    with pytest.raises(KeyboardInterrupt):
+        ob._write_manifest(str(folder), {"v": 1})
+    assert not [f for f in os.listdir(str(folder)) if f.endswith(".tmp")]
+
+
+def test_r8_ctrl_c_while_writing_a_new_key_leaves_no_temp_file(home, monkeypatch):
+    folder = home / ".stillrunning"
+    folder.mkdir()
+
+    def interrupted(src, dst):
+        raise KeyboardInterrupt
+    monkeypatch.setattr(ob.os, "replace", interrupted)
+    with pytest.raises(KeyboardInterrupt):
+        ob._key(str(folder))
+    assert not [f for f in os.listdir(str(folder)) if f.endswith(".tmp")]

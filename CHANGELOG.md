@@ -61,8 +61,10 @@ including known-malicious ones, instead of blocking them.
   instead of falling back to the hosted lookup. With no list at all the hosted
   lookup runs as before.
 - The Claude Code hook asks a person before an agent may run
-  `stillrunning blocklist --force` or `--unschedule` (in any spelling, also
-  through `script -qc`, `python -m` or a variable); forced refreshes stay on
+  `stillrunning blocklist --force` or `--unschedule`, spelled out or as any
+  prefix argparse could accept (`--f`, `--u`, `--uns`, …, with or without
+  `=value`; Python 3.15 accepts `blocklist --u` and `--un`, 3.8 and 3.12 reject
+  them), in the ways the next item lists; forced refreshes stay on
   record in the manifest's history; a manifest removed while the database or
   key is still there counts as tampering; `introduced: "0.0.0"` (any all-zero
   spelling) means every version.
@@ -73,14 +75,47 @@ including known-malicious ones, instead of blocking them.
   release). A failed first build no longer leaves a database without a
   manifest (read as tampering), and any 0.0.0 pre-release (`0.0.0-0`,
   `0.0.0-alpha`, `0.0.0a0`) as an `introduced` version means every version.
-- A `stillrunning` command whose words are only known at run time (`$X`,
-  `$(…)`, backticks, `"$@"`) or that `xargs`/`parallel` feeds is asked about:
-  `X=allow; stillrunning $X evil` and `… | xargs stillrunning blocklist` ran
-  without asking, for every own switch (the `allow`/`remember`/uninstall rules
-  had this gap before this release). This applies to the program a command
-  runs (also behind `nice`, `env`, `sudo`, `xargs`, `python -m`), not to a word
-  that merely says "stillrunning" (`grep -r stillrunning $DIR` does not ask).
-  `stillrunning scan $PKG` now asks too.
+- A command that runs stillrunning and whose words after it are only known
+  at run time is asked about, for every own switch (the `allow`/`remember`/
+  uninstall rules had this gap before this release):
+  - **run-time words:** `$X`, `${…}`, `$(…)`, backticks, `"$@"`, brace lists
+    and ranges (`--unschedul{e,e}`, `{allow,x}`), globs (`*`, `?`, `[…]`, so a
+    file named `--unschedule` matched by `stillrunning blocklist *` cannot pass),
+    and words fed by `xargs` or `parallel`. `stillrunning scan $PKG` and
+    `stillrunning scan-manifest req*.txt` now ask too.
+  - **what counts as running stillrunning:** the program `stillrunning` (a
+    path, a brace list or a glob that could be it, and behind `nice`, `env`,
+    `sudo`, `timeout`, `xargs`, `script -qc`); `python -m stillrunning` for any
+    `python`/`python3.12`/`/usr/bin/python3`/`pypy` name, also past Python's
+    own options (`-W ignore`, `-Wignore`, `-X dev`, `-Xdev`,
+    `--check-hash-based-pycs x`) and in clusters (`-IBm stillrunning`,
+    `-mstillrunning`); and the launchers `uvx`, `uv tool run`, `pipx run` and
+    `uv run` (also `uv run -m` and `uv run python -m`), past their options that
+    take a value (`--python 3.12`, `--from X`, `--with X`, `--spec X`, …), with
+    a version or extras (`stillrunning@latest`, `stillrunning==2.14.3`,
+    `stillrunning[cli]`). The literal own switches are found behind a launcher
+    or version suffix too (`uvx stillrunning@latest allow evil`).
+  - **not the program:** a word that merely says "stillrunning" does not ask
+    on its run-time words (`grep -r stillrunning $DIR`, `uv run grep
+    stillrunning $X`, `python3 script.py stillrunning $X`).
+  - Where stillrunning is not proven to be the program (a word `stillrunning`
+    after an unknown wrapper such as `setsid`, or a program only known at run
+    time, `$sr`), brace lists are expanded and a glob counts as every own word
+    it could match, before the literal own-switch rules are applied
+    (`$sr blocklist --unsched*` asks; `grep -r stillrunning *.py` does not).
+- Known limits of the own-command matching (indirect execution is not
+  followed): `eval`, aliases and functions defined elsewhere, script files,
+  other interpreters (`python -c`, `node -e` are judged only by what their
+  code imports or writes), decoded payloads, and words assigned earlier in the
+  same command (`sr=stillrunning; $sr $X evil`, `X=allow; uvx stillrunning $X`
+  is asked about but `X=allow; $sr $X evil` is not); a `uvx`/`pipx`/`uv`
+  option this release does not know to take a value, when it is a short option
+  (`uvx -z v stillrunning $X`) or when two such options come before the
+  command (one unknown long option is covered by looking one word further);
+  words that `find -exec`/`-execdir`/`-ok` supplies (`{}`); top-level switches
+  spelled as argparse prefixes or with `=` (`--al x`, `--allow=x`). Words
+  assigned earlier in the same command, `find -exec` and the top-level
+  prefixes are planned for the next pull request.
 - A refresh that fails or is interrupted (Ctrl-C) anywhere between creating
   the key and writing the manifest takes back what it added (its database, a
   key it created, its temporary manifest), so nothing is left that reads as
