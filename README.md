@@ -134,10 +134,10 @@ Known limits (tracked, not yet addressed):
   with a version range or wildcard (`pkg>=1`, `pkg@^1`, `pkg==1.0.*`), with
   `--pre` or with a constraints file, it is asked about instead (never
   allowed on the hosted lookup's word alone): a person decides.
-- Version spellings pip treats as equal but written differently
-  (`1.0.0-rc1` for a listed `1.0.0rc1`) are not matched offline.
-- Packages a command only names indirectly (a shell command inside `npx -c`,
-  for example) are looked up on the hosted service only, not offline.
+- Words a command only names indirectly (inside `npx -c '…'`, `npm exec -c`,
+  `sh -c`, a written-then-run script and similar "shadow" words the hook
+  cannot place for certain) are looked up on the hosted service only, not
+  offline.
 - On Windows the database's hash is checked on every hook call (no stable
   inode/ctime to remember it by): about 0.1 s more per call.
 - Version ranges are compared offline only for plain numeric versions;

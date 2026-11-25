@@ -3684,6 +3684,21 @@ def consume_override(eco, name):
         return False
 
 
+def _has_override(eco, name):
+    """Like consume_override, but read-only (a one-time override is not used up)."""
+    path = os.path.join(_state_dir(), "overrides.json")
+    if not os.path.exists(path):
+        return False
+    try:
+        with open(path, encoding="utf-8") as handle:
+            data = json.load(handle) or {}
+        want = normalize(eco, name)
+        return any(normalize(eco, p) == want for p in list(data.get("once", [])) + list(data.get("allow", [])))
+    except (OSError, ValueError, AttributeError, TypeError) as exc:
+        _warn(f"overrides.json unreadable ({type(exc).__name__}) — no override applied")
+        return False
+
+
 def _locally_blocked(eco, name):
     want = normalize(eco, name)
     if want in {normalize(eco, k) for k in KNOWN_BAD}:
@@ -3880,7 +3895,7 @@ def _offline_lookup(eco, name, version):
     if versions == "*":
         return {"status": "blocked", "advisory": advisory, "local": True, "offline": True}
     specs = [v for v in str(versions).split("\n") if v]
-    if version and _offline_version_listed(version, specs):
+    if version and _offline_version_listed(version, specs, eco):
         return {"status": "blocked", "advisory": advisory, "local": True, "offline": True}
     return {"status": "listed_some", "advisory": advisory, "affected": specs[:8], "specs": specs}
 
@@ -3896,7 +3911,7 @@ def _offline_after_hosted(eco, name, version, result, offline):
                "affected": offline.get("affected") or result.get("affected") or [],
                "registry": result.get("registry")}
     if target:
-        listed = _offline_version_listed(target, offline.get("specs") or [])
+        listed = _offline_version_listed(target, offline.get("specs") or [], eco)
         if listed:
             return dict(blocked, local=True, offline=True, resolved_version=target)
         if listed is False or result["status"] == "ok":
@@ -3907,14 +3922,61 @@ def _offline_after_hosted(eco, name, version, result, offline):
     return dict(blocked, why="version_unresolved")     # unpinned and the version is unknown
 
 
+_PEP440 = re.compile(
+    r"^\s*v?(?:(?P<epoch>[0-9]+)!)?(?P<release>[0-9]+(?:\.[0-9]+)*)"
+    r"(?P<pre>[-_.]?(?P<pre_l>alpha|beta|preview|pre|rc|a|b|c)[-_.]?(?P<pre_n>[0-9]+)?)?"
+    r"(?P<post>-(?P<post_n1>[0-9]+)|[-_.]?(?P<post_l>post|rev|r)[-_.]?(?P<post_n2>[0-9]+)?)?"
+    r"(?P<dev>[-_.]?dev[-_.]?(?P<dev_n>[0-9]+)?)?"
+    r"(?:\+[a-z0-9]+(?:[-_.][a-z0-9]+)*)?\s*$", re.I)
+_PRE_NAMES = {"alpha": "a", "beta": "b", "c": "rc", "pre": "rc", "preview": "rc"}
+
+
+def _pep440(version):
+    """pip's standard (PEP 440) form of a version, or None if it is not one:
+    `1.0.0-rc1`, `1.0.0.rc1`, `1.0c1` and `1.0.0rc1` all → `1rc1`; trailing
+    `.0`s, a `v` prefix, a zero epoch and a `+local` part do not count."""
+    if not isinstance(version, str) or not version.isascii():
+        return None
+    match = _PEP440.match(version)
+    if not match:
+        return None
+    release = [int(part) for part in match.group("release").split(".")]
+    while len(release) > 1 and release[-1] == 0:
+        release.pop()
+    out = ".".join(str(part) for part in release)
+    if int(match.group("epoch") or 0):
+        out = "%d!%s" % (int(match.group("epoch")), out)
+    if match.group("pre_l"):
+        label = match.group("pre_l").lower()
+        out += "%s%d" % (_PRE_NAMES.get(label, label), int(match.group("pre_n") or 0))
+    if match.group("post"):
+        out += ".post%d" % int(match.group("post_n1") or match.group("post_n2") or 0)
+    if match.group("dev"):
+        out += ".dev%d" % int(match.group("dev_n") or 0)
+    return out
+
+
+def _same_version(eco, a, b):
+    """Do two version strings name the same release? pip compares PEP 440
+    forms; npm (and anything not PEP 440) the hook's plain canonical form."""
+    a, b = str(a).strip().lstrip("="), str(b).strip().lstrip("=")      # `==1.0` as listed
+    if eco == "pip":
+        pa, pb = _pep440(a), _pep440(b)
+        if pa is not None and pb is not None:
+            return pa == pb
+    return _canon_version(a) == _canon_version(b)
+
+
 def _numeric_version(text):
     """`1.2.3` → (1, 2, 3); anything not purely numeric → None (not compared)."""
     canon = _canon_version(text)
     parts = canon.split(".")
-    return tuple(int(p) for p in parts) if canon and all(p.isdigit() for p in parts) else None
+    if canon and all(p.isascii() and p.isdigit() for p in parts):
+        return tuple(int(p) for p in parts)
+    return None
 
 
-def _offline_version_listed(version, specs):
+def _offline_version_listed(version, specs, eco="pip"):
     """True when `version` is on the offline list's specs (`==x`, `<x`,
     `>=x`, `>=x,<y`), False when it is not, None when a range could not be
     compared (a non-numeric version on either side)."""
@@ -3922,7 +3984,7 @@ def _offline_version_listed(version, specs):
     want = _numeric_version(version)
     for spec in specs:
         if spec.startswith("=="):
-            if _canon_version(spec[2:]) == _canon_version(version):
+            if _same_version(eco, spec[2:], version):
                 return True
             continue
         bounds = [b.strip() for b in spec.split(",") if b.strip()]
@@ -4120,14 +4182,16 @@ def _canon_version(version):
     text = str(version or "").strip().lower().lstrip("=v").split("+", 1)[0]
     if "!" in text and text.split("!", 1)[0].strip("0") == "":
         text = text.split("!", 1)[1]                      # epoch 0 is the default
-    parts = [str(int(p)) if p.isdigit() else p for p in text.split(".")]
+    parts = [str(int(p)) if p.isascii() and p.isdigit() else p for p in text.split(".")]
     while len(parts) > 1 and parts[-1] == "0":
         parts.pop()
     return ".".join(parts)
 
 
-def _odd_pin(version):
+def _odd_pin(version, eco=None):
     """A pin that could be another spelling of a listed version."""
+    if eco == "pip" and _pep440(str(version)) not in (None, str(version)):
+        return True                     # `1.0.0-rc1`, `1.0.0.rc1`, `1.0c1` for a listed 1.0.0rc1
     return _canon_version(version) != str(version) or str(version).count(".") < 2
 
 
@@ -4235,12 +4299,12 @@ def lookup(pkg, token=None, timeout=8.0):
         else:
             result = _resolve_version_needed(eco, name, result, token, timeout)
             result = dict(result, affected=(result.get("affected") or [])[:8])
-    elif version and result["status"] == "ok" and _odd_pin(version):
+    elif version and result["status"] == "ok" and _odd_pin(version, eco):
         # `==1.14.1.0`, `==1.14` or `v1.14.1` can be another spelling of a
         # listed version that a plain text match on the server would miss.
         probe = _blocklist_only_lookup(eco, name, None, timeout)
         if probe and probe.get("status") == "version_needed" and any(
-                _canon_version(version) == _canon_version(bad)
+                _same_version(eco, version, bad)
                 for bad in probe.get("affected") or []):
             result = dict(result, status="blocked", advisory=probe.get("advisory"))
     result = dict(result, registry=exists)
@@ -4588,6 +4652,8 @@ def _cache_serve(packages, results, cve_results, cve_ran, unverifiable, protect,
     if _local_list_unreadable():
         _warn("local blocklist unreadable — verdict cache not used")
         return {}
+    if _offline_db()[0] == "tampered":
+        return {}                       # nothing is answered from memory while the list fails its check
     served, ttl = {}, None
     for index, pkg in enumerate(packages):
         if not vc.cacheable(pkg):
@@ -4603,6 +4669,8 @@ def _cache_serve(packages, results, cve_results, cve_ran, unverifiable, protect,
             continue
         if (eco, name) in blocked or _locally_blocked(eco, name) or _local_cve_held(eco, name, version):
             continue
+        if _offline_lookup(eco, name, version):
+            continue                    # on the offline list (any version): never served from memory
         ttl = vc.ttl_seconds(warn=_warn) if ttl is None else ttl
         entry = vc.find(_state_dir(), eco, name, version, pkg["hash"], now, ttl, _warn)
         if entry:
@@ -4758,8 +4826,22 @@ def decide(command, cwd=None, env=None, lookup_fn=None, deadline=CHECK_DEADLINE_
                 outcome = {"status": "unverified", "why": "server"}
             return outcome, (time.monotonic() - begin) * 1000
 
+        # The offline list is asked first, for every package and in this thread:
+        # a listed package (or a list that fails its check) is decided here, so it
+        # can never end up as a pool timeout that the verdict cache then answers.
+        offline_first = {}
+        if lookup_fn is None:
+            for index, pkg in enumerate(packages):
+                off = _offline_lookup(pkg["eco"], pkg["name"], pkg.get("version"))
+                if not off:
+                    continue
+                offline_first[index] = off
+                if off.get("why") == "offline_tampered" or (
+                        off["status"] == "blocked" and not _has_override(pkg["eco"], pkg["name"])):
+                    results[index] = (dict(off, registry=None), 0.0)
         pool = ThreadPoolExecutor(max_workers=min(8, len(packages) + len(shadow)))
-        futures = [pool.submit(timed, pkg) for pkg in packages]
+        futures = [None if index in results else pool.submit(timed, pkg)
+                   for index, pkg in enumerate(packages)]
         shadow_futures = [pool.submit(timed, pkg, shadow_fn) for pkg in shadow]
         cve_pool, cve_futures = None, []
         if run_cve:
@@ -4775,11 +4857,20 @@ def decide(command, cwd=None, env=None, lookup_fn=None, deadline=CHECK_DEADLINE_
             cve_pool = ThreadPoolExecutor(max_workers=min(8, len(packages)))
             cve_futures = [cve_pool.submit(cve_timed, pkg) for pkg in packages]
         for index, future in enumerate(futures):
+            if future is None:
+                continue                                  # decided by the offline list above
             left = max(0.05, deadline - (time.monotonic() - started))
             try:
                 results[index] = future.result(timeout=left)
             except FutureTimeout:
                 results[index] = ({"status": "unverified", "why": "timeout"}, deadline * 1000)
+            off, pkg = offline_first.get(index), packages[index]
+            if off and off["status"] == "listed_some" and results[index][0].get("status") == "unverified" \
+                    and not pkg.get("version") and not pkg.get("spec") and not pkg.get("uncertain"):
+                # some versions listed offline, and the lookup never said which one installs
+                results[index] = ({"status": "blocked", "why": "version_unresolved",
+                                   "advisory": off.get("advisory"), "affected": off.get("affected") or []},
+                                  results[index][1])
         for index, future in enumerate(shadow_futures):
             left = max(0.05, deadline - (time.monotonic() - started))
             try:

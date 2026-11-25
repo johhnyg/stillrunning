@@ -2702,11 +2702,18 @@ def _print_outcome(pkg: dict, outcome: dict, indent: str = "") -> int:
     if status == "blocked":
         advisory = outcome.get("advisory")
         print(f"{indent}✗ stillrunning BLOCKED [exit {rc}]: {label}")
-        text = (ch.explain("blocked_typosquat", name=name, lookalike=twin) if twin
-                else ch.explain("blocked_advisory", name=name, advisory=advisory) if advisory
-                else ch.explain("blocked_listed", name=name))
-        print(f"{indent}   {text}")
-        print(f"{indent}   See: https://stillrunning.io/security-advisories?pkg={name}")
+        why = outcome.get("why")
+        if why == "offline_tampered":            # not a verdict on this package: the list is broken
+            print(f"{indent}   {ch.explain('offline_tampered', name=name)}")
+        elif why == "version_unresolved":
+            bad = ", ".join(a for a in outcome.get("affected") or [] if isinstance(a, str))
+            print(f"{indent}   {ch.explain('version_unresolved', name=name, affected=bad)}")
+        else:
+            text = (ch.explain("blocked_typosquat", name=name, lookalike=twin) if twin
+                    else ch.explain("blocked_advisory", name=name, advisory=advisory) if advisory
+                    else ch.explain("blocked_listed", name=name))
+            print(f"{indent}   {text}")
+            print(f"{indent}   See: https://stillrunning.io/security-advisories?pkg={name}")
     elif status == "suspicious":
         print(f"{indent}⚠ stillrunning SUSPICIOUS [exit {rc}]: {label}")
         print(f"{indent}   {ch.explain('suspicious', name=name)}")
@@ -3773,6 +3780,8 @@ def main_cli() -> None:
     blocklist_parser.add_argument("--schedule", action="store_true",
                                   help="Add one crontab line that runs --refresh daily, low priority")
     blocklist_parser.add_argument("--unschedule", action="store_true", help="Remove that crontab line")
+    blocklist_parser.add_argument("--force", action="store_true",
+                                  help="With --refresh: accept a list that drops an ecosystem or shrinks a lot")
 
     cve_parser = subparsers.add_parser(
         "cve", help="Known vulnerabilities in packages you already use (OSV.dev); "
@@ -3865,7 +3874,7 @@ def main_cli() -> None:
         from . import offline_blocklist
         sys.exit(offline_blocklist.main([flag for flag, on in (
             ("--refresh", args.refresh), ("--status", args.status), ("--schedule", args.schedule),
-            ("--unschedule", args.unschedule)) if on]))
+            ("--unschedule", args.unschedule), ("--force", args.force)) if on]))
 
     if args.command == "cve":
         from . import cve

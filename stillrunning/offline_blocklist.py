@@ -89,8 +89,10 @@ def _version_specs(affected):
         introduced = None
         for event in rng.get("events") or []:
             if "introduced" in event:
+                if introduced == "0":                      # open from the first version: everything
+                    return "*"
                 if introduced is not None:                 # an open interval: everything from there
-                    return "*" if introduced == "0" else specs + [">=" + str(introduced)]
+                    specs.append(">=" + introduced)
                 introduced = str(event["introduced"])
             elif "fixed" in event or "last_affected" in event:
                 end = str(event.get("fixed", event.get("last_affected")))
@@ -197,18 +199,19 @@ def _clean_leftovers(folder, older_than_s=3600):
                 pass
 
 
-def build(folder=None, sources=None, log=print):
-    """Build a new database and switch the manifest to it. → the manifest."""
+def build(folder=None, sources=None, log=print, force=False):
+    """Build a new database and switch the manifest to it. → the manifest.
+    `force`: accept a list that drops an ecosystem or shrinks by more than half."""
     folder = folder or _state()
     lock = _lock(folder)
     try:
         _clean_leftovers(folder)
-        return _build(folder, sources or SOURCES, log)
+        return _build(folder, sources or SOURCES, log, force)
     finally:
         lock.close()
 
 
-def _build(folder, sources, log):
+def _build(folder, sources, log, force=False):
     started = time.time()
     fd, tmp_db = tempfile.mkstemp(prefix=".blocklist-build-", suffix=".sqlite", dir=folder)
     os.close(fd)
@@ -246,15 +249,20 @@ def _build(folder, sources, log):
         if not counts:
             raise RuntimeError("no entries: refusing to replace the blocklist with an empty one")
         missing = [eco for eco in sources if not counts.get(eco)]
-        if missing:
-            raise RuntimeError("no entries for %s: refusing to drop that ecosystem from the blocklist"
-                               % ", ".join(missing))
         previous = _previous_counts(folder)
         shrunk = [eco for eco in counts if previous.get(eco) and counts[eco] < previous[eco] // 2]
-        if shrunk:
-            raise RuntimeError("%s shrank by more than half (%s): refusing it; the current list stays"
-                               % (", ".join(shrunk), ", ".join("%s %d -> %d" % (e, previous[e], counts[e])
-                                                               for e in shrunk)))
+        dropped = ["%s %d -> 0" % (e, previous.get(e, 0)) for e in missing] + \
+                  ["%s %d -> %d" % (e, previous[e], counts[e]) for e in shrunk]
+        if (missing or shrunk) and not force:
+            raise RuntimeError("%s: refusing it; the current list stays (if that is right, a person can "
+                               "run: stillrunning blocklist --refresh --force)"
+                               % "; ".join(["no entries for " + e for e in missing] +
+                                           ["%s shrank by more than half" % e for e in shrunk] +
+                                           ["(" + ", ".join(dropped) + ")"]))
+        forced = None
+        if (missing or shrunk) and force:
+            forced = {"dropped": dropped, "at": int(time.time())}
+            _log_forced(folder, dropped, log)
         conn.execute("VACUUM")
         conn.close()
         conn = None
@@ -270,6 +278,8 @@ def _build(folder, sources, log):
         os.replace(tmp_db, final_db)
         manifest = {"v": 1, "db": name, "sha256": sha, "size": os.path.getsize(final_db),
                     "built": int(time.time()), "counts": counts, "source": "OSV.dev MAL advisories"}
+        if forced:
+            manifest["forced"] = forced                 # covered by the MAC; --status shows it
         manifest["mac"] = claude_hook.offline_manifest_mac(_key(folder), manifest)
         _write_manifest(folder, manifest)
         _prune(folder, keep=name)
@@ -287,6 +297,21 @@ def _build(folder, sources, log):
                 os.unlink(tmp_db)
             except OSError:  # lint: allowed-silent(removed by _clean_leftovers on the next build)
                 pass
+
+
+FORCE_LOG = "blocklist_force.log"
+
+
+def _log_forced(folder, dropped, log):
+    """A forced refresh says what it gave up, on screen and in a log a person can check later."""
+    line = "%s FORCED blocklist refresh, accepted: %s" % (
+        time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), ", ".join(dropped))
+    log("WARNING: " + line)
+    try:
+        with open(os.path.join(folder, FORCE_LOG), "a", encoding="utf-8") as handle:
+            handle.write(line + "\n")
+    except OSError as exc:
+        log("WARNING: could not write %s (%s)" % (FORCE_LOG, type(exc).__name__))
 
 
 def _previous_counts(folder):
@@ -348,10 +373,14 @@ def status():
         return 2
     with open(os.path.join(claude_hook._state_dir(), claude_hook.OFFLINE_MANIFEST), encoding="utf-8") as h:
         manifest = json.load(h)
-    age_h = (time.time() - manifest.get("built", 0)) / 3600.0
-    print("Offline blocklist verified: %s, %d bytes, %s, built %.1f h ago"
+    built = manifest.get("built")
+    age = ("built %.1f h ago" % ((time.time() - built) / 3600.0)
+           if isinstance(built, (int, float)) and not isinstance(built, bool) else "build time unknown")
+    print("Offline blocklist verified: %s, %d bytes, %s, %s"
           % (manifest["db"], manifest["size"],
-             ", ".join("%s %d" % kv for kv in sorted(manifest.get("counts", {}).items())), age_h))
+             ", ".join("%s %d" % kv for kv in sorted(manifest.get("counts", {}).items())), age))
+    if isinstance(manifest.get("forced"), dict):
+        print("Built with --force, accepting: %s" % ", ".join(str(d) for d in manifest["forced"].get("dropped") or []))
     stale = claude_hook.offline_stale_note()
     if stale:
         print("STALE: " + stale)
@@ -401,6 +430,15 @@ def schedule(remove=False):
     return 0
 
 
+def _a_person_is_typing():
+    """--force must come from a person: a terminal on stdin. Cron, scripts, pipes
+    and the Claude Code hook (stdin is the tool-call JSON) have none."""
+    try:
+        return sys.stdin is not None and sys.stdin.isatty()
+    except (AttributeError, ValueError, OSError):
+        return False
+
+
 def main(argv=None):
     import argparse
     parser = argparse.ArgumentParser(prog="stillrunning blocklist")
@@ -408,13 +446,22 @@ def main(argv=None):
     parser.add_argument("--status", action="store_true")
     parser.add_argument("--schedule", action="store_true")
     parser.add_argument("--unschedule", action="store_true")
+    parser.add_argument("--force", action="store_true",
+                        help="with --refresh: accept a list that drops an ecosystem or shrinks a lot")
     args = parser.parse_args(argv)
     if args.schedule or args.unschedule:
         return schedule(remove=args.unschedule)
+    if args.force and not args.refresh:
+        print("--force only goes with --refresh.", file=sys.stderr)
+        return 2
+    if args.force and not _a_person_is_typing():
+        print("--force is only accepted from a person at a terminal (it accepts a list that drops "
+              "or shrinks part of the blocklist). Nothing was changed.", file=sys.stderr)
+        return 2
     if args.refresh:
         _low_priority()
         try:
-            build()
+            build(force=args.force)
         except Exception as exc:      # the old list (if any) stays in place and verified
             print("Offline blocklist NOT refreshed: %s: %s" % (type(exc).__name__, exc), file=sys.stderr)
             return 1

@@ -674,3 +674,259 @@ def test_r2_verification_is_per_state_folder(built, monkeypatch, tmp_path):
     monkeypatch.setenv("HOME", str(other))
     monkeypatch.setenv("USERPROFILE", str(other))
     assert ch._offline_db() == ("missing", None)
+
+
+# ── pip pin spellings: PEP 440 forms of a listed version match ──
+
+PEP440_LISTED = [
+    _advisory("MAL-P-1", "PyPI", "pre-bad", versions=["1.0.0rc1"]),
+    _advisory("MAL-P-2", "PyPI", "post-bad", versions=["2.0.post1"]),
+    _advisory("MAL-P-3", "PyPI", "dev-bad", versions=["3.0.dev2"]),
+    _advisory("MAL-P-4", "PyPI", "alpha-bad", versions=["4.1a1", "4.1b2"]),
+]
+
+
+@pytest.mark.parametrize("name,pin", [
+    ("pre-bad", "1.0.0-rc1"), ("pre-bad", "1.0.0.rc1"), ("pre-bad", "1.0.0c1"), ("pre-bad", "1.0rc1"),
+    ("pre-bad", "1.0.0RC1"), ("pre-bad", "1.0.0-pre1"), ("pre-bad", "1.0.0preview1"), ("pre-bad", "v1.0.0rc1"),
+    ("pre-bad", "1.0.0_rc_1"), ("pre-bad", "0!1.0.0rc1"),
+    ("post-bad", "2.0-1"), ("post-bad", "2.0.post1"), ("post-bad", "2.0_post1"), ("post-bad", "2.0-r1"),
+    ("post-bad", "2.0.0.rev1"),
+    ("dev-bad", "3.0-dev2"), ("dev-bad", "3.0.0.dev2"), ("dev-bad", "3.0_dev_2"),
+    ("alpha-bad", "4.1alpha1"), ("alpha-bad", "4.1-beta2"), ("alpha-bad", "4.1.0.b2"),
+])
+def test_pep440_spelling_of_a_listed_pip_version_blocks_offline(home, monkeypatch, tmp_path, name, pin):
+    _build_from(monkeypatch, tmp_path, PEP440_LISTED)
+    _no_hosted(monkeypatch)
+    out = ch.lookup({"eco": "pip", "name": name, "version": pin})
+    assert out["status"] == "blocked" and out.get("offline"), (name, pin, out)
+
+
+@pytest.mark.parametrize("name,pin", [
+    ("pre-bad", "1.0.0rc2"), ("pre-bad", "1.0.0"), ("pre-bad", "1.0.0.post1"), ("pre-bad", "1.0.1rc1"),
+    ("post-bad", "2.0"), ("post-bad", "2.0.post2"), ("dev-bad", "3.0.dev3"), ("alpha-bad", "4.1b1"),
+])
+def test_pep440_different_versions_are_not_matched(home, monkeypatch, tmp_path, name, pin):
+    _build_from(monkeypatch, tmp_path, PEP440_LISTED)
+    _hosted(monkeypatch, lambda *a, **k: {"status": "ok"}, None)
+    assert ch.lookup({"eco": "pip", "name": name, "version": pin})["status"] == "ok", (name, pin)
+
+
+def test_pep440_spelling_is_caught_on_the_hosted_path_too(home, monkeypatch):
+    """No offline list: hosted says ok for the exact pin, but the unmetered
+    blocklist route lists 1.0.0rc1 — `1.0.0-rc1` is the same release."""
+    monkeypatch.setattr(ch, "_query", lambda *a, **k: {"status": "ok"})
+    monkeypatch.setattr(ch, "_on_registry", lambda *a, **k: True)
+    monkeypatch.setattr(ch, "_blocklist_only_lookup", lambda *a, **k: {
+        "status": "version_needed", "affected": ["==1.0.0rc1"], "advisory": "MAL-P-1"})
+    for pin in ("1.0.0-rc1", "1.0.0.rc1", "1.0.0c1"):
+        out = ch.lookup({"eco": "pip", "name": "pre-bad", "version": pin})
+        assert out["status"] == "blocked", (pin, out)
+
+
+def test_npm_versions_keep_npm_rules(home, monkeypatch, tmp_path):
+    _build_from(monkeypatch, tmp_path, [_advisory("MAL-N-1", "npm", "npm-pre", versions=["5.6.1-rc.1"])], eco="npm")
+    _hosted(monkeypatch, lambda *a, **k: {"status": "ok"}, None)
+    assert ch.lookup({"eco": "npm", "name": "npm-pre", "version": "5.6.1-rc.1"})["status"] == "blocked"
+    assert ch.lookup({"eco": "npm", "name": "npm-pre", "version": "5.6.1-rc1"})["status"] == "ok"
+
+
+@pytest.mark.parametrize("raw,canon", [
+    ("1.0.0rc1", "1rc1"), ("1.0.0-RC.1", "1rc1"), ("1.0c1", "1rc1"), ("v2.0.0", "2"), ("0!1.2", "1.2"),
+    ("1!1.2", "1!1.2"), ("2.0-1", "2.post1"), ("2.0.r", "2.post0"), ("3.0.dev", "3.dev0"),
+    ("1.2+local.7", "1.2"), ("1.0a", "1a0"), ("1.0.0.0.0", "1"),
+])
+def test_pep440_canonical_forms(raw, canon):
+    assert ch._pep440(raw) == canon
+
+
+@pytest.mark.parametrize("raw", ["latest", "1.0.x", "", "^1.2", "1.0²", "٣.1", None, 1.0])
+def test_non_pep440_versions_are_not_forced(raw):
+    assert ch._pep440(raw) is None
+
+
+def test_unicode_digits_do_not_crash_the_range_check():
+    assert ch._numeric_version("1.²") is None
+    assert ch._offline_version_listed("1.2", ["<².0"]) is None
+
+
+# ── review 3 findings ──
+
+class _PermissiveCache:
+    """A verdict cache that would serve any hash-pinned package as clean."""
+    def __getattr__(self, name):
+        return {
+            "cacheable": lambda pkg: True, "cve_held": lambda cve: False,
+            "cve_could_not": lambda cve: True, "cve_completed_clear": lambda cve, v: True,
+            "blocklist_could_not": lambda outcome: True, "blocklist_completed_clear": lambda outcome: False,
+            "ttl_seconds": lambda warn=None: 86400,
+            "find": lambda *a: {"verified_at": 0, "eco": "pip", "name": a[2], "version": a[3]},
+        }[name]
+
+
+def _pinned(name, version="1.0"):
+    return {"eco": "pip", "name": name, "version": version, "hash": "sha256:" + "a" * 64}
+
+
+def test_r3_cache_never_serves_an_offline_listed_package(built, monkeypatch):
+    """IMPORTANT (review 3): a timed-out lookup must not be answered from the
+    verdict cache when the offline list has the package."""
+    monkeypatch.setattr(ch, "_verdict_cache", lambda: _PermissiveCache())
+    packages = [_pinned("evil-pkg"), _pinned("partly-bad", "1.0.0"), _pinned("requests")]
+    timeout = ({"status": "unverified", "why": "timeout"}, 1.0)
+    served = ch._cache_serve(packages, {0: timeout, 1: timeout, 2: timeout}, {}, False, [], False, set(), 0)
+    assert set(served) == {2}                       # only the unlisted one
+
+
+def test_r3_cache_serves_nothing_while_the_list_is_tampered(built, monkeypatch):
+    folder, manifest = built
+    _tamper_db(folder, manifest)
+    ch._OFFLINE_STATE.clear()
+    monkeypatch.setattr(ch, "_verdict_cache", lambda: _PermissiveCache())
+    timeout = ({"status": "unverified", "why": "timeout"}, 1.0)
+    assert ch._cache_serve([_pinned("requests")], {0: timeout}, {}, False, [], False, set(), 0) == {}
+
+
+def test_r3_listed_package_late_in_a_long_install_blocks_when_lookups_hang(built, monkeypatch, tmp_path):
+    """End to end: 24 packages, every hosted lookup hangs past the deadline; the
+    listed one (last) is decided offline before the pool, so it is denied."""
+    def hang(*a, **k):
+        time.sleep(2)
+        return {"status": "ok"}
+    monkeypatch.setattr(ch, "_query", hang)
+    monkeypatch.setattr(ch, "_on_registry", lambda *a, **k: True)
+    monkeypatch.setattr(ch, "_verdict_cache", lambda: _PermissiveCache())
+    names = ["pkg-%02d" % i for i in range(23)] + ["evil-pkg"]
+    decision = ch.decide("pip install " + " ".join(names), env={}, deadline=0.5)
+    assert decision["action"] == "deny"
+    assert any("evil-pkg" in line and "offline list" in line for line in decision["lines"])
+
+
+def test_r3_tampered_list_denies_every_package_of_a_long_install(built, monkeypatch):
+    folder, manifest = built
+    _tamper_db(folder, manifest)
+    ch._OFFLINE_STATE.clear()
+    monkeypatch.setattr(ch, "_query", lambda *a, **k: time.sleep(2) or {"status": "ok"})
+    monkeypatch.setattr(ch, "_on_registry", lambda *a, **k: True)
+    decision = ch.decide("pip install " + " ".join("p%d" % i for i in range(20)), env={}, deadline=0.5)
+    assert decision["action"] == "deny"
+    blocked = [r for r in decision["records"] if r["verdict"] == "blocked"]
+    assert len(blocked) == 20 and all("integrity check" in (r.get("explanation") or "") for r in blocked)
+
+
+def test_r3_partly_listed_unpinned_that_times_out_is_blocked(built, monkeypatch):
+    monkeypatch.setattr(ch, "_query", lambda *a, **k: time.sleep(2) or {"status": "ok"})
+    monkeypatch.setattr(ch, "_on_registry", lambda *a, **k: True)
+    decision = ch.decide("pip install partly-bad", env={}, deadline=0.3)
+    assert decision["action"] == "deny" and "could not be worked out" in decision["lines"][0]
+
+
+def test_r3_listed_package_with_an_override_still_asks(built, monkeypatch):
+    """The early offline decision respects a user's override (ask), as lookup() does."""
+    (built[0] / "overrides.json").write_text(json.dumps({"allow": ["evil-pkg"]}))
+    _no_hosted(monkeypatch)
+    monkeypatch.setattr(ch, "_blocklist_only_lookup", lambda *a, **k: None)
+    assert ch.decide("pip install evil-pkg", env={})["action"] == "ask"
+    assert json.loads((built[0] / "overrides.json").read_text())["allow"] == ["evil-pkg"]
+
+
+def test_r3_force_accepts_a_refresh_that_was_refused(built, monkeypatch, tmp_path):
+    empty_npm = tmp_path / "npm-empty.zip"
+    _zip(empty_npm, [])
+    sources = {"pip": str(tmp_path / "pypi.zip"), "npm": str(empty_npm)}
+    with pytest.raises(RuntimeError, match="--refresh --force"):
+        ob.build(sources=sources, log=lambda *a: None)
+    manifest = ob.build(sources=sources, log=lambda *a: None, force=True)
+    assert manifest["counts"] == {"pip": 2}
+    with pytest.raises(RuntimeError, match="no entries:"):          # an empty list: never, even forced
+        ob.build(sources={"pip": str(empty_npm)}, log=lambda *a: None, force=True)
+
+
+def test_r3_second_introduced_does_not_drop_later_ranges():
+    specs = ob._version_specs({"ranges": [
+        {"type": "ECOSYSTEM", "events": [{"introduced": "1.0"}, {"introduced": "2.0"}, {"fixed": "2.5"}]},
+        {"type": "ECOSYSTEM", "events": [{"introduced": "7.0"}, {"fixed": "7.1"}]},
+    ]})
+    assert specs == [">=1.0", ">=2.0,<2.5", ">=7.0,<7.1"]
+
+
+@pytest.mark.parametrize("outcome,says,never", [
+    ({"status": "blocked", "why": "offline_tampered", "local": True}, "integrity check", "reported as malicious"),
+    ({"status": "blocked", "why": "version_unresolved", "affected": ["==1.0"]}, "could not be worked out",
+     "It is on the stillrunning blocklist"),
+])
+def test_r3_scan_cli_says_why_it_blocked(home, capsys, outcome, says, never):
+    from stillrunning import cli
+    cli._print_outcome({"eco": "pip", "name": "requests", "version": None}, outcome)
+    out = capsys.readouterr().out
+    assert says in out and never not in out
+
+
+# ── --force only from a person; what it drops is printed and logged ──
+
+def test_force_is_refused_without_a_terminal(built, monkeypatch, capsys):
+    called = []
+    monkeypatch.setattr(ob, "build", lambda **k: called.append(k))
+    monkeypatch.setattr(ob.sys, "stdin", io.StringIO(""))           # cron, a script, a pipe
+    assert ob.main(["--refresh", "--force"]) == 2
+    assert called == [] and "only accepted from a person" in capsys.readouterr().err
+
+
+def test_force_alone_is_refused(built, capsys):
+    assert ob.main(["--force"]) == 2
+
+
+def test_force_from_a_terminal_reaches_the_build(built, monkeypatch):
+    called = []
+    monkeypatch.setattr(ob, "build", lambda **k: called.append(k))
+    monkeypatch.setattr(ob, "_a_person_is_typing", lambda: True)
+    monkeypatch.setattr(ob, "status", lambda: 0)
+    assert ob.main(["--refresh", "--force"]) == 0 and called == [{"force": True}]
+    called.clear()
+    monkeypatch.setattr(ob, "_a_person_is_typing", lambda: False)
+    assert ob.main(["--refresh"]) == 0 and called == [{"force": False}]     # plain refresh needs no terminal
+
+
+def test_automatic_refresh_and_the_hook_never_pass_force(home):
+    assert "--force" not in ob.cron_line()
+    import ast
+    hook_source = open(HOOK, encoding="utf-8").read()
+    tree = ast.parse(hook_source)
+    imported = {alias.name for node in ast.walk(tree) if isinstance(node, (ast.Import, ast.ImportFrom))
+                for alias in node.names} | {node.module or "" for node in ast.walk(tree) if isinstance(node, ast.ImportFrom)}
+    assert not any("offline_blocklist" in name for name in imported)        # the hook never builds
+    assert "offline_blocklist" not in hook_source and "refresh --force" not in hook_source
+    assert "force" not in ch.lookup.__code__.co_varnames and "force" not in ch.decide.__code__.co_varnames
+
+
+def test_forced_refresh_prints_logs_and_records_what_it_dropped(built, monkeypatch, tmp_path, capsys):
+    folder, _ = built
+    empty_npm = tmp_path / "npm-empty.zip"
+    _zip(empty_npm, [])
+    lines = []
+    manifest = ob.build(sources={"pip": str(tmp_path / "pypi.zip"), "npm": str(empty_npm)},
+                        log=lines.append, force=True)
+    assert any("FORCED" in l and "npm 2 -> 0" in l for l in lines), lines
+    logged = (folder / ob.FORCE_LOG).read_text()
+    assert "FORCED" in logged and "npm 2 -> 0" in logged
+    assert manifest["forced"]["dropped"] == ["npm 2 -> 0"]
+    ch._OFFLINE_STATE.clear()
+    assert ch._offline_db()[0] == "ok"                              # the record is covered by the MAC
+    ob.status()
+    assert "Built with --force, accepting: npm 2 -> 0" in capsys.readouterr().out
+
+
+def test_unforced_refresh_with_nothing_dropped_writes_no_force_log(built, monkeypatch, tmp_path):
+    folder, _ = built
+    ob.build(sources={"pip": str(tmp_path / "pypi.zip"), "npm": str(tmp_path / "npm.zip")}, log=lambda *a: None)
+    assert not (folder / ob.FORCE_LOG).exists()
+
+
+def test_status_survives_a_non_numeric_build_time(built, capsys):
+    folder, _ = built
+    path = folder / ch.OFFLINE_MANIFEST
+    doc = json.loads(path.read_text())
+    doc["built"] = "yesterday"
+    doc["mac"] = ch.offline_manifest_mac((folder / ch.OFFLINE_KEY).read_bytes().strip(), doc)
+    path.write_text(json.dumps(doc))
+    assert ob.status() == 3 and "build time unknown" in capsys.readouterr().out

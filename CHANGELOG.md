@@ -48,6 +48,16 @@ including known-malicious ones, instead of blocking them.
   `stillrunning blocklist --status` exits 3 and says STALE.
 - A refresh that would drop an ecosystem, or shrink one by more than half, is
   refused and the current list stays.
+- The offline list is asked first, for every package, before any network
+  lookup starts, so a listed package is never left to a lookup that times out;
+  and the verdict cache never answers for a package on the offline list (or for
+  anything while the list fails its check).
+- `stillrunning blocklist --refresh --force` accepts a refresh that was
+  refused for dropping an ecosystem or shrinking by more than half (an empty
+  list is still refused).
+- pip pins are compared in their standard form (PEP 440): `1.0.0-rc1`,
+  `1.0.0.rc1` and `1.0c1` all match a listed `1.0.0rc1` (also post, dev,
+  alpha/beta spellings), offline and on the hosted path.
 - Known limits are listed in the README (Offline blocklist).
 - A package the hook lets through without having been able to check that it
   exists on the registry now says so: `no known threat · existence on PyPI
