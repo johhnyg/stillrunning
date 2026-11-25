@@ -66,6 +66,13 @@ including known-malicious ones, instead of blocking them.
   record in the manifest's history; a manifest removed while the database or
   key is still there counts as tampering; `introduced: "0.0.0"` (any all-zero
   spelling) means every version.
+- The hook's own-command rules find `blocklist … --force/--unschedule` and
+  `whitelist … add/remove` wherever they stand among the command's words, so an
+  option with a value (`--token x`, `--name x`) before, between or after them
+  no longer hides them (the whitelist rule had the same gap before this
+  release). A failed first build no longer leaves a database without a
+  manifest (read as tampering), and any 0.0.0 pre-release (`0.0.0-0`,
+  `0.0.0-alpha`, `0.0.0a0`) as an `introduced` version means every version.
 - pip pins are compared in their standard form (PEP 440): `1.0.0-rc1`,
   `1.0.0.rc1` and `1.0c1` all match a listed `1.0.0rc1` (also post, dev,
   alpha/beta spellings), offline and on the hosted path.

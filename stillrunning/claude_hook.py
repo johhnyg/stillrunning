@@ -585,6 +585,21 @@ _ENV_WORDS = {"export", "declare", "typeset", "readonly", "local", "unset", "set
 _BLOCKLIST_SWITCH = re.compile(r"^--(force|unschedule)(=.*)?$|^--(f|fo|for|forc|uns|unsc|unsch|unsche|unsched|unschedu|unschedul)$")
 
 
+def _own_subcommand(rest):
+    """`stillrunning … blocklist … --force/--unschedule` or `… whitelist … add/remove …`.
+    Matched among ALL the plain words, wherever they stand: an option that takes
+    a value (`--token x`, `--name x`) puts that value first, so "the first plain
+    word" is not the subcommand."""
+    plain = [a for a in rest if not a.startswith("-")]
+    if "blocklist" in plain and any(_BLOCKLIST_SWITCH.match(a) for a in rest):
+        return True
+    if "whitelist" in plain:
+        after = plain[plain.index("whitelist") + 1:]
+        if "add" in after or "remove" in after:
+            return True
+    return False
+
+
 def _own_switch(cmd, start, program, args):
     """A command that changes stillrunning's own switches: a STILLRUNNING_*
     variable set or read, `stillrunning allow / remember / uninstall …`, or
@@ -599,10 +614,7 @@ def _own_switch(cmd, start, program, args):
     lowered = [t.lower() for t in cmd]
 
     def switches(rest):
-        plain = [a for a in rest if not a.startswith("-")]
-        return any(a in _SELF_ARGS or "uninstall" in a for a in rest) or \
-            plain[:2] == ["whitelist", "add"] or plain[:2] == ["whitelist", "remove"] or \
-            (plain[:1] == ["blocklist"] and any(_BLOCKLIST_SWITCH.match(a) for a in rest))
+        return any(a in _SELF_ARGS or "uninstall" in a for a in rest) or _own_subcommand(rest)
 
     for index, name in enumerate(names):
         module = None
@@ -622,9 +634,8 @@ def _own_switch(cmd, start, program, args):
         plain = [a for a in rest if not a.startswith("-")]
         if plain[:1] and plain[0] in ("remember", "forget", "allow", "shell-uninstall",
                                       "venv-uninstall") \
-                or (plain[:1] == ["blocklist"] and any(_BLOCKLIST_SWITCH.match(a) for a in rest)) \
-                or any(a in _SELF_ARGS and a.startswith("--") for a in rest) \
-                or plain[:2] == ["whitelist", "add"]:
+                or _own_subcommand(rest) \
+                or any(a in _SELF_ARGS and a.startswith("--") for a in rest):
             return True
     if "stillrunning" in lowered[start + 1:] and any(a in ("uninstall", "remove") for a in lowered) \
             and any(_is_installer(n) for n in names):
@@ -818,7 +829,8 @@ def _paths_touch_protection(command, cwds, depth):
 
 _SELF_PROTECT_TEXT = re.compile(
     r"stillrunning\b[^|;&\n]*(\ballow\b|uninstall|--block\b|--untrust\b|--trust\b|\bremember\b"
-    r"|\bforget\b|\bblocklist\b[^|;&\n]*--(force|unschedule|f\b|fo|for|forc|uns))"
+    r"|\bforget\b|\bblocklist\b[^|;&\n]*--(force|unschedule|f\b|fo|for|forc|uns)"
+    r"|\bwhitelist\b[^|;&\n]*\b(add|remove)\b)"
     r"|uninstall\s+(-\S+\s+)*stillrunning\b|\.stillrunning|\.claude/sett"
     r"|(?<![A-Za-z0-9_])STILLRUNNING_[A-Z]", re.I)
 

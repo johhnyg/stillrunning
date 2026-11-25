@@ -94,7 +94,7 @@ def _version_specs(affected):
                 if introduced is not None:                 # an open interval: everything from there
                     specs.append(">=" + introduced)
                 introduced = str(event["introduced"])
-                if _ZERO.match(introduced):                # "0", "0.0.0", "v0": the very first version
+                if _ZERO.match(introduced):                # "0", "0.0.0", "0.0.0-0": the very first version
                     introduced = "0"
             elif "fixed" in event or "last_affected" in event:
                 end = str(event.get("fixed", event.get("last_affected")))
@@ -124,7 +124,9 @@ def _download(url, dest):
 
 
 OSV_ECOSYSTEM = {"pip": "PyPI", "npm": "npm"}
-_ZERO = __import__("re").compile(r"^v?0+(\.0+)*$")
+_ZERO = __import__("re").compile(
+    r"^v?0+(?:\.0+)*(?:$|[-+]|[._]?[a-z])", __import__("re").I)   # 0, 0.0.0, and any 0.0.0 pre-release:
+                                                                   # 0.0.0-0, -alpha, -rc.1, a0, .dev0, +x
 FORCED_HISTORY_KEEP = 50
 
 
@@ -281,16 +283,29 @@ def _build(folder, sources, log, force=False):
         sha = digest.hexdigest()
         name = "blocklist-%s.sqlite" % sha[:16]
         final_db = os.path.join(folder, name)
+        key = _key(folder)                     # before the database lands: nothing after it can fail on the key
+        already_there = os.path.exists(final_db)
+        size = os.path.getsize(tmp_db)
         os.replace(tmp_db, final_db)
-        manifest = {"v": 1, "db": name, "sha256": sha, "size": os.path.getsize(final_db),
+        manifest = {"v": 1, "db": name, "sha256": sha, "size": size,
                     "built": int(time.time()), "counts": counts, "source": "OSV.dev MAL advisories"}
         if forced:
             manifest["forced"] = forced                 # covered by the MAC; --status shows it
             history.append(forced)
         if history:                                     # carried by every later refresh, never dropped
             manifest["forced_history"] = history[-FORCED_HISTORY_KEEP:]
-        manifest["mac"] = claude_hook.offline_manifest_mac(_key(folder), manifest)
-        _write_manifest(folder, manifest)
+        manifest["mac"] = claude_hook.offline_manifest_mac(key, manifest)
+        try:
+            _write_manifest(folder, manifest)
+        except BaseException:
+            # A database with no manifest pointing at it would read as tampering
+            # (every install blocked): take back the one this build just added.
+            if not already_there:
+                try:
+                    os.unlink(final_db)
+                except OSError:  # lint: allowed-silent(removed by the next build's _prune)
+                    pass
+            raise
         _prune(folder, keep=name)
         log("offline blocklist: %s (%d bytes, %s) in %.0f s"
             % (name, manifest["size"], ", ".join("%s %d" % kv for kv in sorted(counts.items())),
@@ -481,6 +496,8 @@ def main(argv=None):
         try:
             build(force=args.force)
         except Exception as exc:      # the old list (if any) stays in place and verified
-            print("Offline blocklist NOT refreshed: %s: %s" % (type(exc).__name__, exc), file=sys.stderr)
+            print("Offline blocklist NOT refreshed: %s: %s. Whatever was in place before this "
+                  "refresh is unchanged (see `stillrunning blocklist --status`)." % (type(exc).__name__, exc),
+                  file=sys.stderr)
             return 1
     return status()

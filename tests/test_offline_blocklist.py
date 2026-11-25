@@ -1048,3 +1048,98 @@ def test_no_list_at_all_still_falls_through_without_sqlite(home, monkeypatch):
     monkeypatch.setattr(ch, "_query", lambda *a, **k: {"status": "ok"})
     monkeypatch.setattr(ch, "_on_registry", lambda *a, **k: True)
     assert ch.lookup({"eco": "pip", "name": "requests", "version": None})["status"] == "ok"
+
+
+# ── review 5: an option with a value before, between or after the subcommand ──
+
+_VALUE_OPTIONS = ["--token x", "--token=x", "--tok x", "--tok=x", "--to x",
+                  "--name x", "--name=x", "--nam x", "--na=x"]
+_OWN_SUBCOMMANDS = {
+    "blocklist-force": ("blocklist", ["--refresh", "--force"]),
+    "blocklist-unschedule": ("blocklist", ["--unschedule"]),
+    "whitelist-add": ("whitelist", ["add", "evil"]),
+    "whitelist-remove": ("whitelist", ["remove", "evil"]),
+}
+
+
+def _placed(sub, args, option, where):
+    words = [sub] + args
+    if where == "before":
+        words = [option] + words
+    elif where == "between":
+        words = [sub, option] + args
+    else:
+        words = words + [option]
+    return " ".join(words)
+
+
+@pytest.mark.parametrize("option", _VALUE_OPTIONS)
+@pytest.mark.parametrize("where", ["before", "between", "after"])
+@pytest.mark.parametrize("kind", sorted(_OWN_SUBCOMMANDS))
+@pytest.mark.parametrize("launcher", ["stillrunning {}", "python3 -m stillrunning {}",
+                                      "script -qc 'stillrunning {}' /dev/null", "sr=stillrunning; $sr {}"])
+def test_r5_value_options_never_hide_an_own_subcommand(home, option, where, kind, launcher):
+    """IMPORTANT (review 5): `stillrunning --token x blocklist --unschedule` ran
+    without asking because `x` was taken for the subcommand. The whitelist rule
+    had the same flaw already on main."""
+    sub, args = _OWN_SUBCOMMANDS[kind]
+    command = launcher.format(_placed(sub, args, option, where))
+    assert ch.touches_protection(command), command
+
+
+@pytest.mark.parametrize("command", [
+    "stillrunning --token x blocklist --refresh", "stillrunning --name x blocklist --status",
+    "stillrunning blocklist --schedule --token x", "stillrunning --token x scan requests",
+    "stillrunning whitelist list --name x", "stillrunning --name x status",
+])
+def test_r5_ordinary_commands_with_value_options_do_not_ask(home, command):
+    assert not ch.touches_protection(command), command
+
+
+def test_r5_first_build_that_fails_writing_the_manifest_leaves_no_orphan(home, monkeypatch, tmp_path):
+    """MINOR 1 (review 5): a crash after the database landed but before its
+    manifest left a database with no manifest: read as tampering."""
+    feed = tmp_path / "feed.zip"
+    _zip(feed, PYPI)
+    monkeypatch.setattr(ob, "_download", lambda url, dest: open(dest, "wb").write(open(str(url), "rb").read()))
+
+    def disk_full(folder, manifest):
+        raise OSError(28, "No space left on device")
+    monkeypatch.setattr(ob, "_write_manifest", disk_full)
+    with pytest.raises(OSError):
+        ob.build(sources={"pip": str(feed)}, log=lambda *a: None)
+    state = home / ".stillrunning"
+    assert not [f for f in os.listdir(str(state)) if ch._OFFLINE_DB_NAME.match(f)]
+    ch._OFFLINE_STATE.clear()
+    assert ch._offline_db()[0] != "ok"
+    # a key may remain (it is written first); with no database and no manifest that is not a list
+    (state / ch.OFFLINE_KEY).unlink(missing_ok=True)
+    ch._OFFLINE_STATE.clear()
+    assert ch._offline_db() == ("missing", None)
+
+
+def test_r5_failed_refresh_over_a_good_list_keeps_it_working(built, monkeypatch, tmp_path):
+    folder, manifest = built
+    monkeypatch.setattr(ob, "_write_manifest", lambda f, m: (_ for _ in ()).throw(OSError(28, "disk full")))
+    with pytest.raises(OSError):
+        ob.build(sources={"pip": str(tmp_path / "pypi.zip"), "npm": str(tmp_path / "npm.zip")}, log=lambda *a: None)
+    ch._OFFLINE_STATE.clear()
+    assert ch._offline_db()[0] == "ok" and (folder / manifest["db"]).exists()     # same content: not removed
+
+
+def test_r5_failed_refresh_message_does_not_promise_an_old_list(home, monkeypatch, capsys):
+    monkeypatch.setattr(ob, "build", lambda **k: (_ for _ in ()).throw(RuntimeError("feed down")))
+    assert ob.main(["--refresh"]) == 1
+    err = capsys.readouterr().err
+    assert "Whatever was in place before this refresh is unchanged" in err and "stays in place and verified" not in err
+
+
+@pytest.mark.parametrize("zero", ["0.0.0-0", "0.0.0-alpha", "0.0.0-rc.1", "0.0.0a0", "0.0.0.dev0", "0.0.0+local",
+                                  "v0.0.0-beta.2", "0.0.0_rc1"])
+def test_r5_any_zero_pre_release_introduced_means_every_version(zero):
+    assert ob._version_specs({"ranges": [{"type": "SEMVER", "events": [{"introduced": zero}]}]}) == "*"
+
+
+@pytest.mark.parametrize("not_zero", ["0.1", "0.0.1", "0.0.1-0", "0.10", "0.0.0.1", "1.0.0-0"])
+def test_r5_versions_after_zero_are_not_widened(not_zero):
+    assert ob._version_specs({"ranges": [{"type": "SEMVER", "events": [{"introduced": not_zero}]}]}) == [">=" + not_zero]

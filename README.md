@@ -136,6 +136,14 @@ Known limits (tracked, not yet addressed):
 
 - The force log file (`blocklist_force.log`) is not covered by the MAC; the
   manifest's forced-refresh history is.
+- A refresh over a list that fails its integrity check starts afresh: the
+  forced-refresh history and the "shrank by more than half" comparison come
+  from the list in place, so they are lost with it. (Damaging the list needs a
+  write in `~/.stillrunning`, which the hook already asks about.)
+- `--unschedule` is recognised in full and in the abbreviations argparse
+  accepts today (`--uns…`); shorter ones (`--un`, `--u`) are rejected by
+  argparse as ambiguous with `--uninstall-hook*`. Renaming those options would
+  make them valid and they would then also need asking about.
 
 - The HMAC is a per-machine MAC, not a third-party signature: code running as
   your user can read the key and re-sign a changed list, and can put back an
