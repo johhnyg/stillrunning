@@ -1109,13 +1109,11 @@ def test_r5_first_build_that_fails_writing_the_manifest_leaves_no_orphan(home, m
     with pytest.raises(OSError):
         ob.build(sources={"pip": str(feed)}, log=lambda *a: None)
     state = home / ".stillrunning"
-    assert not [f for f in os.listdir(str(state)) if ch._OFFLINE_DB_NAME.match(f)]
+    left = sorted(os.listdir(str(state)))
+    assert not [f for f in left if ch._OFFLINE_DB_NAME.match(f)], left
+    assert ch.OFFLINE_KEY not in left and not [f for f in left if f.endswith(".tmp")], left
     ch._OFFLINE_STATE.clear()
-    assert ch._offline_db()[0] != "ok"
-    # a key may remain (it is written first); with no database and no manifest that is not a list
-    (state / ch.OFFLINE_KEY).unlink(missing_ok=True)
-    ch._OFFLINE_STATE.clear()
-    assert ch._offline_db() == ("missing", None)
+    assert ch._offline_db() == ("missing", None)       # as if nothing was ever built: no install blocked
 
 
 def test_r5_failed_refresh_over_a_good_list_keeps_it_working(built, monkeypatch, tmp_path):
@@ -1143,3 +1141,66 @@ def test_r5_any_zero_pre_release_introduced_means_every_version(zero):
 @pytest.mark.parametrize("not_zero", ["0.1", "0.0.1", "0.0.1-0", "0.10", "0.0.0.1", "1.0.0-0"])
 def test_r5_versions_after_zero_are_not_widened(not_zero):
     assert ob._version_specs({"ranges": [{"type": "SEMVER", "events": [{"introduced": not_zero}]}]}) == [">=" + not_zero]
+
+
+
+# ── review 6: words only known at run time, or handed over by another program ──
+
+@pytest.mark.parametrize("command", [
+    "U=--unschedule; stillrunning blocklist $U", "X=blocklist; stillrunning $X --unschedule",
+    "stillrunning blocklist $(echo --unschedule)", "stillrunning $(echo blocklist) --unschedule",
+    "stillrunning ${B:-blocklist} --unschedule", "stillrunning blocklist `echo --unschedule`",
+    "echo --unschedule | xargs stillrunning blocklist", "echo blocklist --unschedule | xargs stillrunning",
+    'f(){ stillrunning blocklist "$@"; }; f --unschedule', 'parallel stillrunning ::: "blocklist --unschedule"',
+    'F=--force; script -qc "stillrunning blocklist --refresh $F" /dev/null',
+    "script -qc 'F=--force; stillrunning blocklist --refresh $F' /dev/null",
+    "A=add; stillrunning whitelist $A evil", "W=whitelist; stillrunning $W add evil",
+    "echo whitelist add evil | xargs stillrunning",
+    # the same gap on main's own rules
+    "X=allow; stillrunning $X evil", "R=remember; stillrunning $R last", "U=--uninstall-hook-claude-code; stillrunning $U",
+    "sr=stillrunning; $sr blocklist $U", "nice stillrunning $X evil", "python3 -m stillrunning $X evil",
+    "env stillrunning $(cat cmd.txt)", "echo allow evil | xargs -n2 stillrunning",
+])
+def test_r6_run_time_words_in_a_stillrunning_command_ask(home, command):
+    """IMPORTANT (review 6): a switch supplied by expansion or by xargs/parallel
+    ran without asking; this held for every own-command rule, not only the new ones."""
+    assert ch.touches_protection(command), command
+    assert ch.decide(command, env={})["action"] == "ask", command
+
+
+@pytest.mark.parametrize("command", [
+    "stillrunning scan requests", "stillrunning --version", "stillrunning blocklist --status",
+    "stillrunning blocklist --refresh", "echo $HOME", "ls | xargs grep foo", 'git commit -m "$MSG"',
+    "stillrunning scan requests && echo $?", "npm install --force lodash", "parallel gzip ::: a b",
+])
+def test_r6_ordinary_commands_still_do_not_ask(home, command):
+    assert not ch.touches_protection(command), command
+
+
+def test_r6_failed_manifest_write_leaves_no_temp_file(built, monkeypatch, tmp_path):
+    folder, _ = built
+    def fail_after_writing(path, tmp, manifest):
+        with open(tmp, "w") as handle:
+            handle.write("{}")
+        raise OSError(28, "No space left on device")
+    monkeypatch.setattr(ob, "_write_manifest_to", fail_after_writing)
+    with pytest.raises(OSError):
+        ob.build(sources={"pip": str(tmp_path / "pypi.zip"), "npm": str(tmp_path / "npm.zip")}, log=lambda *a: None)
+    assert not [f for f in os.listdir(str(folder)) if f.endswith(".tmp")]
+
+
+def test_r6_an_interrupt_never_deletes_the_database_a_manifest_points_at(built, monkeypatch, tmp_path):
+    folder, _ = built
+    real = ob._write_manifest_to
+
+    def interrupted(path, tmp, manifest):     # the new manifest lands, then Ctrl-C before returning
+        real(path, tmp, manifest)
+        raise KeyboardInterrupt
+    monkeypatch.setattr(ob, "_write_manifest_to", interrupted)
+    big = [_advisory("MAL-K-%d" % i, "PyPI", "k-%d" % i, ranges=ALL_VERSIONS) for i in range(4)]
+    feed = tmp_path / "k.zip"
+    _zip(feed, big)
+    with pytest.raises(KeyboardInterrupt):
+        ob.build(sources={"pip": str(feed), "npm": str(tmp_path / "npm.zip")}, log=lambda *a: None)
+    ch._OFFLINE_STATE.clear()
+    assert ch._offline_db()[0] == "ok"        # the manifest and its database are both there

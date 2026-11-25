@@ -128,6 +128,26 @@ ecosystem or shrink one by more than half; it is accepted only from a person at
 a terminal, and the Claude Code hook asks a person before an agent may run it
 (or `--unschedule`). What a forced refresh dropped is printed, appended to
 `~/.stillrunning/blocklist_force.log` and kept in the manifest's history.
+A `stillrunning` command run through Claude Code whose words are only known at
+run time (a variable such as `$X`, `$(…)`, backticks, `"$@"`) or that is fed
+by `xargs` or `parallel` is asked about, because it could be any of
+stillrunning's own switches (`allow`, `remember`, uninstall, `blocklist
+--force`…): `stillrunning scan $PKG` asks too. Write the value out, or run it
+yourself in a terminal.
+**What the hook's command matching covers.** It recognises stillrunning's own
+commands (`allow`, `remember`, uninstall, `whitelist add/remove`, `blocklist
+--force/--unschedule`) when they are spelled out on the command line, in any
+literal spelling, and when part of them is only known at run time (a variable,
+`$(…)`, backticks, `"$@"`, or words fed by `xargs`/`parallel`), which asks.
+Indirect execution is outside what command matching can see: `eval` of a
+built-up string, shell aliases or functions defined elsewhere, script files,
+other interpreters (`python -c`, `node -e`, …) and decoded payloads (base64
+and similar). Those are a known limit of command matching. A separate layer does
+not depend on it: commands and Write/Edit calls that name stillrunning's
+settings, state files (`~/.stillrunning`), its own code or Claude Code's
+settings are checked by path, and asked about. That path layer has known gaps
+of its own (tracked in the issue tracker), but they are not about how a
+stillrunning command is spelled.
 To switch the offline list off, remove all the `blocklist*` files in
 `~/.stillrunning` (removing only the manifest while the database or key is
 still there counts as tampering and blocks every install).

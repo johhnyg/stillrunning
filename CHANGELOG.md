@@ -73,6 +73,13 @@ including known-malicious ones, instead of blocking them.
   release). A failed first build no longer leaves a database without a
   manifest (read as tampering), and any 0.0.0 pre-release (`0.0.0-0`,
   `0.0.0-alpha`, `0.0.0a0`) as an `introduced` version means every version.
+- A `stillrunning` command whose words are only known at run time (`$X`,
+  `$(…)`, backticks, `"$@"`) or that `xargs`/`parallel` feeds is asked about:
+  `X=allow; stillrunning $X evil` and `… | xargs stillrunning blocklist` ran
+  without asking, for every own switch (the `allow`/`remember`/uninstall rules
+  had this gap before this release). `stillrunning scan $PKG` now asks too.
+- A failed first build also removes the key it created and its temporary
+  manifest, so nothing is left that reads as tampering.
 - pip pins are compared in their standard form (PEP 440): `1.0.0-rc1`,
   `1.0.0.rc1` and `1.0c1` all match a listed `1.0.0rc1` (also post, dev,
   alpha/beta spellings), offline and on the hosted path.

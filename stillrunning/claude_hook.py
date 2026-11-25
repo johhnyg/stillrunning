@@ -580,6 +580,7 @@ _SELF_ARGS = {"allow", "--allow", "--block", "--untrust", "--trust", "remember",
               "shell-uninstall", "venv-uninstall", "--uninstall-hook",
               "--uninstall-hook-claude-code"}
 _ENV_WORDS = {"export", "declare", "typeset", "readonly", "local", "unset", "set", "setenv"}
+_ARG_FEEDERS = {"xargs", "parallel"}
 # `stillrunning blocklist --force` (accept a list that drops or halves part of the
 # blocklist) and `--unschedule` (stop refreshing it) change the protection itself
 _BLOCKLIST_SWITCH = re.compile(r"^--(force|unschedule)(=.*)?$|^--(f|fo|for|forc|uns|unsc|unsch|unsche|unsched|unschedu|unschedul)$")
@@ -626,6 +627,14 @@ def _own_switch(cmd, start, program, args):
             return True         # `python -m stillrunning.remembered …`: any inner module
         if name == "stillrunning" or module == "stillrunning":
             if switches(lowered[index + 1:]):
+                return True
+            # A word only known at run time (`$X`, `${X:-…}`, `$(…)`, `` `…` ``, "$@")
+            # could be any of the switches above: `X=allow; stillrunning $X evil`.
+            if any("$" in t or "`" in t for t in cmd[index + 1:]):
+                return True
+            # Words handed over by another program (`… | xargs stillrunning`,
+            # `parallel stillrunning ::: …`) are not on the command line at all.
+            if any(n in _ARG_FEEDERS for n in names[:index]):
                 return True
     # `$sr remember last`, `$(which stillrunning) allow x`: the program is
     # only known at run time and the words after it are our own switches.
@@ -830,7 +839,8 @@ def _paths_touch_protection(command, cwds, depth):
 _SELF_PROTECT_TEXT = re.compile(
     r"stillrunning\b[^|;&\n]*(\ballow\b|uninstall|--block\b|--untrust\b|--trust\b|\bremember\b"
     r"|\bforget\b|\bblocklist\b[^|;&\n]*--(force|unschedule|f\b|fo|for|forc|uns)"
-    r"|\bwhitelist\b[^|;&\n]*\b(add|remove)\b)"
+    r"|\bwhitelist\b[^|;&\n]*\b(add|remove)\b|\s[^|;&\n]*[$`])"
+    r"|\b(xargs|parallel)\b[^|;&\n]*\bstillrunning\b"
     r"|uninstall\s+(-\S+\s+)*stillrunning\b|\.stillrunning|\.claude/sett"
     r"|(?<![A-Za-z0-9_])STILLRUNNING_[A-Z]", re.I)
 

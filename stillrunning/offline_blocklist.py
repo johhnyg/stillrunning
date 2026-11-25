@@ -283,6 +283,7 @@ def _build(folder, sources, log, force=False):
         sha = digest.hexdigest()
         name = "blocklist-%s.sqlite" % sha[:16]
         final_db = os.path.join(folder, name)
+        key_was_there = os.path.exists(os.path.join(folder, claude_hook.OFFLINE_KEY))
         key = _key(folder)                     # before the database lands: nothing after it can fail on the key
         already_there = os.path.exists(final_db)
         size = os.path.getsize(tmp_db)
@@ -297,14 +298,13 @@ def _build(folder, sources, log, force=False):
         manifest["mac"] = claude_hook.offline_manifest_mac(key, manifest)
         try:
             _write_manifest(folder, manifest)
-        except BaseException:
-            # A database with no manifest pointing at it would read as tampering
-            # (every install blocked): take back the one this build just added.
+        except Exception:
+            # A database or key with no manifest pointing at them would read as
+            # tampering (every install blocked): take back what this build added.
             if not already_there:
-                try:
-                    os.unlink(final_db)
-                except OSError:  # lint: allowed-silent(removed by the next build's _prune)
-                    pass
+                _remove_quietly(final_db)
+            if not key_was_there and not os.path.exists(os.path.join(folder, claude_hook.OFFLINE_MANIFEST)):
+                _remove_quietly(os.path.join(folder, claude_hook.OFFLINE_KEY))
             raise
         _prune(folder, keep=name)
         log("offline blocklist: %s (%d bytes, %s) in %.0f s"
@@ -359,9 +359,24 @@ def _previous_manifest(folder):
         claude_hook._OFFLINE_STATE.clear()
 
 
+def _remove_quietly(path):
+    try:
+        os.unlink(path)
+    except OSError:  # lint: allowed-silent(already gone, or still open on Windows: the next build removes it)
+        pass
+
+
 def _write_manifest(folder, manifest):
     path = os.path.join(folder, claude_hook.OFFLINE_MANIFEST)
     tmp = "%s.%d.tmp" % (path, os.getpid())
+    try:
+        _write_manifest_to(path, tmp, manifest)
+    except Exception:
+        _remove_quietly(tmp)
+        raise
+
+
+def _write_manifest_to(path, tmp, manifest):
     fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
     with os.fdopen(fd, "w", encoding="utf-8") as handle:
         json.dump(manifest, handle, sort_keys=True)
