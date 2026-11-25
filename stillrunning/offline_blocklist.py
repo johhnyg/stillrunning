@@ -213,6 +213,7 @@ def _build(folder, sources, log):
     fd, tmp_db = tempfile.mkstemp(prefix=".blocklist-build-", suffix=".sqlite", dir=folder)
     os.close(fd)
     counts = {}
+    conn = None
     try:
         conn = sqlite3.connect(tmp_db)
         conn.execute("PRAGMA journal_mode=OFF")
@@ -246,6 +247,7 @@ def _build(folder, sources, log):
             raise RuntimeError("no entries: refusing to replace the blocklist with an empty one")
         conn.execute("VACUUM")
         conn.close()
+        conn = None
         with open(tmp_db, "r+b") as handle:          # Windows: fsync needs a writable handle
             import hashlib
             digest = hashlib.sha256()
@@ -266,8 +268,15 @@ def _build(folder, sources, log):
                time.time() - started))
         return manifest
     finally:
+        # Windows cannot delete a file SQLite still has open: close it first, and
+        # never let the cleanup hide the error that ended the build.
+        if conn is not None:
+            conn.close()
         if os.path.exists(tmp_db):
-            os.unlink(tmp_db)
+            try:
+                os.unlink(tmp_db)
+            except OSError:  # lint: allowed-silent(removed by _clean_leftovers on the next build)
+                pass
 
 
 def _write_manifest(folder, manifest):
