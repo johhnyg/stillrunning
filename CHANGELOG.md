@@ -37,7 +37,12 @@ including known-malicious ones, instead of blocking them.
   malicious, installed with no exact version, is now **blocked** when the
   version that would install cannot be worked out (it used to ask). When the
   latest version can be worked out it is checked as before, so `npm install
-  axios` or `chalk` still installs a release that is not listed.
+  axios` or `chalk` still installs a release that is not listed. That version
+  is checked against the offline list too (the hosted list can lag it), and a
+  pinned version inside a listed numeric range is blocked offline.
+- A list more than 3 days old warns on every install check (it still blocks
+  everything on it); `stillrunning blocklist --status` exits 3 and says STALE.
+- Known limits are listed in the README (Offline blocklist).
 - A package the hook lets through without having been able to check that it
   exists on the registry now says so: `no known threat · existence on PyPI
   NOT verified`.

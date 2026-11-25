@@ -36,7 +36,7 @@ SOURCES = {
     "npm": "https://osv-vulnerabilities.storage.googleapis.com/npm/all.zip",
 }
 MAX_ZIP_BYTES = 1024 ** 3            # PyPI ~40 MB, npm ~220 MB today
-MAX_MEMBER_BYTES = 1024 ** 2         # one MAL-*.json advisory is a few KB
+MAX_MEMBER_BYTES = 5 * 1024 ** 2     # one MAL-*.json advisory is a few KB (osv_bulk uses the same cap)
 MAX_VERSIONS = 200
 BATCH = 5000
 KEEP_OLD_DATABASES = 1
@@ -68,28 +68,38 @@ def _key(folder):
     except FileNotFoundError:  # lint: allowed-silent(first build: a new key is made below)
         pass
     key = secrets.token_hex(32).encode("ascii")
-    fd = os.open(path + ".tmp", os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    tmp = "%s.%d.tmp" % (path, os.getpid())
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
     with os.fdopen(fd, "wb") as handle:
         handle.write(key)
-    os.replace(path + ".tmp", path)
+    os.replace(tmp, path)
     return key
 
 
 def _version_specs(affected):
-    """OSV `affected` → "*" (every version) or a list of specifiers."""
-    specs = ["==" + str(v) for v in (affected.get("versions") or [])[:MAX_VERSIONS]]
+    """OSV `affected` → "*" (every version) or a list of specifiers. Anything
+    it cannot represent exactly is widened to "*" (over-blocking is the safe side)."""
+    versions = affected.get("versions") or []
+    if len(versions) > MAX_VERSIONS:
+        return "*"
+    specs = ["==" + str(v) for v in versions]
     for rng in affected.get("ranges") or []:
-        if rng.get("type") not in ("ECOSYSTEM", "SEMVER"):
+        if not isinstance(rng, dict) or rng.get("type") not in ("ECOSYSTEM", "SEMVER"):
             continue
-        introduced = fixed = None
+        introduced = None
         for event in rng.get("events") or []:
-            introduced = event.get("introduced", introduced)
-            fixed = event.get("fixed", fixed)
-        if introduced in (None, "0") and fixed is None:
+            if "introduced" in event:
+                if introduced is not None:                 # an open interval: everything from there
+                    return "*" if introduced == "0" else specs + [">=" + str(introduced)]
+                introduced = str(event["introduced"])
+            elif "fixed" in event or "last_affected" in event:
+                end = str(event.get("fixed", event.get("last_affected")))
+                op = "<" if "fixed" in event else "<="
+                specs.append(op + end if introduced in (None, "0") else ">=%s,%s%s" % (introduced, op, end))
+                introduced = None
+        if introduced == "0":
             return "*"
-        if fixed is not None:
-            specs.append(("<" + fixed) if introduced in (None, "0") else (">=%s,<%s" % (introduced, fixed)))
-        elif introduced is not None:
+        if introduced is not None:
             specs.append(">=" + introduced)
     return specs or "*"
 
@@ -109,44 +119,96 @@ def _download(url, dest):
     return total
 
 
-def _ingest(conn, eco, zip_path):
-    """Stream one ecosystem's zip into the staging table, one member at a time."""
-    rows, kept, withdrawn = [], 0, 0
+OSV_ECOSYSTEM = {"pip": "PyPI", "npm": "npm"}
+
+
+def _ingest(conn, eco, zip_path, log=print):
+    """Stream one ecosystem's zip into the staging table, one member at a time.
+    A bad advisory is skipped and counted, never the end of the refresh."""
+    rows, kept, withdrawn, skipped = [], 0, 0, 0
     with zipfile.ZipFile(zip_path) as archive:
         for info in archive.infolist():
             base = os.path.basename(info.filename)
-            if not base.startswith("MAL-") or info.file_size > MAX_MEMBER_BYTES:
+            if not base.startswith("MAL-"):
+                continue
+            if info.file_size > MAX_MEMBER_BYTES:
+                skipped += 1
                 continue
             try:
                 with archive.open(info) as handle:
                     data = json.load(handle)
-            except (ValueError, OSError, zipfile.BadZipFile):
-                continue
-            if data.get("withdrawn"):
-                withdrawn += 1
-                continue
-            advisory = str(data.get("id") or base[:-5])[:64]
-            for affected in data.get("affected") or []:
-                name = str((affected.get("package") or {}).get("name") or "").strip()
-                if not name:
+                if data.get("withdrawn"):
+                    withdrawn += 1
                     continue
-                specs = _version_specs(affected)
-                key = claude_hook.normalize(eco, name)
-                for spec in (["*"] if specs == "*" else specs):
-                    rows.append((eco, key, spec, advisory))
-                kept += 1
+                advisory = str(data.get("id") or base[:-5])[:64]
+                for affected in data.get("affected") or []:
+                    package = affected.get("package") or {}
+                    name = str(package.get("name") or "").strip()
+                    if not name or package.get("ecosystem", OSV_ECOSYSTEM[eco]) != OSV_ECOSYSTEM[eco]:
+                        continue
+                    specs = _version_specs(affected)
+                    key = claude_hook.normalize(eco, name)
+                    for spec in (["*"] if specs == "*" else specs):
+                        rows.append((eco, key, spec, advisory))
+                    kept += 1
+            except (ValueError, OSError, zipfile.BadZipFile, AttributeError, TypeError, KeyError):
+                skipped += 1
+                continue
             if len(rows) >= BATCH:
                 conn.executemany("INSERT INTO staging VALUES (?, ?, ?, ?)", rows)
                 rows = []
     if rows:
         conn.executemany("INSERT INTO staging VALUES (?, ?, ?, ?)", rows)
+    if skipped:
+        log("%s: WARNING: %d advisories skipped (too large or malformed)" % (eco, skipped))
     return kept, withdrawn
+
+
+class BuildBusy(RuntimeError):
+    pass
+
+
+def _lock(folder):
+    """One build at a time (cron and a manual run): → an open lock file, or BuildBusy."""
+    handle = open(os.path.join(folder, "blocklist.build.lock"), "a+")
+    try:
+        if os.name == "nt":
+            import msvcrt
+            msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
+        else:
+            import fcntl
+            fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        handle.close()
+        raise BuildBusy("another blocklist build is running")
+    return handle
+
+
+def _clean_leftovers(folder, older_than_s=3600):
+    """Temp files of a build that was killed (timeout, reboot): they can be ~250 MB."""
+    now = time.time()
+    for name in os.listdir(folder):
+        if name.startswith(".blocklist-"):
+            path = os.path.join(folder, name)
+            try:
+                if now - os.path.getmtime(path) > older_than_s:
+                    os.unlink(path)
+            except OSError:  # lint: allowed-silent(still in use on Windows: removed next time)
+                pass
 
 
 def build(folder=None, sources=None, log=print):
     """Build a new database and switch the manifest to it. → the manifest."""
     folder = folder or _state()
-    sources = sources or SOURCES
+    lock = _lock(folder)
+    try:
+        _clean_leftovers(folder)
+        return _build(folder, sources or SOURCES, log)
+    finally:
+        lock.close()
+
+
+def _build(folder, sources, log):
     started = time.time()
     fd, tmp_db = tempfile.mkstemp(prefix=".blocklist-build-", suffix=".sqlite", dir=folder)
     os.close(fd)
@@ -162,7 +224,7 @@ def build(folder=None, sources=None, log=print):
             os.close(zfd)
             try:
                 size = _download(url, zip_path)
-                kept, withdrawn = _ingest(conn, eco, zip_path)
+                kept, withdrawn = _ingest(conn, eco, zip_path, log)
                 conn.commit()
                 log("%s: %.1f MB downloaded, %d advisories kept, %d withdrawn skipped"
                     % (eco, size / 1048576.0, kept, withdrawn))
@@ -184,7 +246,7 @@ def build(folder=None, sources=None, log=print):
             raise RuntimeError("no entries: refusing to replace the blocklist with an empty one")
         conn.execute("VACUUM")
         conn.close()
-        with open(tmp_db, "rb") as handle:
+        with open(tmp_db, "r+b") as handle:          # Windows: fsync needs a writable handle
             import hashlib
             digest = hashlib.sha256()
             for chunk in iter(lambda: handle.read(1 << 20), b""):
@@ -210,7 +272,7 @@ def build(folder=None, sources=None, log=print):
 
 def _write_manifest(folder, manifest):
     path = os.path.join(folder, claude_hook.OFFLINE_MANIFEST)
-    tmp = path + ".tmp"
+    tmp = "%s.%d.tmp" % (path, os.getpid())
     fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
     with os.fdopen(fd, "w", encoding="utf-8") as handle:
         json.dump(manifest, handle, sort_keys=True)
@@ -254,6 +316,10 @@ def status():
     print("Offline blocklist verified: %s, %d bytes, %s, built %.1f h ago"
           % (manifest["db"], manifest["size"],
              ", ".join("%s %d" % kv for kv in sorted(manifest.get("counts", {}).items())), age_h))
+    stale = claude_hook.offline_stale_note()
+    if stale:
+        print("STALE: " + stale)
+        return 3
     return 0
 
 

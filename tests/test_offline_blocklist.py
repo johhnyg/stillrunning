@@ -293,7 +293,7 @@ def test_build_is_atomic_and_keeps_the_old_list_on_failure(built, monkeypatch, t
     folder, manifest = built
     before = (folder / ch.OFFLINE_MANIFEST).read_bytes()
 
-    def broken(conn, eco, zip_path):
+    def broken(conn, eco, zip_path, log=None):
         raise RuntimeError("feed broke mid-way")
     monkeypatch.setattr(ob, "_ingest", broken)
     with pytest.raises(RuntimeError):
@@ -350,7 +350,14 @@ def test_cron_line_is_low_priority_and_single_instance(home):
                                 "python3 -c \"open('{p}','w')\"", "ln -sf /tmp/x {p}", "truncate -s0 {p}"])
 def test_offline_blocklist_files_are_self_protected(home, target, op):
     path = str(home / ".stillrunning" / target)
-    for spelling in (path, "~/.stillrunning/" + target, "$HOME/.stillrunning/" + target):
+    spellings = [path, "~/.stillrunning/" + target, "$HOME/.stillrunning/" + target]
+    if os.name == "nt":
+        # an unquoted C:\… is not that path in bash (the backslashes are escapes);
+        # these are the spellings Git Bash really uses for it
+        drive, rest = os.path.splitdrive(path)
+        spellings[0] = path.replace("\\", "/")
+        spellings.append("/" + drive[0].lower() + rest.replace("\\", "/"))
+    for spelling in spellings:
         assert ch.touches_protection(op.format(p=spelling)), op.format(p=spelling)
 
 
@@ -365,3 +372,220 @@ def test_write_tool_to_offline_blocklist_files_asks(home, target):
                              "cwd": str(home)}))
     answer = json.loads(out.getvalue())["hookSpecificOutput"]["permissionDecision"]
     assert answer in ("ask", "deny")
+
+
+# ── review 1 findings, one test each ──
+
+def _hosted(monkeypatch, query, latest):
+    monkeypatch.setattr(ch, "_query", query)
+    monkeypatch.setattr(ch, "_on_registry", lambda *a, **k: True)
+    monkeypatch.setattr(ch, "_latest_version", lambda *a, **k: latest)
+    monkeypatch.setattr(ch, "_blocklist_only_lookup", lambda *a, **k: None)
+
+
+def test_b1_hosted_says_ok_but_the_latest_is_on_the_offline_list(built, monkeypatch):
+    """Blocking 1: the hosted list lags the offline one; the version that would
+    install (the latest, 1.0.2) is offline-listed → blocked, not allowed."""
+    _hosted(monkeypatch, lambda *a, **k: {"status": "ok"}, "1.0.2")
+    out = ch.lookup({"eco": "pip", "name": "partly-bad", "version": None})
+    assert out["status"] == "blocked" and out.get("offline") and out.get("resolved_version") == "1.0.2"
+    assert ch.decide("pip install partly-bad", env={})["action"] == "deny"
+
+
+def test_b1_hosted_lists_other_versions_but_the_latest_is_offline_listed(built, monkeypatch):
+    def query(eco, name, version, token, timeout):
+        if version is None:
+            return {"status": "version_needed", "affected": ["==0.9"]}
+        return {"status": "ok"}                     # hosted: 1.0.1 is fine
+    _hosted(monkeypatch, query, "1.0.1")
+    assert ch.lookup({"eco": "pip", "name": "partly-bad", "version": None})["status"] == "blocked"
+
+
+def test_b1_hosted_ok_and_latest_unknown_blocks(built, monkeypatch):
+    _hosted(monkeypatch, lambda *a, **k: {"status": "ok"}, None)
+    out = ch.lookup({"eco": "pip", "name": "partly-bad", "version": None})
+    assert out["status"] == "blocked" and out["why"] == "version_unresolved"
+
+
+def test_b1_hosted_ok_and_latest_not_listed_installs(built, monkeypatch):
+    _hosted(monkeypatch, lambda *a, **k: {"status": "ok"}, "2.0.0")
+    out = ch.lookup({"eco": "pip", "name": "partly-bad", "version": None})
+    assert out["status"] == "ok" and out.get("resolved_version") == "2.0.0"
+
+
+def _edit_manifest(folder, change):
+    path = folder / ch.OFFLINE_MANIFEST
+    doc = json.loads(path.read_text())
+    change(doc)
+    path.write_text(json.dumps(doc))
+
+
+@pytest.mark.parametrize("damage", [
+    lambda f: _edit_manifest(f, lambda d: d.update(mac="é" * 64)),             # TypeError in compare_digest
+    lambda f: (f / ch.OFFLINE_MANIFEST).write_text("[" * 30000 + "]" * 30000),       # RecursionError
+    lambda f: _edit_manifest(f, lambda d: d.update(sha256="é" * 64)),
+    lambda f: _edit_manifest(f, lambda d: d.update(size="big")),
+])
+def test_b2_malformed_manifest_is_tampered_and_blocks(built, monkeypatch, damage):
+    """Blocking 2: an exception while checking never becomes 'unverified (ask)'."""
+    damage(built[0])
+    ch._OFFLINE_STATE.clear()
+    monkeypatch.setattr(ch, "_query", lambda *a, **k: {"status": "ok"})
+    monkeypatch.setattr(ch, "_on_registry", lambda *a, **k: True)
+    assert ch._offline_db()[0] == "tampered"
+    decision = ch.decide("pip install requests", env={})
+    assert decision["action"] == "deny" and "integrity check" in decision["lines"][0]
+
+
+@pytest.mark.parametrize("note", [b"\xc3\xa9" * 40, b"\xff\xfe\x00", b"", b"x" * 500])
+def test_b2_damaged_verified_note_only_forces_a_rehash(built, note):
+    folder = built[0]
+    ch._offline_db()
+    (folder / "blocklist.verified").write_bytes(note)
+    ch._OFFLINE_STATE.clear()
+    assert ch._offline_db()[0] == "ok"
+
+
+def test_nb_pinned_version_inside_a_listed_range_blocks_offline(home, monkeypatch, tmp_path):
+    rng = lambda *events: [{"type": "ECOSYSTEM", "events": list(events)}]
+    advisories = [
+        _advisory("MAL-R-1", "PyPI", "rng-fixed", ranges=rng({"introduced": "0"}, {"fixed": "2.0.0"})),
+        _advisory("MAL-R-2", "PyPI", "rng-open", ranges=rng({"introduced": "1.0.0"})),
+        _advisory("MAL-R-3", "PyPI", "rng-last", ranges=rng({"introduced": "1.0"}, {"last_affected": "1.4"})),
+        _advisory("MAL-R-4", "PyPI", "rng-multi",
+                  ranges=rng({"introduced": "0"}, {"fixed": "1.0"}, {"introduced": "2.0"}, {"fixed": "3.0"})),
+    ]
+    _build_from(monkeypatch, tmp_path, advisories)
+    _no_hosted(monkeypatch)
+    for name, version, blocked in [("rng-fixed", "1.5.0", True), ("rng-fixed", "2.0.0", False),
+                                   ("rng-open", "1.2.0", True), ("rng-open", "0.9", False),
+                                   ("rng-last", "1.4", True), ("rng-last", "1.4.1", False),
+                                   ("rng-multi", "0.5", True), ("rng-multi", "1.5", False),
+                                   ("rng-multi", "2.5", True)]:
+        out = ch.lookup({"eco": "pip", "name": name, "version": version})
+        assert (out["status"] == "blocked") is blocked, (name, version, out)
+
+
+def test_nb_non_numeric_version_against_a_range_is_not_guessed(home, monkeypatch, tmp_path):
+    _build_from(monkeypatch, tmp_path, [_advisory("MAL-R-5", "PyPI", "rng-x", ranges=[
+        {"type": "ECOSYSTEM", "events": [{"introduced": "0"}, {"fixed": "2.0"}]}])])
+    assert ch._offline_version_listed("1.0rc1", ["<2.0"]) is None
+    _no_hosted(monkeypatch)
+    out = ch.lookup({"eco": "pip", "name": "rng-x", "version": "1.0rc1"})
+    assert out["status"] == "unverified"            # pinned: a person decides, as before
+
+
+def test_nb_too_many_versions_becomes_every_version(home, monkeypatch, tmp_path):
+    _build_from(monkeypatch, tmp_path, [_advisory("MAL-V-1", "PyPI", "many",
+                                                  versions=["1.0.%d" % i for i in range(300)])])
+    _no_hosted(monkeypatch)
+    assert ch.lookup({"eco": "pip", "name": "many", "version": "1.0.250"})["status"] == "blocked"
+    assert ch.lookup({"eco": "pip", "name": "many", "version": None})["status"] == "blocked"
+
+
+def test_nb_multi_event_range_is_split_not_collapsed():
+    specs = ob._version_specs({"ranges": [{"type": "ECOSYSTEM", "events": [
+        {"introduced": "0"}, {"fixed": "1.0"}, {"introduced": "2.0"}]}]})
+    assert specs == ["<1.0", ">=2.0"]
+    assert ob._version_specs({"ranges": [{"type": "ECOSYSTEM", "events": [
+        {"introduced": "1.0"}, {"last_affected": "1.4"}]}]}) == [">=1.0,<=1.4"]
+
+
+def test_nb_oversized_or_malformed_advisories_are_skipped_and_logged(home, monkeypatch, tmp_path):
+    feed = tmp_path / "feed.zip"
+    with zipfile.ZipFile(str(feed), "w") as archive:
+        archive.writestr("MAL-OK.json", json.dumps(_advisory("MAL-OK", "PyPI", "good-entry", ranges=ALL_VERSIONS)))
+        archive.writestr("MAL-BIG.json", json.dumps({"id": "MAL-BIG", "pad": "x" * (ob.MAX_MEMBER_BYTES + 10)}))
+        archive.writestr("MAL-LIST.json", json.dumps(["not", "a", "dict"]))
+        archive.writestr("MAL-ITEM.json", json.dumps({"id": "MAL-ITEM", "affected": ["not-a-dict"]}))
+        archive.writestr("MAL-BADJSON.json", "{")
+    logged = []
+    monkeypatch.setattr(ob, "_download", lambda url, dest: open(dest, "wb").write(open(str(url), "rb").read()))
+    ob.build(sources={"pip": str(feed)}, log=logged.append)
+    ch._OFFLINE_STATE.clear()
+    assert ch._offline_lookup("pip", "good-entry", None)["status"] == "blocked"
+    assert any("4 advisories skipped" in line for line in logged), logged
+
+
+def test_nb_entries_from_another_ecosystem_are_not_filed_here(home, monkeypatch, tmp_path):
+    _build_from(monkeypatch, tmp_path, [_advisory("MAL-E-1", "PyPI", "real-pip", ranges=ALL_VERSIONS),
+                                        _advisory("MAL-E-2", "npm", "npm-in-pypi-zip", ranges=ALL_VERSIONS)])
+    assert ch._offline_lookup("pip", "real-pip", None)["status"] == "blocked"
+    assert ch._offline_lookup("pip", "npm-in-pypi-zip", None) is None
+
+
+def test_nb_stale_list_warns_on_every_install_check(built, monkeypatch):
+    folder, manifest = built
+    monkeypatch.setattr(ch, "_query", lambda *a, **k: {"status": "ok"})
+    monkeypatch.setattr(ch, "_on_registry", lambda *a, **k: True)
+    assert ch.offline_stale_note() is None
+    assert not any("offline blocklist" in l for l in ch.decide("pip install requests", env={})["lines"])
+    old = time.time() + (ch.OFFLINE_STALE_HOURS + 24) * 3600
+    monkeypatch.setattr(ch.time, "time", lambda: old)
+    ch._OFFLINE_STATE.clear()
+    note = ch.offline_stale_note()
+    assert note and "days old" in note and "blocklist --refresh" in note
+    decision = ch.decide("pip install requests", env={})
+    assert any("days old" in l for l in decision["lines"])
+    assert ch.decide("pip install evil-pkg", env={})["action"] == "deny"     # a stale list still blocks what it has
+
+
+def test_nb_build_time_in_the_future_is_stale(built, monkeypatch):
+    folder, manifest = built
+    monkeypatch.setattr(ch.time, "time", lambda: manifest["built"] - 3 * 86400)
+    ch._OFFLINE_STATE.clear()
+    assert "future" in ch.offline_stale_note()
+
+
+def test_nb_status_reports_stale(built, monkeypatch, capsys):
+    folder, manifest = built
+    monkeypatch.setattr(ch.time, "time", lambda: manifest["built"] + 10 * 86400)
+    assert ob.status() == 3 and "STALE" in capsys.readouterr().out
+
+
+@pytest.mark.skipif(os.name == "nt", reason="fcntl lock")
+def test_nb_second_build_while_one_runs_is_refused(built, monkeypatch, tmp_path):
+    folder = built[0]
+    held = ob._lock(str(folder))
+    try:
+        with pytest.raises(ob.BuildBusy):
+            ob.build(sources={"pip": str(tmp_path / "pypi.zip")}, log=lambda *a: None)
+    finally:
+        held.close()
+
+
+def test_nb_killed_build_leftovers_are_removed(built, monkeypatch, tmp_path):
+    folder = built[0]
+    stale = folder / ".blocklist-npm-dead.zip"
+    fresh = folder / ".blocklist-pip-running.zip"
+    for path in (stale, fresh):
+        path.write_bytes(b"x" * 10)
+    os.utime(str(stale), (time.time() - 7200, time.time() - 7200))
+    ob._clean_leftovers(str(folder))
+    assert not stale.exists() and fresh.exists()
+
+
+def test_nb_concurrent_hook_threads_verify_once(built, monkeypatch):
+    import hashlib
+    import threading
+    folder = built[0]
+    (folder / "blocklist.verified").unlink(missing_ok=True)
+    ch._OFFLINE_STATE.clear()
+    count = []
+    real = hashlib.sha256
+    monkeypatch.setattr(hashlib, "sha256", lambda *a: count.append(1) or real(*a))
+    threads = [threading.Thread(target=ch._offline_db) for _ in range(8)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    assert len(count) == 1 and ch._offline_db()[0] == "ok"
+
+
+def _build_from(monkeypatch, tmp_path, advisories, eco="pip"):
+    feed = tmp_path / ("feed-%d.zip" % len(os.listdir(str(tmp_path))))
+    _zip(feed, advisories)
+    monkeypatch.setattr(ob, "_download", lambda url, dest: open(dest, "wb").write(open(str(url), "rb").read()))
+    ch._OFFLINE_STATE.clear()
+    ob.build(sources={eco: str(feed)}, log=lambda *a: None)
+    ch._OFFLINE_STATE.clear()

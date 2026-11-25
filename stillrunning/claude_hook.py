@@ -10,6 +10,7 @@ import json
 import os
 import re
 import sys
+import threading
 import time
 
 def _load_apibase():
@@ -3707,6 +3708,7 @@ OFFLINE_MANIFEST = "blocklist.manifest.json"
 OFFLINE_KEY = "blocklist.key"
 _OFFLINE_DB_NAME = re.compile(r"^blocklist-[0-9a-f]{16}\.sqlite$")
 _OFFLINE_STATE = {}
+_OFFLINE_LOCK = threading.Lock()
 
 
 def offline_manifest_mac(key, manifest):
@@ -3716,12 +3718,38 @@ def offline_manifest_mac(key, manifest):
     return hmac.new(key, body, "sha256").hexdigest()
 
 
+OFFLINE_STALE_HOURS = 72          # refreshed daily: three missed refreshes in a row
+
+
+def offline_age_hours(now=None):
+    """Age of the verified offline list in hours (its MAC-covered build time),
+    or None when there is no verified list. A build time in the future counts
+    as stale too (a wrong clock, or a manifest from elsewhere)."""
+    if _offline_db()[0] != "ok" or _OFFLINE_STATE.get("built") is None:
+        return None
+    age = ((time.time() if now is None else now) - _OFFLINE_STATE["built"]) / 3600.0
+    return age if age >= -24 else float("inf")
+
+
+def offline_stale_note(now=None):
+    """The warning a stale list earns, or None."""
+    age = offline_age_hours(now)
+    if age is None or age <= OFFLINE_STALE_HOURS:
+        return None
+    when = "has a build time in the future" if age == float("inf") else "is %d days old" % int(age // 24)
+    return ("the offline blocklist %s, so packages reported since then are not on it; "
+            "refresh it: stillrunning blocklist --refresh" % when)
+
+
 def _offline_db():
     """→ ("missing", None) | ("ok", db path) | ("tampered", reason). Verified once per process."""
-    if "state" in _OFFLINE_STATE:
+    with _OFFLINE_LOCK:
+        if "state" not in _OFFLINE_STATE:
+            try:
+                _OFFLINE_STATE["state"] = _verify_offline_db()
+            except Exception as exc:     # anything malformed that slipped past the checks: never trusted
+                _OFFLINE_STATE["state"] = ("tampered", f"its check failed ({type(exc).__name__})")
         return _OFFLINE_STATE["state"]
-    _OFFLINE_STATE["state"] = state = _verify_offline_db()
-    return state
 
 
 def _verify_offline_db():
@@ -3742,8 +3770,10 @@ def _verify_offline_db():
         return "tampered", f"the manifest or its key could not be read ({type(exc).__name__})"
     if not isinstance(manifest, dict) or not key or not isinstance(manifest.get("mac"), str):
         return "tampered", "the manifest is malformed"
-    if not hmac.compare_digest(manifest["mac"], offline_manifest_mac(key, manifest)):
+    if not hmac.compare_digest(manifest["mac"].encode("utf-8"), offline_manifest_mac(key, manifest).encode("ascii")):
         return "tampered", "the manifest's MAC does not match"
+    built = manifest.get("built")
+    _OFFLINE_STATE["built"] = built if isinstance(built, (int, float)) and not isinstance(built, bool) else None
     name = manifest.get("db")
     if not isinstance(name, str) or not _OFFLINE_DB_NAME.match(name):
         return "tampered", "the manifest names an unexpected file"
@@ -3789,9 +3819,9 @@ def _offline_stat_mark(key, manifest, db_path):
 def _offline_seen_ok(folder, mark):
     import hmac
     try:
-        with open(os.path.join(folder, _OFFLINE_SEEN), encoding="utf-8") as handle:
-            return hmac.compare_digest(handle.read(200).strip(), mark)
-    except (OSError, UnicodeDecodeError):  # lint: allowed-silent(no note yet: the full hash check runs)
+        with open(os.path.join(folder, _OFFLINE_SEEN), "rb") as handle:
+            return hmac.compare_digest(handle.read(200).strip(), mark.encode("ascii"))
+    except Exception:  # lint: allowed-silent(no note, or a damaged one: the full hash check runs)
         return False
 
 
@@ -3837,11 +3867,71 @@ def _offline_lookup(eco, name, version):
     advisory = advisory if isinstance(advisory, str) and _SAFE_ADVISORY.match(advisory) else None
     if versions == "*":
         return {"status": "blocked", "advisory": advisory, "local": True, "offline": True}
-    affected = [v for v in str(versions).split("\n") if v]
-    if version and any(spec.startswith("==") and _canon_version(spec[2:]) == _canon_version(version)
-                       for spec in affected):
+    specs = [v for v in str(versions).split("\n") if v]
+    if version and _offline_version_listed(version, specs):
         return {"status": "blocked", "advisory": advisory, "local": True, "offline": True}
-    return {"status": "listed_some", "advisory": advisory, "affected": affected[:8]}
+    return {"status": "listed_some", "advisory": advisory, "affected": specs[:8], "specs": specs}
+
+
+def _offline_after_hosted(eco, name, version, result, offline):
+    """Some versions are on the offline list. Whatever the hosted lookup said,
+    the version that would install is checked against it too (the hosted list
+    can lag the offline one); if that version cannot be worked out, block."""
+    target = version or result.get("resolved_version")
+    if not target and result["status"] == "ok":
+        target = _latest_version(eco, name, 6.0)
+    blocked = {"status": "blocked", "advisory": result.get("advisory") or offline.get("advisory"),
+               "affected": offline.get("affected") or result.get("affected") or [],
+               "registry": result.get("registry")}
+    if target:
+        listed = _offline_version_listed(target, offline.get("specs") or [])
+        if listed:
+            return dict(blocked, local=True, offline=True, resolved_version=target)
+        if listed is False or result["status"] == "ok":
+            return dict(result, resolved_version=result.get("resolved_version") or (target if not version else None))
+        return result if version else dict(blocked, why="version_unresolved")
+    if version:
+        return result
+    return dict(blocked, why="version_unresolved")     # unpinned and the version is unknown
+
+
+def _numeric_version(text):
+    """`1.2.3` → (1, 2, 3); anything not purely numeric → None (not compared)."""
+    canon = _canon_version(text)
+    parts = canon.split(".")
+    return tuple(int(p) for p in parts) if canon and all(p.isdigit() for p in parts) else None
+
+
+def _offline_version_listed(version, specs):
+    """True when `version` is on the offline list's specs (`==x`, `<x`,
+    `>=x`, `>=x,<y`), False when it is not, None when a range could not be
+    compared (a non-numeric version on either side)."""
+    unknown = False
+    want = _numeric_version(version)
+    for spec in specs:
+        if spec.startswith("=="):
+            if _canon_version(spec[2:]) == _canon_version(version):
+                return True
+            continue
+        bounds = [b.strip() for b in spec.split(",") if b.strip()]
+        if want is None or not bounds:
+            unknown = True
+            continue
+        inside = True
+        for bound in bounds:
+            op = next((o for o in ("<=", ">=", "<") if bound.startswith(o)), None)
+            other = _numeric_version(bound[len(op):]) if op else None
+            if other is None:
+                inside = None
+                break
+            if (op == ">=" and want < other) or (op == "<" and not want < other) \
+                    or (op == "<=" and want > other):
+                inside = False
+        if inside is None:
+            unknown = True
+        elif inside:
+            return True
+    return None if unknown else False
 
 
 def _local_list_unreadable():
@@ -4140,13 +4230,9 @@ def lookup(pkg, token=None, timeout=8.0):
                 for bad in probe.get("affected") or []):
             result = dict(result, status="blocked", advisory=probe.get("advisory"))
     result = dict(result, registry=exists)
-    if (offline and offline["status"] == "listed_some" and not version and not pkg.get("spec")
-            and not pkg.get("uncertain") and result["status"] == "unverified"):
-        # Some versions are listed and nothing could say which one would install
-        # (offline, rate-limited, latest unknown): assume the worst.
-        result = dict(result, status="blocked", why="version_unresolved",
-                      advisory=result.get("advisory") or offline.get("advisory"),
-                      affected=offline.get("affected") or result.get("affected") or [])
+    if offline and offline["status"] == "listed_some" and not pkg.get("spec") and not pkg.get("uncertain") \
+            and result["status"] in ("ok", "unverified"):
+        result = _offline_after_hosted(eco, name, version, result, offline)
     if result["status"] == "ok" and exists is False:
         result["status"] = "not_found"
     return result
@@ -4922,6 +5008,11 @@ def decide(command, cwd=None, env=None, lookup_fn=None, deadline=CHECK_DEADLINE_
     for note in parsed["notes"]:
         lines.append(status_line("note", "note", note, color=color))
         record("note", note, no_name)
+    if packages:
+        stale = offline_stale_note()
+        if stale:
+            lines.append(status_line("note", "note", stale, color=color))
+            record("note", stale, no_name)
 
     if packages or shadow:
         try:

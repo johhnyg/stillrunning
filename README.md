@@ -117,6 +117,25 @@ a change by anything that cannot read the key is caught. If the check fails,
 every install is blocked until `stillrunning blocklist --refresh` rebuilds it.
 Without the list, the hook works as before (the hosted lookup).
 
+A list more than 3 days old (three missed daily refreshes) is **stale**: it
+still blocks everything on it, but every install check then carries a warning
+that packages reported since its build are not on it, with the refresh
+command, and `stillrunning blocklist --status` exits 3 and says STALE.
+
+Known limits (tracked, not yet addressed):
+
+- The HMAC is a per-machine MAC, not a third-party signature: code running as
+  your user can read the key and re-sign a changed list, and can put back an
+  older list that was valid when it was built (its build time is then old, so
+  the stale warning shows).
+- A package with some versions listed, installed with no exact version, is
+  blocked when the version that would install cannot be worked out; installed
+  with a version range (`pkg>=1`) it is asked about instead, as before.
+- On Windows the database's hash is checked on every hook call (no stable
+  inode/ctime to remember it by): about 0.1 s more per call.
+- Version ranges are compared offline only for plain numeric versions;
+  anything else (`1.0rc1`) is left to the hosted lookup.
+
 ## Known vulnerabilities (CVEs)
 
 Separate from the blocklist: this checks the packages you already use against
