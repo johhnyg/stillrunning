@@ -946,6 +946,17 @@ EXPLANATIONS = {
         "and a local override on this machine says to allow it anyway. If you did not add that "
         "override yourself, do not approve: something else added it. Overrides are kept in "
         "the file overrides.json in the .stillrunning folder in your home directory."),
+    "version_unresolved": (
+        "Blocked `{name}`. Some versions of it are reported as malicious ({affected}), and the "
+        "version this command would install could not be worked out (the registry or "
+        "stillrunning.io did not answer), so stillrunning assumes the worst. Name an exact "
+        "version that is not on that list, or try again when the lookup can complete."),
+    "offline_tampered": (
+        "Blocked `{name}`: stillrunning's offline blocklist (the blocklist files in the "
+        ".stillrunning folder in your home directory) failed its integrity check, so it may "
+        "have been changed by something other than stillrunning. No install is trusted until "
+        "it is rebuilt: run `stillrunning blocklist --refresh`. If you did not change those "
+        "files yourself, find out what did."),
     "version_range": (
         "Some versions of `{name}` are reported as malicious ({affected}), and this command "
         "does not name one exact version, so stillrunning cannot tell which version it would "
@@ -3687,6 +3698,152 @@ def _locally_blocked(eco, name):
     return False
 
 
+# ── offline blocklist (built by `stillrunning blocklist --refresh`) ──
+# One manifest is the only pointer: {"v", "db", "sha256", "size", "built", "counts", "mac"}.
+# "mac" is HMAC-SHA256 over the rest with a per-machine key (blocklist.key, 0600):
+# it catches corruption, half-written files and tampering by anything that
+# cannot read the key; same-user code that can read the key could re-sign.
+OFFLINE_MANIFEST = "blocklist.manifest.json"
+OFFLINE_KEY = "blocklist.key"
+_OFFLINE_DB_NAME = re.compile(r"^blocklist-[0-9a-f]{16}\.sqlite$")
+_OFFLINE_STATE = {}
+
+
+def offline_manifest_mac(key, manifest):
+    import hmac
+    body = json.dumps({k: v for k, v in manifest.items() if k != "mac"}, sort_keys=True,
+                      separators=(",", ":")).encode("utf-8")
+    return hmac.new(key, body, "sha256").hexdigest()
+
+
+def _offline_db():
+    """→ ("missing", None) | ("ok", db path) | ("tampered", reason). Verified once per process."""
+    if "state" in _OFFLINE_STATE:
+        return _OFFLINE_STATE["state"]
+    _OFFLINE_STATE["state"] = state = _verify_offline_db()
+    return state
+
+
+def _verify_offline_db():
+    import hashlib
+    import hmac
+    folder = _state_dir()
+    manifest_path = os.path.join(folder, OFFLINE_MANIFEST)
+    if not os.path.lexists(manifest_path):
+        return "missing", None
+    try:
+        if os.path.islink(manifest_path) or os.path.getsize(manifest_path) > 65536:
+            return "tampered", "the manifest is a link or too large"
+        with open(manifest_path, encoding="utf-8") as handle:
+            manifest = json.load(handle)
+        with open(os.path.join(folder, OFFLINE_KEY), "rb") as handle:
+            key = handle.read(4096).strip()
+    except (OSError, ValueError, UnicodeDecodeError) as exc:
+        return "tampered", f"the manifest or its key could not be read ({type(exc).__name__})"
+    if not isinstance(manifest, dict) or not key or not isinstance(manifest.get("mac"), str):
+        return "tampered", "the manifest is malformed"
+    if not hmac.compare_digest(manifest["mac"], offline_manifest_mac(key, manifest)):
+        return "tampered", "the manifest's MAC does not match"
+    name = manifest.get("db")
+    if not isinstance(name, str) or not _OFFLINE_DB_NAME.match(name):
+        return "tampered", "the manifest names an unexpected file"
+    db_path = os.path.join(folder, name)
+    try:
+        if os.path.islink(db_path) or os.path.getsize(db_path) != manifest.get("size"):
+            return "tampered", "the database is a link or has the wrong size"
+        seen = _offline_stat_mark(key, manifest, db_path)
+        if seen is not None and _offline_seen_ok(folder, seen):
+            return "ok", db_path        # the same file, unchanged since its full check
+        digest = hashlib.sha256()
+        with open(db_path, "rb") as handle:
+            for chunk in iter(lambda: handle.read(1 << 20), b""):
+                digest.update(chunk)
+    except OSError as exc:
+        return "tampered", f"the database could not be read ({type(exc).__name__})"
+    if not hmac.compare_digest(digest.hexdigest(), str(manifest.get("sha256"))):
+        return "tampered", "the database does not match its manifest"
+    if seen is not None:
+        _offline_remember(folder, seen)
+    return "ok", db_path
+
+
+_OFFLINE_SEEN = "blocklist.verified"
+
+
+def _offline_stat_mark(key, manifest, db_path):
+    """A MAC over the manifest and the database file's identity (inode, size,
+    mtime, ctime). Any write to the file changes its ctime, which an ordinary
+    user cannot set back, so a match means: the file whose hash was checked."""
+    import hmac
+    try:
+        st = os.stat(db_path)
+    except OSError:
+        return None
+    if os.name == "nt" or not st.st_ino:
+        return None                     # no stable inode/ctime there: hash every time
+    ident = "%s:%s:%d:%d:%d:%d" % (manifest.get("mac"), manifest.get("db"), st.st_ino, st.st_size,
+                                   st.st_mtime_ns, st.st_ctime_ns)
+    return hmac.new(key, ident.encode("utf-8"), "sha256").hexdigest()
+
+
+def _offline_seen_ok(folder, mark):
+    import hmac
+    try:
+        with open(os.path.join(folder, _OFFLINE_SEEN), encoding="utf-8") as handle:
+            return hmac.compare_digest(handle.read(200).strip(), mark)
+    except (OSError, UnicodeDecodeError):  # lint: allowed-silent(no note yet: the full hash check runs)
+        return False
+
+
+def _offline_remember(folder, mark):
+    path = os.path.join(folder, _OFFLINE_SEEN)
+    try:
+        tmp = "%s.%d.tmp" % (path, os.getpid())
+        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            handle.write(mark)
+        os.replace(tmp, path)
+    except OSError as exc:
+        _warn(f"offline blocklist check not remembered ({type(exc).__name__}) — it is re-run each time")
+
+
+def _offline_lookup(eco, name, version):
+    """The offline blocklist's answer, before any network call:
+    None (no list, or not on it) | {"status": "blocked", ...} |
+    {"status": "listed_some", "affected": [...]} (some versions listed; the
+    hosted lookup decides, and blocks if it cannot)."""
+    state, detail = _offline_db()
+    if state == "missing":
+        return None
+    if state == "tampered":
+        return {"status": "blocked", "why": "offline_tampered", "detail": detail, "local": True}
+    try:
+        import pathlib
+        import sqlite3
+        uri = pathlib.Path(detail).as_uri() + "?mode=ro&immutable=1"
+        conn = sqlite3.connect(uri, uri=True)
+        try:
+            conn.execute("PRAGMA mmap_size=268435456")
+            row = conn.execute("SELECT versions, advisory FROM entries WHERE eco = ? AND name = ?",
+                               (eco, normalize(eco, name))).fetchone()
+        finally:
+            conn.close()
+    except Exception as exc:       # no sqlite3 here, or an unreadable file: the hosted lookup still runs
+        _warn(f"offline blocklist not used ({type(exc).__name__}) — relying on the API")
+        return None
+    if row is None:
+        return None
+    versions, advisory = row
+    advisory = advisory if isinstance(advisory, str) and _SAFE_ADVISORY.match(advisory) else None
+    if versions == "*":
+        return {"status": "blocked", "advisory": advisory, "local": True, "offline": True}
+    affected = [v for v in str(versions).split("\n") if v]
+    if version and any(spec.startswith("==") and _canon_version(spec[2:]) == _canon_version(version)
+                       for spec in affected):
+        return {"status": "blocked", "advisory": advisory, "local": True, "offline": True}
+    return {"status": "listed_some", "advisory": advisory, "affected": affected[:8]}
+
+
 def _local_list_unreadable():
     """True when the shipped blocklist file is there but cannot be read
     (corrupt, too large, unreadable): `_locally_blocked` then answers False
@@ -3910,7 +4067,10 @@ def _resolve_version_needed(eco, name, first, token, timeout):
     affected = first.get("affected") or []
     latest = _latest_version(eco, name, min(timeout, 6.0))
     if latest is None:
-        return {"status": "unverified", "why": "version", "affected": affected}
+        # Listed for some versions, and the one that would install cannot be
+        # worked out: assume the worst (the MCP server blocks here too).
+        return {"status": "blocked", "why": "version_unresolved", "affected": affected,
+                "advisory": first.get("advisory")}
     second = _query(eco, name, latest, token, timeout)
     if second["status"] == "version_needed":      # a server that ignored the version
         second = dict(second, status="blocked")
@@ -3923,6 +4083,10 @@ def _override_outcome(eco, name, version, timeout):
     that case is put to a person. Uses the unmetered route (no quota cost)."""
     if _locally_blocked(eco, name):
         return {"status": "override_blocked", "advisory": None, "local": True}
+    offline = _offline_lookup(eco, name, version)
+    if offline and offline["status"] in ("blocked", "listed_some"):
+        return {"status": "override_blocked", "advisory": offline.get("advisory"), "local": True,
+                "affected": offline.get("affected") or []}
     probe = _blocklist_only_lookup(eco, name, version, timeout)
     if probe is None:
         # No answer at all (offline, rate-limited, garbage): the override cannot
@@ -3947,6 +4111,9 @@ def lookup(pkg, token=None, timeout=8.0):
         return _override_outcome(eco, name, version, timeout)
     if _locally_blocked(eco, name):
         return {"status": "blocked", "advisory": None, "local": True}
+    offline = _offline_lookup(eco, name, version)
+    if offline and offline["status"] == "blocked":
+        return dict(offline, registry=None)            # no network call at all
     from concurrent.futures import ThreadPoolExecutor
     with ThreadPoolExecutor(max_workers=2) as pool:
         api = pool.submit(_query, eco, name, version, token, timeout)
@@ -3973,6 +4140,13 @@ def lookup(pkg, token=None, timeout=8.0):
                 for bad in probe.get("affected") or []):
             result = dict(result, status="blocked", advisory=probe.get("advisory"))
     result = dict(result, registry=exists)
+    if (offline and offline["status"] == "listed_some" and not version and not pkg.get("spec")
+            and not pkg.get("uncertain") and result["status"] == "unverified"):
+        # Some versions are listed and nothing could say which one would install
+        # (offline, rate-limited, latest unknown): assume the worst.
+        result = dict(result, status="blocked", why="version_unresolved",
+                      advisory=result.get("advisory") or offline.get("advisory"),
+                      affected=offline.get("affected") or result.get("affected") or [])
     if result["status"] == "ok" and exists is False:
         result["status"] = "not_found"
     return result
@@ -4549,15 +4723,35 @@ def decide(command, cwd=None, env=None, lookup_fn=None, deadline=CHECK_DEADLINE_
                    evidence + [_cache_evidence(served[index], now)], None, pkg, ms)
         elif status == "ok":
             stats["ok"] += 1
-            lines.append(status_line("ok", _label(pkg), "no known threat", ms, color))
+            detail = "no known threat"
+            if outcome.get("registry") is None:
+                detail += f" · existence on {REGISTRY_NAME[eco]} NOT verified"
+            lines.append(status_line("ok", _label(pkg), detail, ms, color))
             record("no_known_threat", _label(pkg), evidence, None, pkg, ms)
         elif status == "override":
             lines.append(status_line("note", _label(pkg),
                                      "allowed by your own override, not looked up", ms, color))
             record("override", _label(pkg), evidence, None, pkg, ms)
+        elif status == "blocked" and outcome.get("why") == "offline_tampered":
+            lines.append(status_line("blocked", _label(pkg),
+                                     "the offline blocklist failed its integrity check", ms, color))
+            record("blocked", _label(pkg), evidence, explain("offline_tampered", name=name), pkg, ms)
+            stats["blocked"] += 1
+            escalate("deny")
+        elif status == "blocked" and outcome.get("why") == "version_unresolved":
+            bad = [a for a in outcome.get("affected") or [] if isinstance(a, str)]
+            lines.append(status_line("blocked", _label(pkg),
+                                     "some versions are reported as malicious and the version "
+                                     "that would install could not be worked out", ms, color))
+            record("blocked", _label(pkg), evidence,
+                   explain("version_unresolved", name=name, affected=", ".join(bad)), pkg, ms)
+            stats["blocked"] += 1
+            escalate("deny")
         elif status == "blocked":
             advisory = outcome.get("advisory")
             detail = "known malicious package" + (f" · {advisory}" if advisory else "")
+            if outcome.get("offline"):
+                detail += " · offline list"
             lines.append(status_line("blocked", _label(pkg), detail, ms, color))
             if twin:
                 text = explain("blocked_typosquat", name=name, lookalike=twin)

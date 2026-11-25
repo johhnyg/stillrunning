@@ -32,6 +32,7 @@ import subprocess
 import sys
 import threading
 import time
+import urllib.error
 import urllib.parse
 import urllib.request
 
@@ -190,6 +191,55 @@ def test_hook_and_mcp_return_the_same_verdict(monkeypatch, tmp_path):
             r["name"], r["hook"]["cls"], r["hook"]["status"], r["mcp"]["cls"], r["mcp"]["status"]))
     assert compared, "no MCP verdict to compare (all quota/errors)"
     assert not divergent, "%d hook/MCP divergences (printed above)" % len(divergent)
+
+
+def test_contract_malicious_sample_blocks_offline(tmp_path, monkeypatch):
+    """The offline blocklist locks the malicious half of the contract: with the
+    network disabled (conftest) and every hosted path failing, each listed name
+    in the sample (every spelling, some-versions ones unpinned) is still BLOCKED."""
+    import zipfile
+    from stillrunning import claude_hook as ch
+    from stillrunning import offline_blocklist as ob
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("USERPROFILE", str(tmp_path))
+    monkeypatch.setenv("STILLRUNNING_CVE_CHECK", "0")
+
+    def unplugged(*a, **k):                     # what a real outage raises
+        raise urllib.error.URLError("network unplugged")
+    monkeypatch.setattr(urllib.request, "urlopen", unplugged)
+    feed = tmp_path / "pypi.zip"
+    with zipfile.ZipFile(str(feed), "w") as archive:
+        for i, name in enumerate(MALICIOUS_ALL_VERSIONS):
+            archive.writestr("MAL-T-%d.json" % i, json.dumps({"id": "MAL-T-%d" % i, "affected": [
+                {"package": {"ecosystem": "PyPI", "name": name},
+                 "ranges": [{"type": "ECOSYSTEM", "events": [{"introduced": "0"}]}]}]}))
+        for i, name in enumerate(MALICIOUS_SOME_VERSIONS):
+            archive.writestr("MAL-S-%d.json" % i, json.dumps({"id": "MAL-S-%d" % i, "affected": [
+                {"package": {"ecosystem": "PyPI", "name": name}, "versions": ["0.0.1"]}]}))
+    monkeypatch.setattr(ob, "_download", lambda url, dest: open(dest, "wb").write(open(str(url), "rb").read()))
+    ch._OFFLINE_STATE.clear()
+    ob.build(sources={"pip": str(feed)}, log=lambda *a: None)
+    ch._OFFLINE_STATE.clear()
+    try:
+        results = {name: hook_verdict(name)["cls"] for name in MALICIOUS}
+    finally:
+        ch._OFFLINE_STATE.clear()
+    _record("offline_contract", results=results)
+    assert set(results.values()) == {"BLOCKED"}, results
+
+
+@pytest.mark.xfail(strict=True, reason="server gap (my-app stillrunning_mcp.py): a failed PyPI existence "
+                                       "probe still returns a plain 'not_in_threat_database' UNKNOWN")
+def test_mcp_says_existence_not_verified_when_the_pypi_probe_fails():
+    """Against an offline local instance every PyPI probe fails: the reply for a
+    name it cannot place must say existence was NOT verified."""
+    url = _local_url_or_skip()
+    status, data, secs, exc = mcp_post(url, tool_call(UNKNOWN_NAMES[0]), timeout=FUZZ_TIMEOUT_S,
+                                       headers=_fresh_client())
+    verdict = check_reply(status, data, secs, exc)
+    assert verdict is not None
+    text = (verdict.get("agent_message", "") + " " + verdict.get("reason", "")).lower()
+    assert verdict["status"] != "not_in_threat_database" or "existence" in text, verdict
 
 
 # ── 2. input fuzzing (local instance only) ──

@@ -97,6 +97,26 @@ Lockfile installs (`npm ci`, `uv sync`, `poetry install`) are not asked about;
 the hook adds a note that the lockfile's packages were not looked up.
 `STILLRUNNING_HOOK_STRICT=1` refuses instead of asking.
 
+## Offline blocklist
+
+The Claude Code hook can block known-malicious packages with no network call:
+when stillrunning.io is down, rate-limited or unreachable, or the registry is
+slow, a package on the offline list is still blocked.
+
+```bash
+stillrunning blocklist --refresh    # download OSV.dev's malicious-package data (~250 MB) and build it
+stillrunning blocklist --schedule   # refresh daily at 04:41, lowest priority (adds one crontab line)
+stillrunning blocklist --status     # what is installed, and whether it passed its integrity check
+```
+
+The list is a small SQLite file (about 11 MB for every malicious pip and npm
+package OSV.dev knows) in `~/.stillrunning`. The hook opens it read-only and
+does one indexed lookup; it never downloads or rebuilds it. Its manifest
+carries an HMAC with a per-machine key, so corruption, a half-written file or
+a change by anything that cannot read the key is caught. If the check fails,
+every install is blocked until `stillrunning blocklist --refresh` rebuilds it.
+Without the list, the hook works as before (the hosted lookup).
+
 ## Known vulnerabilities (CVEs)
 
 Separate from the blocklist: this checks the packages you already use against

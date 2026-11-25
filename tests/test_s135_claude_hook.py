@@ -1387,13 +1387,16 @@ def test_unpinned_install_is_blocked_when_latest_is_a_bad_version(monkeypatch):
     assert out["status"] == "blocked" and out["resolved_version"] == "1.14.1"
 
 
-def test_unpinned_install_needs_approval_when_latest_is_unknown(monkeypatch):
+def test_unpinned_install_is_blocked_when_latest_is_unknown(monkeypatch):
+    """Some versions are listed and the one that would install cannot be worked
+    out: assume the worst (it used to ask; the MCP server blocks here too)."""
     asked = _version_net(monkeypatch, None, lambda v: NEEDED)
     out = ch.lookup({"eco": "npm", "name": "axios", "version": None})
-    assert asked == [None] and out["status"] == "unverified" and out["why"] == "version"
+    assert asked == [None] and out["status"] == "blocked" and out["why"] == "version_unresolved"
     decision = ch.decide("npm install axios", lookup_fn=lambda pkg: out, env={})
-    assert decision["action"] == "ask"
-    assert "exact version" in " ".join(decision["lines"])
+    assert decision["action"] == "deny"
+    assert "could not be worked out" in " ".join(decision["lines"])
+    assert any("exact version" in (r.get("explanation") or "") for r in decision["records"])
 
 
 def test_server_that_ignores_the_version_still_blocks(monkeypatch):

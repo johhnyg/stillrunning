@@ -3764,6 +3764,16 @@ def main_cli() -> None:
                               help="Check this project's and this machine's packages now (network)")
     panel_parser.add_argument("--cwd", default=None, help="Project folder (default: current)")
 
+    blocklist_parser = subparsers.add_parser(
+        "blocklist", help="Offline blocklist of known-malicious packages (OSV.dev), so the "
+                          "Claude Code hook blocks them without a network call")
+    blocklist_parser.add_argument("--refresh", action="store_true",
+                                  help="Download OSV.dev's malicious-package data and rebuild it now")
+    blocklist_parser.add_argument("--status", action="store_true", help="Show what is installed")
+    blocklist_parser.add_argument("--schedule", action="store_true",
+                                  help="Add one crontab line that runs --refresh daily, low priority")
+    blocklist_parser.add_argument("--unschedule", action="store_true", help="Remove that crontab line")
+
     cve_parser = subparsers.add_parser(
         "cve", help="Known vulnerabilities in packages you already use (OSV.dev); "
                     "shortens the time to patch, does not detect malware")
@@ -3808,7 +3818,7 @@ def main_cli() -> None:
     # The Claude Code hook and status line run on every tool call / redraw:
     # they must stay fast and make no network call of their own.
     # `cve` talks only to api.osv.dev (and only with --refresh).
-    if sys.argv[1:2] not in (["hook"], ["statusline"], ["shield"], ["cve"]):
+    if sys.argv[1:2] not in (["hook"], ["statusline"], ["shield"], ["cve"], ["blocklist"]):
         from .heartbeat import send_cli_ping, command_label
         known = set(subparsers.choices) | set(parser._option_string_actions)
         send_cli_ping(VERSION, command_label(sys.argv[1:], known))
@@ -3850,6 +3860,12 @@ def main_cli() -> None:
         from . import panel
         sys.exit(panel.main((["--json"] if args.json else []) + (["--scan"] if args.scan else [])
                             + (["--cwd", args.cwd] if args.cwd else [])))
+
+    if args.command == "blocklist":
+        from . import offline_blocklist
+        sys.exit(offline_blocklist.main([flag for flag, on in (
+            ("--refresh", args.refresh), ("--status", args.status), ("--schedule", args.schedule),
+            ("--unschedule", args.unschedule)) if on]))
 
     if args.command == "cve":
         from . import cve

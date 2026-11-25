@@ -9,11 +9,38 @@
 
 ## Unreleased (not published)
 
-Five batches since 2.14.3, newest first below. Two change behaviour: the
-hook failing closed changes what is blocked (a crash or timeout of the hook
-now blocks, and a command over the 128K-character limit is asked about), and
-setup changes the exit code of `--setup` (BREAKING, below). The other three
-change nothing that is checked or blocked.
+Six batches since 2.14.3, newest first below. Three change behaviour: the
+offline blocklist changes what is blocked (below), the hook failing closed
+changes what is blocked (a crash or timeout of the hook now blocks, and a
+command over the 128K-character limit is asked about), and setup changes the
+exit code of `--setup` (BREAKING, below). The other three change nothing that
+is checked or blocked.
+
+### Offline blocklist; no downgrade when the lookup cannot complete (2026-11-25)
+
+A contract test of the hook against the hosted MCP server found that when an
+anonymous user's free lookups are used up, a burst of installs is
+rate-limited at the edge, and the hook then asked about every package,
+including known-malicious ones, instead of blocking them.
+
+- **`stillrunning blocklist --refresh / --schedule / --status`**: builds an
+  offline list of every malicious pip and npm package OSV.dev knows (about
+  11 MB of SQLite; the build downloads ~250 MB, uses ~180 MB of memory for about
+  a minute, single-threaded at the lowest priority). A package on it is
+  **blocked with no network call**, whatever the state of stillrunning.io or
+  the registry. Names are normalized as the hook does (PEP 503 for pip; npm
+  lower case), so case and separator spellings match.
+- The list's manifest carries an HMAC with a per-machine key. If it, the key
+  or the database does not check out, **every install is blocked** with a
+  message naming the rebuild command. Without a list the hook works as before.
+- **Stricter (BREAKING):** a package with some versions reported as
+  malicious, installed with no exact version, is now **blocked** when the
+  version that would install cannot be worked out (it used to ask). When the
+  latest version can be worked out it is checked as before, so `npm install
+  axios` or `chalk` still installs a release that is not listed.
+- A package the hook lets through without having been able to check that it
+  exists on the registry now says so: `no known threat · existence on PyPI
+  NOT verified`.
 
 ### Setup never ends silently unprotected (setup fuzz, 2026-11-24)
 
