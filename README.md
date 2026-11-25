@@ -117,7 +117,8 @@ a change by anything that cannot read the key is caught. If the check fails,
 every install is blocked until `stillrunning blocklist --refresh` rebuilds it.
 Without the list, the hook works as before (the hosted lookup).
 
-A list more than 3 days old (three missed daily refreshes) is **stale**: it
+A list more than 3 days old (three missed daily refreshes), with no build
+time, or with a build time in the future is **stale**: it
 still blocks everything on it, but every install check then carries a warning
 that packages reported since its build are not on it, with the refresh
 command, and `stillrunning blocklist --status` exits 3 and says STALE.
@@ -129,8 +130,14 @@ Known limits (tracked, not yet addressed):
   older list that was valid when it was built (its build time is then old, so
   the stale warning shows).
 - A package with some versions listed, installed with no exact version, is
-  blocked when the version that would install cannot be worked out; installed
-  with a version range (`pkg>=1`) it is asked about instead, as before.
+  blocked when the version that would install cannot be worked out. Installed
+  with a version range or wildcard (`pkg>=1`, `pkg@^1`, `pkg==1.0.*`), with
+  `--pre` or with a constraints file, it is asked about instead (never
+  allowed on the hosted lookup's word alone): a person decides.
+- Version spellings pip treats as equal but written differently
+  (`1.0.0-rc1` for a listed `1.0.0rc1`) are not matched offline.
+- Packages a command only names indirectly (a shell command inside `npx -c`,
+  for example) are looked up on the hosted service only, not offline.
 - On Windows the database's hash is checked on every hook call (no stable
   inode/ctime to remember it by): about 0.1 s more per call.
 - Version ranges are compared offline only for plain numeric versions;

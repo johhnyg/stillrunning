@@ -589,3 +589,88 @@ def _build_from(monkeypatch, tmp_path, advisories, eco="pip"):
     ch._OFFLINE_STATE.clear()
     ob.build(sources={eco: str(feed)}, log=lambda *a: None)
     ch._OFFLINE_STATE.clear()
+
+
+# ── review 2 findings, one test each ──
+
+@pytest.mark.parametrize("command", [
+    "pip install 'partly-bad>=1'", "pip install 'partly-bad~=1.0'", "pip install 'partly-bad==1.0.*'",
+    "pip install --pre partly-bad", "npm install chalky@^5", "npm install chalky@'>=5'",
+])
+def test_r2_important_range_or_flag_with_listed_versions_asks_even_if_hosted_says_ok(built, monkeypatch, tmp_path, command):
+    """IMPORTANT (review 2): the hosted list lags; a range/wildcard/--pre install of a
+    package with offline-listed versions must not be allowed on its 'ok' alone."""
+    _hosted(monkeypatch, lambda *a, **k: {"status": "ok"}, "9.9.9")
+    decision = ch.decide(command, env={}, cwd=str(tmp_path))
+    assert decision["action"] == "ask", (command, decision["lines"])
+
+
+def test_r2_important_constraints_file_with_listed_versions_asks(built, monkeypatch, tmp_path):
+    (tmp_path / "c.txt").write_text("partly-bad<2\n")
+    _hosted(monkeypatch, lambda *a, **k: {"status": "ok"}, "9.9.9")
+    decision = ch.decide("pip install -c c.txt partly-bad", env={}, cwd=str(tmp_path))
+    assert decision["action"] == "ask", decision["lines"]
+
+
+def test_r2_range_on_an_unlisted_package_is_unchanged(built, monkeypatch, tmp_path):
+    _hosted(monkeypatch, lambda *a, **k: {"status": "ok"}, "9.9.9")
+    assert ch.decide("pip install 'requests>=2'", env={}, cwd=str(tmp_path))["action"] == "allow"
+
+
+def test_r2_tampered_list_blocks_even_with_an_override(built, monkeypatch):
+    folder, manifest = built
+    monkeypatch.setattr(ch, "consume_override", lambda eco, name: True)
+    _tamper_db(folder, manifest)
+    ch._OFFLINE_STATE.clear()
+    monkeypatch.setattr(ch, "_blocklist_only_lookup", lambda *a, **k: {"status": "miss_unconfirmed"})
+    out = ch.lookup({"eco": "pip", "name": "requests", "version": None})
+    assert out["status"] == "blocked" and out["why"] == "offline_tampered"
+
+
+def test_r2_refresh_that_loses_an_ecosystem_is_refused(built, monkeypatch, tmp_path):
+    folder, manifest = built
+    before = (folder / ch.OFFLINE_MANIFEST).read_bytes()
+    empty_npm = tmp_path / "npm-empty.zip"
+    _zip(empty_npm, [])
+    with pytest.raises(RuntimeError, match="no entries for npm"):
+        ob.build(sources={"pip": str(tmp_path / "pypi.zip"), "npm": str(empty_npm)}, log=lambda *a: None)
+    assert (folder / ch.OFFLINE_MANIFEST).read_bytes() == before
+
+
+def test_r2_refresh_that_shrinks_by_more_than_half_is_refused(home, monkeypatch, tmp_path):
+    big = [_advisory("MAL-B-%d" % i, "PyPI", "bad-%d" % i, ranges=ALL_VERSIONS) for i in range(10)]
+    _build_from(monkeypatch, tmp_path, big)
+    with pytest.raises(RuntimeError, match="shrank by more than half"):
+        _build_from(monkeypatch, tmp_path, big[:3])
+    assert ch._offline_lookup("pip", "bad-9", None)["status"] == "blocked"     # the old list stays
+
+
+def test_r2_manifest_without_build_time_is_stale(built, monkeypatch, capsys):
+    folder, manifest = built
+    path = folder / ch.OFFLINE_MANIFEST
+    doc = json.loads(path.read_text())
+    del doc["built"]
+    key = (folder / ch.OFFLINE_KEY).read_bytes().strip()
+    doc["mac"] = ch.offline_manifest_mac(key, doc)
+    path.write_text(json.dumps(doc))
+    ch._OFFLINE_STATE.clear()
+    assert ch._offline_db()[0] == "ok"
+    assert "no build time" in ch.offline_stale_note()
+    assert ob.status() == 3 and "STALE" in capsys.readouterr().out
+
+
+def test_r2_build_time_a_few_hours_in_the_future_is_stale(built, monkeypatch):
+    folder, manifest = built
+    monkeypatch.setattr(ch.time, "time", lambda: manifest["built"] - 3 * 3600)
+    ch._OFFLINE_STATE.clear()
+    assert "future" in ch.offline_stale_note()
+
+
+def test_r2_verification_is_per_state_folder(built, monkeypatch, tmp_path):
+    """Windows CI: a result remembered for one HOME must not answer for another."""
+    assert ch._offline_db()[0] == "ok"
+    other = tmp_path / "other-home"
+    other.mkdir()
+    monkeypatch.setenv("HOME", str(other))
+    monkeypatch.setenv("USERPROFILE", str(other))
+    assert ch._offline_db() == ("missing", None)

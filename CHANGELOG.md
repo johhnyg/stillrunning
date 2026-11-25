@@ -40,8 +40,14 @@ including known-malicious ones, instead of blocking them.
   axios` or `chalk` still installs a release that is not listed. That version
   is checked against the offline list too (the hosted list can lag it), and a
   pinned version inside a listed numeric range is blocked offline.
-- A list more than 3 days old warns on every install check (it still blocks
-  everything on it); `stillrunning blocklist --status` exits 3 and says STALE.
+  Installed with a version range or wildcard, `--pre` or a constraints file,
+  such a package is asked about, never allowed on the hosted lookup's word
+  alone (the hosted list can lag the offline one).
+- A list more than 3 days old (or with no build time, or a build time in the
+  future) warns on every install check (it still blocks everything on it);
+  `stillrunning blocklist --status` exits 3 and says STALE.
+- A refresh that would drop an ecosystem, or shrink one by more than half, is
+  refused and the current list stays.
 - Known limits are listed in the README (Offline blocklist).
 - A package the hook lets through without having been able to check that it
   exists on the registry now says so: `no known threat · existence on PyPI

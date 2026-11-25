@@ -245,6 +245,16 @@ def _build(folder, sources, log):
             counts[eco] = total
         if not counts:
             raise RuntimeError("no entries: refusing to replace the blocklist with an empty one")
+        missing = [eco for eco in sources if not counts.get(eco)]
+        if missing:
+            raise RuntimeError("no entries for %s: refusing to drop that ecosystem from the blocklist"
+                               % ", ".join(missing))
+        previous = _previous_counts(folder)
+        shrunk = [eco for eco in counts if previous.get(eco) and counts[eco] < previous[eco] // 2]
+        if shrunk:
+            raise RuntimeError("%s shrank by more than half (%s): refusing it; the current list stays"
+                               % (", ".join(shrunk), ", ".join("%s %d -> %d" % (e, previous[e], counts[e])
+                                                               for e in shrunk)))
         conn.execute("VACUUM")
         conn.close()
         conn = None
@@ -277,6 +287,23 @@ def _build(folder, sources, log):
                 os.unlink(tmp_db)
             except OSError:  # lint: allowed-silent(removed by _clean_leftovers on the next build)
                 pass
+
+
+def _previous_counts(folder):
+    """Entry counts of the list in place, if it still verifies; {} otherwise."""
+    if os.path.realpath(folder) != os.path.realpath(claude_hook._state_dir()):
+        return {}
+    claude_hook._OFFLINE_STATE.clear()
+    try:
+        if claude_hook._offline_db()[0] != "ok":
+            return {}
+        with open(os.path.join(folder, claude_hook.OFFLINE_MANIFEST), encoding="utf-8") as handle:
+            counts = json.load(handle).get("counts") or {}
+        return {k: v for k, v in counts.items() if isinstance(v, int)}
+    except (OSError, ValueError, AttributeError):  # lint: allowed-silent(no usable previous list: nothing to compare)
+        return {}
+    finally:
+        claude_hook._OFFLINE_STATE.clear()
 
 
 def _write_manifest(folder, manifest):

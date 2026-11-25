@@ -3724,11 +3724,14 @@ OFFLINE_STALE_HOURS = 72          # refreshed daily: three missed refreshes in a
 def offline_age_hours(now=None):
     """Age of the verified offline list in hours (its MAC-covered build time),
     or None when there is no verified list. A build time in the future counts
-    as stale too (a wrong clock, or a manifest from elsewhere)."""
-    if _offline_db()[0] != "ok" or _OFFLINE_STATE.get("built") is None:
+    as stale too (a wrong clock, or a manifest from elsewhere), and so does a
+    list with no build time at all (its age cannot be known)."""
+    if _offline_db()[0] != "ok":
         return None
+    if _OFFLINE_STATE.get("built") is None:
+        return float("nan")
     age = ((time.time() if now is None else now) - _OFFLINE_STATE["built"]) / 3600.0
-    return age if age >= -24 else float("inf")
+    return age if age >= -1 else float("inf")
 
 
 def offline_stale_note(now=None):
@@ -3736,15 +3739,24 @@ def offline_stale_note(now=None):
     age = offline_age_hours(now)
     if age is None or age <= OFFLINE_STALE_HOURS:
         return None
-    when = "has a build time in the future" if age == float("inf") else "is %d days old" % int(age // 24)
+    if age != age:                       # NaN: no build time
+        when = "has no build time, so its age is unknown"
+    elif age == float("inf"):
+        when = "has a build time in the future"
+    else:
+        when = "is %d days old" % int(age // 24)
     return ("the offline blocklist %s, so packages reported since then are not on it; "
             "refresh it: stillrunning blocklist --refresh" % when)
 
 
 def _offline_db():
-    """→ ("missing", None) | ("ok", db path) | ("tampered", reason). Verified once per process."""
+    """→ ("missing", None) | ("ok", db path) | ("tampered", reason). Verified once
+    per process and state folder (a long-lived caller that changes HOME re-checks)."""
+    folder = _state_dir()
     with _OFFLINE_LOCK:
-        if "state" not in _OFFLINE_STATE:
+        if _OFFLINE_STATE.get("folder") != folder:
+            _OFFLINE_STATE.clear()
+            _OFFLINE_STATE["folder"] = folder
             try:
                 _OFFLINE_STATE["state"] = _verify_offline_db()
             except Exception as exc:     # anything malformed that slipped past the checks: never trusted
@@ -4174,6 +4186,8 @@ def _override_outcome(eco, name, version, timeout):
     if _locally_blocked(eco, name):
         return {"status": "override_blocked", "advisory": None, "local": True}
     offline = _offline_lookup(eco, name, version)
+    if offline and offline.get("why") == "offline_tampered":
+        return offline                    # a list that fails its check blocks every install, overrides too
     if offline and offline["status"] in ("blocked", "listed_some"):
         return {"status": "override_blocked", "advisory": offline.get("advisory"), "local": True,
                 "affected": offline.get("affected") or []}
@@ -4230,9 +4244,17 @@ def lookup(pkg, token=None, timeout=8.0):
                 for bad in probe.get("affected") or []):
             result = dict(result, status="blocked", advisory=probe.get("advisory"))
     result = dict(result, registry=exists)
-    if offline and offline["status"] == "listed_some" and not pkg.get("spec") and not pkg.get("uncertain") \
-            and result["status"] in ("ok", "unverified"):
-        result = _offline_after_hosted(eco, name, version, result, offline)
+    if offline and offline["status"] == "listed_some" and result["status"] in ("ok", "unverified"):
+        if pkg.get("spec") or pkg.get("uncertain"):
+            if not version:
+                # A range, a wildcard, --pre or a constraints file: which version
+                # resolves is not "latest", and some are listed offline. The hosted
+                # list may lag, so its "ok" is not enough: a person decides.
+                result = dict(result, status="unverified", why="version_range",
+                              advisory=result.get("advisory") or offline.get("advisory"),
+                              affected=offline.get("affected") or [])
+        else:
+            result = _offline_after_hosted(eco, name, version, result, offline)
     if result["status"] == "ok" and exists is False:
         result["status"] = "not_found"
     return result
