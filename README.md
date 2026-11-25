@@ -652,7 +652,7 @@ Unsupported combinations say so and exit instead of failing part-way.
 ## Commands
 
 ```bash
-stillrunning --setup          # Setup wizard
+stillrunning --setup          # Setup wizard; exits 4 when it ends with nothing checking installs
 stillrunning --doctor         # Health check (alias: --diagnose); exits 1 when nothing checks installs
 stillrunning --reconfigure    # Run setup again
 stillrunning --version
@@ -672,6 +672,18 @@ stillrunning panel [--scan] [--json]   # data for the Claude Code side panel
 stillrunning venv-install           # keep import checks in virtualenvs (venv-uninstall removes it)
 stillrunning remember / forget      # "don't ask again" — switched off in this version (refuses)
 ```
+
+### `--setup` exit codes
+
+| Code | Meaning |
+|---|---|
+| 0 | Setup finished and at least one layer checks installs (for example the Claude Code hook is ON). |
+| 1 | The alert settings could not be saved (for example the home directory is not writable). Nothing was saved. |
+| 2 | No answer came (piped or closed input), or 5 answers in a row were not valid (menu choice or email address). Nothing was saved. |
+| 4 | Setup finished, but **nothing checks the packages you install**: run `stillrunning --hook-claude-code` or `stillrunning shell-install`. Setup changes Claude Code settings only when you type yes in a terminal, so piped setup ends here. |
+| 130 | Cancelled with Ctrl-C during the alert questions (Ctrl-C at the hook question counts as no, so that ends with 4). |
+
+`--autonomous` exits 0 as before, even when nothing checks installs (it says so in its output).
 
 ## Security Advisories
 

@@ -45,6 +45,7 @@ EXIT_RATE_LIMITED = 12
 EXIT_WITHDRAWN = 13
 EXIT_NEEDS_PERSON = 14  # part of it IS on the blocklist (some versions, or a local override
                         # allows a listed package): only a person at the keyboard may continue
+EXIT_NOT_PROTECTED = 4  # --setup ended with no layer checking installs
 
 # v2.5.0: Simple logger for exception visibility
 import logging
@@ -64,18 +65,95 @@ if os.environ.get("STILLRUNNING_DEBUG", "").lower() in ("1", "true", "yes"):
 # ---------------------------------------------------------------------------
 # Config
 # ---------------------------------------------------------------------------
-CONFIG_FILE = Path(__file__).parent / "stillrunning.yaml"
+PACKAGE_CONFIG_FILE = Path(__file__).parent / "stillrunning.yaml"
 CONFIG: dict = {}
+
+
+def config_file(for_write: bool = False) -> Path:
+    """The --setup config: next to the package when this user can write there
+    (root, venv and --user installs), else ~/.stillrunning/stillrunning.yaml
+    (a normal user running a package root installed). Reading falls back to
+    the package copy when the user has none of their own."""
+    if os.access(PACKAGE_CONFIG_FILE.parent, os.W_OK):
+        return PACKAGE_CONFIG_FILE
+    user = Path.home() / ".stillrunning" / "stillrunning.yaml"
+    if for_write or user.exists() or not PACKAGE_CONFIG_FILE.exists():
+        return user
+    return PACKAGE_CONFIG_FILE
+
+
+class SetupSaveError(Exception):
+    pass
+
+
+class SetupInputError(Exception):
+    pass
+
+
+MENU_ATTEMPTS = 5
+
+
+def _ask_menu_choice(choices: dict) -> str:
+    """Ask until the answer is one of `choices` (Enter = "1"); give up after
+    MENU_ATTEMPTS so piped junk cannot loop forever."""
+    for _ in range(MENU_ATTEMPTS):
+        answer = input("  Choose [1]: ").strip() or "1"
+        if answer in choices:
+            return answer
+        print(f"  {answer[:20]!r} is not one of the choices. Type {', '.join(choices)} and press Enter.")
+    raise SetupInputError(f"no valid choice after {MENU_ATTEMPTS} tries")
+
+
+def _save_setup_config(config: dict) -> Path:
+    """Write the setup config atomically. In the per-user file, owner-only (it
+    can hold a Telegram token), keeping a legacy `token:` / `api_token:`."""
+    path = config_file(for_write=True)
+    in_home = path != PACKAGE_CONFIG_FILE
+    tmp = path.with_suffix(".yaml.tmp")
+    try:
+        if in_home:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            try:
+                with open(path) as f:
+                    old = yaml.safe_load(f)
+            except FileNotFoundError:
+                old = None
+            except (OSError, ValueError, yaml.YAMLError) as e:
+                print(f"  WARNING: could not read the old {path} ({type(e).__name__}); replacing it.")
+                old = None
+            if isinstance(old, dict):
+                config = {**{k: old[k] for k in ("token", "api_token") if old.get(k)}, **config}
+            try:
+                tmp.unlink()
+            except FileNotFoundError:
+                pass
+            fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0), 0o600)
+            if hasattr(os, "fchmod"):
+                os.fchmod(fd, 0o600)
+            f = os.fdopen(fd, "w")
+        else:
+            f = open(tmp, "w")
+        with f:
+            yaml.dump(config, f, default_flow_style=False, sort_keys=False)
+        os.replace(tmp, path)
+    except OSError as e:
+        try:
+            tmp.unlink()
+        except OSError:
+            pass
+        raise SetupSaveError(f"could not save the setup config to {path}: {e.strerror or e}") from e
+    return path
 
 
 def load_config() -> dict:
     global CONFIG
-    if not CONFIG_FILE.exists():
-        print(f"ERROR: Config file not found: {CONFIG_FILE}")
+    config_path = config_file()
+    if not config_path.exists():
+        print(f"ERROR: Config file not found: {config_path}")
         print("Copy stillrunning.yaml.example to stillrunning.yaml and fill in your config.")
         sys.exit(1)
 
-    with open(CONFIG_FILE) as f:
+    with open(config_path) as f:
         CONFIG = yaml.safe_load(f) or {}
 
     # Set defaults
@@ -1325,7 +1403,21 @@ def run_setup_wizard(autonomous: bool = False) -> None:
         funnel.track_step("setup_aborted_interrupt")
         print("\n\n  Setup cancelled. Run `stillrunning --setup` anytime.\n")
         sys.exit(130)
-    _finish_setup(interactive=not autonomous)
+    except SetupInputError as e:
+        funnel.track_step("setup_aborted_invalid_input")
+        print(f"\n  Setup stopped: {e}. Nothing was saved.")
+        print("  Run `stillrunning --setup` again and answer with one of the numbers shown.\n")
+        sys.exit(EXIT_USAGE)
+    except SetupSaveError as e:
+        funnel.track_step("setup_failed_config_save")
+        print(f"\n  ERROR: {e}")
+        print("  Your alert settings were NOT saved. Make sure your home directory is writable,")
+        print("  or install stillrunning for your own user (`pip install --user stillrunning`")
+        print("  or a virtualenv), then run `stillrunning --setup` again.\n")
+        sys.exit(EXIT_ERROR)
+    if not _finish_setup(interactive=not autonomous) and not autonomous:
+        funnel.track_step("setup_ended_unprotected")
+        sys.exit(EXIT_NOT_PROTECTED)
 
 
 def _run_alert_setup(autonomous: bool = False) -> None:
@@ -1361,11 +1453,7 @@ def _run_alert_setup(autonomous: bool = False) -> None:
             "intervals": {"process_check_sec": 30, "resource_check_sec": 60},
         }
 
-        config_path = Path(__file__).parent / "stillrunning.yaml"
-        config_tmp = config_path.with_suffix(".yaml.tmp")
-        with open(config_tmp, "w") as f:
-            yaml.dump(config, f, default_flow_style=False, sort_keys=False)
-        os.replace(config_tmp, config_path)
+        config_path = _save_setup_config(config)
 
         _post_early_signup("", "autonomous", machine_id_hash)
         print(f"Config saved to: {config_path}")
@@ -1380,24 +1468,17 @@ def _run_alert_setup(autonomous: bool = False) -> None:
     print("    3) silent mode  - just scan and log, no alerts")
     print("    4) skip for now")
     print()
-    alert_choice = input("  Choose [1]: ").strip() or "1"
-    print()
-
-    # Track the choice
     channel_map = {"1": "email", "2": "telegram", "3": "silent", "4": "skipped"}
-    channel = channel_map.get(alert_choice, "email")
-    funnel.track_step(f"alert_channel_{channel}")
+    alert_choice = _ask_menu_choice(channel_map)
+    print()
+    funnel.track_step(f"alert_channel_{channel_map[alert_choice]}")
 
-    config_path = Path(__file__).parent / "stillrunning.yaml"
     cwd = Path.cwd()
 
     # === SKIP PATH ===
     if alert_choice == "4":
         config = {"setup_skipped": True, "alert_channel": "skipped"}
-        config_tmp = config_path.with_suffix(".yaml.tmp")
-        with open(config_tmp, "w") as f:
-            yaml.dump(config, f, default_flow_style=False, sort_keys=False)
-        os.replace(config_tmp, config_path)
+        config_path = _save_setup_config(config)
         _post_early_signup("", "skipped", machine_id_hash)
         funnel.track_step("setup_skipped")
         print("  Skipped. Run `stillrunning --setup` anytime to enable.\n")
@@ -1412,10 +1493,7 @@ def _run_alert_setup(autonomous: bool = False) -> None:
             "log_files": [],
             "thresholds": {"cpu_percent": 85, "mem_percent": 85, "disk_percent": 85},
         }
-        config_tmp = config_path.with_suffix(".yaml.tmp")
-        with open(config_tmp, "w") as f:
-            yaml.dump(config, f, default_flow_style=False, sort_keys=False)
-        os.replace(config_tmp, config_path)
+        config_path = _save_setup_config(config)
         _post_early_signup("", "silent", machine_id_hash)
         funnel.track_step("setup_completed")
         print("  Silent mode. Scans will log to ~/.stillrunning/scan.log")
@@ -1431,9 +1509,13 @@ def _run_alert_setup(autonomous: bool = False) -> None:
         print("  Enter your email for weekly digest:")
         user_email = input("  > ").strip()
 
+        tries = 1
         while user_email and not _validate_email(user_email):
+            if tries >= MENU_ATTEMPTS:
+                raise SetupInputError(f"no valid email address after {MENU_ATTEMPTS} tries")
             print("  Invalid email format. Try again (or press Enter to skip):")
             user_email = input("  > ").strip()
+            tries += 1
 
         if user_email:
             config = {
@@ -1444,10 +1526,7 @@ def _run_alert_setup(autonomous: bool = False) -> None:
                 "log_files": [],
                 "thresholds": {"cpu_percent": 85, "mem_percent": 85, "disk_percent": 85},
             }
-            config_tmp = config_path.with_suffix(".yaml.tmp")
-            with open(config_tmp, "w") as f:
-                yaml.dump(config, f, default_flow_style=False, sort_keys=False)
-            os.replace(config_tmp, config_path)
+            config_path = _save_setup_config(config)
             _post_early_signup(user_email, "email", machine_id_hash)
             funnel.track_step("email_captured")
             funnel.track_step("setup_completed")
@@ -1466,10 +1545,7 @@ def _run_alert_setup(autonomous: bool = False) -> None:
                 "log_files": [],
                 "thresholds": {"cpu_percent": 85, "mem_percent": 85, "disk_percent": 85},
             }
-            config_tmp = config_path.with_suffix(".yaml.tmp")
-            with open(config_tmp, "w") as f:
-                yaml.dump(config, f, default_flow_style=False, sort_keys=False)
-            os.replace(config_tmp, config_path)
+            config_path = _save_setup_config(config)
             _post_early_signup("", "silent", machine_id_hash)
             funnel.track_step("setup_completed")
             print("  Silent mode enabled. Run `stillrunning scan <package>` to try a scan.\n")
@@ -1536,10 +1612,7 @@ def _run_alert_setup(autonomous: bool = False) -> None:
             "max_consecutive_failures": 3,
         }
 
-        config_tmp = config_path.with_suffix(".yaml.tmp")
-        with open(config_tmp, "w") as f:
-            yaml.dump(config, f, default_flow_style=False, sort_keys=False)
-        os.replace(config_tmp, config_path)
+        config_path = _save_setup_config(config)
         funnel.track_step("config_saved")
         funnel.track_step("setup_completed")
 
@@ -2301,7 +2374,7 @@ def run_doctor() -> int:
     return 0
 
 
-def _finish_setup(interactive: bool) -> None:
+def _finish_setup(interactive: bool) -> bool:
     """End of --setup: say exactly what is protected and what is not. Setup
     used to stop after the alert questions with nothing checking installs."""
     from . import claude_hook, layers as layers_mod
@@ -2330,8 +2403,12 @@ def _finish_setup(interactive: bool) -> None:
     hook_on = any(l["key"] == "claude_hook" and l["state"] == layers_mod.ON for l in layers)
     if interactive and not hook_on and sys.stdin.isatty():
         print("  Package checks are not switched on yet.")
-        answer = input("  Install the Claude Code hook now, so every install Claude Code "
-                       "runs is looked up first? [Y/n]: ").strip().lower()
+        try:
+            answer = input("  Install the Claude Code hook now, so every install Claude Code "
+                           "runs is looked up first? [Y/n]: ").strip().lower()
+        except (EOFError, KeyboardInterrupt):
+            answer = "n"
+            print("\n  No answer, so the Claude Code hook was not installed.")
         print()
         if answer in ("", "y", "yes"):
             try:
@@ -2347,6 +2424,18 @@ def _finish_setup(interactive: bool) -> None:
     for line in layers_mod.render(layers).splitlines():
         print("  " + line)
     print()
+    if layers_mod.install_time_protection(layers):
+        return True
+    print("  " + "!" * 60)
+    print("  YOU ARE NOT PROTECTED. Setup finished, but nothing checks the packages you install.")
+    if not (interactive and sys.stdin.isatty()):
+        print("  (Setup changes your Claude Code settings only when you type yes in a terminal.)")
+    print("  To get protected, run one of:")
+    print("      stillrunning --hook-claude-code    (installs made by Claude Code)")
+    print("      stillrunning shell-install         (installs typed in your terminal)")
+    print("  " + "!" * 60)
+    print()
+    return False
 
 
 # ---------------------------------------------------------------------------
@@ -3844,7 +3933,7 @@ def main_cli() -> None:
         run_setup_wizard(autonomous=args.autonomous)
     else:
         # First-run detection: no config → run setup wizard
-        if not CONFIG_FILE.exists():
+        if not config_file().exists():
             print()
             print("  No configuration found. Starting setup wizard...")
             print()
