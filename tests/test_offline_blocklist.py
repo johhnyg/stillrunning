@@ -930,3 +930,121 @@ def test_status_survives_a_non_numeric_build_time(built, capsys):
     doc["mac"] = ch.offline_manifest_mac((folder / ch.OFFLINE_KEY).read_bytes().strip(), doc)
     path.write_text(json.dumps(doc))
     assert ob.status() == 3 and "build time unknown" in capsys.readouterr().out
+
+
+# ── review 4 findings ──
+
+def test_r4_huge_version_cannot_turn_a_block_into_ask(built, monkeypatch):
+    """IMPORTANT (review 4): a 4,400-digit pin on a partly-listed package made the
+    pre-pass raise, and the whole decision fell back to 'ask'."""
+    _no_hosted(monkeypatch)
+    command = "pip install evil-pkg; pip install 'partly-bad==1.%s'" % ("9" * 4400)
+    decision = ch.decide(command, env={})
+    assert decision["action"] == "deny"
+    assert any("evil-pkg" in line and "offline list" in line for line in decision["lines"])
+
+
+def test_r4_an_error_in_the_offline_pre_pass_blocks_that_package(built, monkeypatch):
+    real = ch._offline_lookup
+
+    def boom(eco, name, version):
+        if name == "boom-pkg":
+            raise RuntimeError("synthetic")
+        return real(eco, name, version)
+    monkeypatch.setattr(ch, "_offline_lookup", boom)
+    _no_hosted(monkeypatch)
+    decision = ch.decide("pip install boom-pkg", env={})
+    assert decision["action"] == "deny" and "check failed on this package" in decision["lines"][0]
+
+
+@pytest.mark.parametrize("command", [
+    "stillrunning blocklist --refresh --force", "stillrunning blocklist --force --refresh",
+    "stillrunning blocklist --refresh --fo", "stillrunning blocklist --unschedule",
+    "python3 -m stillrunning blocklist --refresh --force",
+    "script -qc 'stillrunning blocklist --refresh --force' /dev/null",
+    "sr=stillrunning; $sr blocklist --refresh --force",
+    "cd /tmp && stillrunning blocklist --refresh --force=1",
+])
+def test_r4_forcing_or_unscheduling_the_blocklist_asks(home, command):
+    """IMPORTANT (review 4): an agent could run --force through a pseudo-terminal
+    (`script -qc`); the hook now asks a person first, as for `stillrunning allow`."""
+    assert ch.touches_protection(command), command
+    assert ch.decide(command, env={})["action"] == "ask"
+
+
+@pytest.mark.parametrize("command", [
+    "stillrunning blocklist --refresh", "stillrunning blocklist --status", "stillrunning blocklist --schedule",
+])
+def test_r4_ordinary_blocklist_commands_do_not_ask(home, command):
+    assert not ch.touches_protection(command)
+
+
+def test_r4_package_manager_force_flags_are_unaffected(home):
+    assert not ch.touches_protection("npm install --force lodash")
+    assert not ch.touches_protection("pip install --force-reinstall requests")
+
+
+def test_r4_a_forced_refresh_stays_on_record_after_normal_refreshes(built, monkeypatch, tmp_path, capsys):
+    folder, _ = built
+    empty_npm = tmp_path / "npm-empty.zip"
+    _zip(empty_npm, [])
+    ob.build(sources={"pip": str(tmp_path / "pypi.zip"), "npm": str(empty_npm)}, log=lambda *a: None, force=True)
+    after = ob.build(sources={"pip": str(tmp_path / "pypi.zip")}, log=lambda *a: None)     # normal (cron) refresh
+    assert "forced" not in after and after["forced_history"][-1]["dropped"] == ["npm 2 -> 0"]
+    ch._OFFLINE_STATE.clear()
+    assert ch._offline_db()[0] == "ok"                        # the history is under the MAC
+    ob.status()
+    assert "Forced refreshes so far: 1" in capsys.readouterr().out
+
+
+def test_r4_deleted_manifest_with_the_list_still_there_is_tampered(built, monkeypatch):
+    folder, _ = built
+    (folder / ch.OFFLINE_MANIFEST).unlink()
+    ch._OFFLINE_STATE.clear()
+    assert ch._offline_db()[0] == "tampered"
+    monkeypatch.setattr(ch, "_query", lambda *a, **k: {"status": "ok"})
+    monkeypatch.setattr(ch, "_on_registry", lambda *a, **k: True)
+    assert ch.decide("pip install requests", env={})["action"] == "deny"
+
+
+def test_r4_no_list_files_at_all_is_still_missing(home):
+    assert ch._offline_db() == ("missing", None)
+
+
+@pytest.mark.parametrize("zero", ["0", "0.0", "0.0.0", "v0.0.0", "00.0"])
+def test_r4_introduced_zero_in_any_spelling_is_every_version(zero):
+    assert ob._version_specs({"ranges": [{"type": "ECOSYSTEM", "events": [{"introduced": zero}]}]}) == "*"
+    assert ob._version_specs({"ranges": [{"type": "SEMVER", "events": [
+        {"introduced": zero}, {"fixed": "2.0"}]}]}) == ["<2.0"]
+
+
+# ── a verified list SQLite cannot read: fail closed, never "not listed" ──
+
+def test_verified_list_that_sqlite_cannot_open_blocks_on_hosted_ok(built, monkeypatch):
+    import sqlite3
+
+    def broken(*a, **k):
+        raise sqlite3.OperationalError("unable to open database file")
+    monkeypatch.setattr(sqlite3, "connect", broken)
+    monkeypatch.setattr(ch, "_query", lambda *a, **k: {"status": "ok"})
+    monkeypatch.setattr(ch, "_on_registry", lambda *a, **k: True)
+    assert ch._offline_db()[0] == "ok"                       # verified: the files check out
+    for name in ("evil-pkg", "requests"):
+        decision = ch.decide("pip install " + name, env={})
+        assert decision["action"] == "deny", (name, decision["lines"])
+        assert "could not be checked" in " ".join(r.get("explanation") or "" for r in decision["records"])
+
+
+def test_verified_list_with_no_sqlite3_module_blocks(built, monkeypatch):
+    monkeypatch.setitem(sys.modules, "sqlite3", None)        # `import sqlite3` raises ImportError
+    monkeypatch.setattr(ch, "_query", lambda *a, **k: {"status": "ok"})
+    monkeypatch.setattr(ch, "_on_registry", lambda *a, **k: True)
+    out = ch.lookup({"eco": "pip", "name": "evil-pkg", "version": None})
+    assert out["status"] == "blocked" and out["why"] == "offline_error"
+
+
+def test_no_list_at_all_still_falls_through_without_sqlite(home, monkeypatch):
+    monkeypatch.setitem(sys.modules, "sqlite3", None)
+    monkeypatch.setattr(ch, "_query", lambda *a, **k: {"status": "ok"})
+    monkeypatch.setattr(ch, "_on_registry", lambda *a, **k: True)
+    assert ch.lookup({"eco": "pip", "name": "requests", "version": None})["status"] == "ok"

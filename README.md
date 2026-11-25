@@ -123,7 +123,19 @@ still blocks everything on it, but every install check then carries a warning
 that packages reported since its build are not on it, with the refresh
 command, and `stillrunning blocklist --status` exits 3 and says STALE.
 
+`stillrunning blocklist --refresh --force` accepts a refresh that would drop an
+ecosystem or shrink one by more than half; it is accepted only from a person at
+a terminal, and the Claude Code hook asks a person before an agent may run it
+(or `--unschedule`). What a forced refresh dropped is printed, appended to
+`~/.stillrunning/blocklist_force.log` and kept in the manifest's history.
+To switch the offline list off, remove all the `blocklist*` files in
+`~/.stillrunning` (removing only the manifest while the database or key is
+still there counts as tampering and blocks every install).
+
 Known limits (tracked, not yet addressed):
+
+- The force log file (`blocklist_force.log`) is not covered by the MAC; the
+  manifest's forced-refresh history is.
 
 - The HMAC is a per-machine MAC, not a third-party signature: code running as
   your user can read the key and re-sign a changed list, and can put back an

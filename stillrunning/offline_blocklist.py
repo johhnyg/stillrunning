@@ -94,6 +94,8 @@ def _version_specs(affected):
                 if introduced is not None:                 # an open interval: everything from there
                     specs.append(">=" + introduced)
                 introduced = str(event["introduced"])
+                if _ZERO.match(introduced):                # "0", "0.0.0", "v0": the very first version
+                    introduced = "0"
             elif "fixed" in event or "last_affected" in event:
                 end = str(event.get("fixed", event.get("last_affected")))
                 op = "<" if "fixed" in event else "<="
@@ -122,6 +124,8 @@ def _download(url, dest):
 
 
 OSV_ECOSYSTEM = {"pip": "PyPI", "npm": "npm"}
+_ZERO = __import__("re").compile(r"^v?0+(\.0+)*$")
+FORCED_HISTORY_KEEP = 50
 
 
 def _ingest(conn, eco, zip_path, log=print):
@@ -249,7 +253,9 @@ def _build(folder, sources, log, force=False):
         if not counts:
             raise RuntimeError("no entries: refusing to replace the blocklist with an empty one")
         missing = [eco for eco in sources if not counts.get(eco)]
-        previous = _previous_counts(folder)
+        before = _previous_manifest(folder)
+        previous = before.get("counts") or {}
+        history = [h for h in before.get("forced_history") or [] if isinstance(h, dict)]
         shrunk = [eco for eco in counts if previous.get(eco) and counts[eco] < previous[eco] // 2]
         dropped = ["%s %d -> 0" % (e, previous.get(e, 0)) for e in missing] + \
                   ["%s %d -> %d" % (e, previous[e], counts[e]) for e in shrunk]
@@ -280,6 +286,9 @@ def _build(folder, sources, log, force=False):
                     "built": int(time.time()), "counts": counts, "source": "OSV.dev MAL advisories"}
         if forced:
             manifest["forced"] = forced                 # covered by the MAC; --status shows it
+            history.append(forced)
+        if history:                                     # carried by every later refresh, never dropped
+            manifest["forced_history"] = history[-FORCED_HISTORY_KEEP:]
         manifest["mac"] = claude_hook.offline_manifest_mac(_key(folder), manifest)
         _write_manifest(folder, manifest)
         _prune(folder, keep=name)
@@ -314,8 +323,8 @@ def _log_forced(folder, dropped, log):
         log("WARNING: could not write %s (%s)" % (FORCE_LOG, type(exc).__name__))
 
 
-def _previous_counts(folder):
-    """Entry counts of the list in place, if it still verifies; {} otherwise."""
+def _previous_manifest(folder):
+    """The manifest of the list in place, if it still verifies; {} otherwise."""
     if os.path.realpath(folder) != os.path.realpath(claude_hook._state_dir()):
         return {}
     claude_hook._OFFLINE_STATE.clear()
@@ -323,8 +332,12 @@ def _previous_counts(folder):
         if claude_hook._offline_db()[0] != "ok":
             return {}
         with open(os.path.join(folder, claude_hook.OFFLINE_MANIFEST), encoding="utf-8") as handle:
-            counts = json.load(handle).get("counts") or {}
-        return {k: v for k, v in counts.items() if isinstance(v, int)}
+            manifest = json.load(handle)
+        if not isinstance(manifest, dict):
+            return {}
+        counts = manifest.get("counts") or {}
+        manifest["counts"] = {k: v for k, v in counts.items() if isinstance(v, int)}
+        return manifest
     except (OSError, ValueError, AttributeError):  # lint: allowed-silent(no usable previous list: nothing to compare)
         return {}
     finally:
@@ -381,6 +394,11 @@ def status():
              ", ".join("%s %d" % kv for kv in sorted(manifest.get("counts", {}).items())), age))
     if isinstance(manifest.get("forced"), dict):
         print("Built with --force, accepting: %s" % ", ".join(str(d) for d in manifest["forced"].get("dropped") or []))
+    history = [h for h in manifest.get("forced_history") or [] if isinstance(h, dict)]
+    if history:
+        print("Forced refreshes so far: %d (latest %s: %s)" % (
+            len(history), time.strftime("%Y-%m-%d", time.gmtime(history[-1].get("at") or 0)),
+            ", ".join(str(d) for d in history[-1].get("dropped") or [])))
     stale = claude_hook.offline_stale_note()
     if stale:
         print("STALE: " + stale)

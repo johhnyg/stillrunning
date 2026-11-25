@@ -55,6 +55,17 @@ including known-malicious ones, instead of blocking them.
 - `stillrunning blocklist --refresh --force` accepts a refresh that was
   refused for dropping an ecosystem or shrinking by more than half (an empty
   list is still refused).
+- An error while asking the offline list about one package blocks that
+  package (it could make the whole decision fall back to "ask"); a verified
+  list that SQLite cannot read (no `sqlite3` module, a broken file) blocks
+  instead of falling back to the hosted lookup. With no list at all the hosted
+  lookup runs as before.
+- The Claude Code hook asks a person before an agent may run
+  `stillrunning blocklist --force` or `--unschedule` (in any spelling, also
+  through `script -qc`, `python -m` or a variable); forced refreshes stay on
+  record in the manifest's history; a manifest removed while the database or
+  key is still there counts as tampering; `introduced: "0.0.0"` (any all-zero
+  spelling) means every version.
 - pip pins are compared in their standard form (PEP 440): `1.0.0-rc1`,
   `1.0.0.rc1` and `1.0c1` all match a listed `1.0.0rc1` (also post, dev,
   alpha/beta spellings), offline and on the hosted path.

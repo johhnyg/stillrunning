@@ -580,6 +580,9 @@ _SELF_ARGS = {"allow", "--allow", "--block", "--untrust", "--trust", "remember",
               "shell-uninstall", "venv-uninstall", "--uninstall-hook",
               "--uninstall-hook-claude-code"}
 _ENV_WORDS = {"export", "declare", "typeset", "readonly", "local", "unset", "set", "setenv"}
+# `stillrunning blocklist --force` (accept a list that drops or halves part of the
+# blocklist) and `--unschedule` (stop refreshing it) change the protection itself
+_BLOCKLIST_SWITCH = re.compile(r"^--(force|unschedule)(=.*)?$|^--(f|fo|for|forc|uns|unsc|unsch|unsche|unsched|unschedu|unschedul)$")
 
 
 def _own_switch(cmd, start, program, args):
@@ -598,7 +601,8 @@ def _own_switch(cmd, start, program, args):
     def switches(rest):
         plain = [a for a in rest if not a.startswith("-")]
         return any(a in _SELF_ARGS or "uninstall" in a for a in rest) or \
-            plain[:2] == ["whitelist", "add"] or plain[:2] == ["whitelist", "remove"]
+            plain[:2] == ["whitelist", "add"] or plain[:2] == ["whitelist", "remove"] or \
+            (plain[:1] == ["blocklist"] and any(_BLOCKLIST_SWITCH.match(a) for a in rest))
 
     for index, name in enumerate(names):
         module = None
@@ -618,6 +622,7 @@ def _own_switch(cmd, start, program, args):
         plain = [a for a in rest if not a.startswith("-")]
         if plain[:1] and plain[0] in ("remember", "forget", "allow", "shell-uninstall",
                                       "venv-uninstall") \
+                or (plain[:1] == ["blocklist"] and any(_BLOCKLIST_SWITCH.match(a) for a in rest)) \
                 or any(a in _SELF_ARGS and a.startswith("--") for a in rest) \
                 or plain[:2] == ["whitelist", "add"]:
             return True
@@ -813,7 +818,8 @@ def _paths_touch_protection(command, cwds, depth):
 
 _SELF_PROTECT_TEXT = re.compile(
     r"stillrunning\b[^|;&\n]*(\ballow\b|uninstall|--block\b|--untrust\b|--trust\b|\bremember\b"
-    r"|\bforget\b)|uninstall\s+(-\S+\s+)*stillrunning\b|\.stillrunning|\.claude/sett"
+    r"|\bforget\b|\bblocklist\b[^|;&\n]*--(force|unschedule|f\b|fo|for|forc|uns))"
+    r"|uninstall\s+(-\S+\s+)*stillrunning\b|\.stillrunning|\.claude/sett"
     r"|(?<![A-Za-z0-9_])STILLRUNNING_[A-Z]", re.I)
 
 
@@ -952,6 +958,11 @@ EXPLANATIONS = {
         "version this command would install could not be worked out (the registry or "
         "stillrunning.io did not answer), so stillrunning assumes the worst. Name an exact "
         "version that is not on that list, or try again when the lookup can complete."),
+    "offline_error": (
+        "Blocked `{name}`: stillrunning's offline blocklist could not be checked for this package "
+        "(an error, not a verdict on it), so it was not let through unchecked. Check the "
+        "command's version spelling; `stillrunning blocklist --status` shows the list's state, "
+        "and `stillrunning blocklist --refresh` rebuilds a list that cannot be read."),
     "offline_tampered": (
         "Blocked `{name}`: stillrunning's offline blocklist (the blocklist files in the "
         ".stillrunning folder in your home directory) failed its integrity check, so it may "
@@ -3785,6 +3796,13 @@ def _verify_offline_db():
     folder = _state_dir()
     manifest_path = os.path.join(folder, OFFLINE_MANIFEST)
     if not os.path.lexists(manifest_path):
+        try:
+            leftovers = os.path.lexists(os.path.join(folder, OFFLINE_KEY)) or any(
+                _OFFLINE_DB_NAME.match(f) for f in os.listdir(folder))
+        except OSError:
+            leftovers = False
+        if leftovers:          # a list was installed here and its manifest is gone: not "no list"
+            return "tampered", "the manifest is missing while the list's key or database is still there"
         return "missing", None
     try:
         if os.path.islink(manifest_path) or os.path.getsize(manifest_path) > 65536:
@@ -3885,9 +3903,9 @@ def _offline_lookup(eco, name, version):
                                (eco, normalize(eco, name))).fetchone()
         finally:
             conn.close()
-    except Exception as exc:       # no sqlite3 here, or an unreadable file: the hosted lookup still runs
-        _warn(f"offline blocklist not used ({type(exc).__name__}) — relying on the API")
-        return None
+    except Exception as exc:       # a verified list that cannot be read (no sqlite3, a broken file): never "not listed"
+        _warn(f"offline blocklist could not be read ({type(exc).__name__}) — blocking, not guessing")
+        return {"status": "blocked", "why": "offline_error", "local": True}
     if row is None:
         return None
     versions, advisory = row
@@ -3935,7 +3953,7 @@ def _pep440(version):
     """pip's standard (PEP 440) form of a version, or None if it is not one:
     `1.0.0-rc1`, `1.0.0.rc1`, `1.0c1` and `1.0.0rc1` all → `1rc1`; trailing
     `.0`s, a `v` prefix, a zero epoch and a `+local` part do not count."""
-    if not isinstance(version, str) or not version.isascii():
+    if not isinstance(version, str) or not version.isascii() or len(version) > 256:
         return None
     match = _PEP440.match(version)
     if not match:
@@ -3971,7 +3989,7 @@ def _numeric_version(text):
     """`1.2.3` → (1, 2, 3); anything not purely numeric → None (not compared)."""
     canon = _canon_version(text)
     parts = canon.split(".")
-    if canon and all(p.isascii() and p.isdigit() for p in parts):
+    if canon and all(p.isascii() and p.isdigit() and len(p) <= 64 for p in parts):
         return tuple(int(p) for p in parts)
     return None
 
@@ -4182,7 +4200,7 @@ def _canon_version(version):
     text = str(version or "").strip().lower().lstrip("=v").split("+", 1)[0]
     if "!" in text and text.split("!", 1)[0].strip("0") == "":
         text = text.split("!", 1)[1]                      # epoch 0 is the default
-    parts = [str(int(p)) if p.isascii() and p.isdigit() else p for p in text.split(".")]
+    parts = [str(int(p)) if p.isascii() and p.isdigit() and len(p) <= 64 else p for p in text.split(".")]
     while len(parts) > 1 and parts[-1] == "0":
         parts.pop()
     return ".".join(parts)
@@ -4832,11 +4850,15 @@ def decide(command, cwd=None, env=None, lookup_fn=None, deadline=CHECK_DEADLINE_
         offline_first = {}
         if lookup_fn is None:
             for index, pkg in enumerate(packages):
-                off = _offline_lookup(pkg["eco"], pkg["name"], pkg.get("version"))
+                try:
+                    off = _offline_lookup(pkg["eco"], pkg["name"], pkg.get("version"))
+                except Exception as exc:    # never a crash of the whole decision: this package is blocked
+                    _warn(f"offline blocklist check for {pkg['name']} failed ({type(exc).__name__}) — blocking it")
+                    off = {"status": "blocked", "why": "offline_error", "local": True}
                 if not off:
                     continue
                 offline_first[index] = off
-                if off.get("why") == "offline_tampered" or (
+                if off.get("why") in ("offline_tampered", "offline_error") or (
                         off["status"] == "blocked" and not _has_override(pkg["eco"], pkg["name"])):
                     results[index] = (dict(off, registry=None), 0.0)
         pool = ThreadPoolExecutor(max_workers=min(8, len(packages) + len(shadow)))
@@ -4931,10 +4953,12 @@ def decide(command, cwd=None, env=None, lookup_fn=None, deadline=CHECK_DEADLINE_
             lines.append(status_line("note", _label(pkg),
                                      "allowed by your own override, not looked up", ms, color))
             record("override", _label(pkg), evidence, None, pkg, ms)
-        elif status == "blocked" and outcome.get("why") == "offline_tampered":
+        elif status == "blocked" and outcome.get("why") in ("offline_tampered", "offline_error"):
+            tampered = outcome.get("why") == "offline_tampered"
             lines.append(status_line("blocked", _label(pkg),
-                                     "the offline blocklist failed its integrity check", ms, color))
-            record("blocked", _label(pkg), evidence, explain("offline_tampered", name=name), pkg, ms)
+                                     "the offline blocklist failed its integrity check" if tampered
+                                     else "the offline blocklist check failed on this package", ms, color))
+            record("blocked", _label(pkg), evidence, explain(outcome["why"], name=name), pkg, ms)
             stats["blocked"] += 1
             escalate("deny")
         elif status == "blocked" and outcome.get("why") == "version_unresolved":

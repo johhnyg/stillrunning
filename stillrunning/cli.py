@@ -2703,8 +2703,8 @@ def _print_outcome(pkg: dict, outcome: dict, indent: str = "") -> int:
         advisory = outcome.get("advisory")
         print(f"{indent}✗ stillrunning BLOCKED [exit {rc}]: {label}")
         why = outcome.get("why")
-        if why == "offline_tampered":            # not a verdict on this package: the list is broken
-            print(f"{indent}   {ch.explain('offline_tampered', name=name)}")
+        if why in ("offline_tampered", "offline_error"):     # not a verdict on this package
+            print(f"{indent}   {ch.explain(why, name=name)}")
         elif why == "version_unresolved":
             bad = ", ".join(a for a in outcome.get("affected") or [] if isinstance(a, str))
             print(f"{indent}   {ch.explain('version_unresolved', name=name, affected=bad)}")
