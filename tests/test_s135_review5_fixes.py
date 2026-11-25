@@ -26,8 +26,8 @@ def cwd(tmp_path, monkeypatch):
     monkeypatch.setattr(h, "_shadow_lookup", lambda pkg, timeout=4.0: stub(pkg))   # no network
     work = tmp_path / "work"
     work.mkdir()
-    (work / "constraints.txt").write_text("requests<3\n")
-    (work / ".env").write_text("A=1\n")
+    (work / "constraints.txt").write_text("requests<3\n", encoding="utf-8")
+    (work / ".env").write_text("A=1\n", encoding="utf-8")
     return str(work)
 
 

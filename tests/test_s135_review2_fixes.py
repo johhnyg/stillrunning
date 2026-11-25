@@ -252,7 +252,7 @@ def test_requirements_given_in_the_command_text_are_read(command):
 
 
 def test_requirements_from_a_file_on_stdin_are_read(tmp_path):
-    (tmp_path / "f").write_text("evilpkg\n")
+    (tmp_path / "f").write_text("evilpkg\n", encoding="utf-8")
     assert decide("pip install -r /dev/fd/0 < f", cwd=str(tmp_path))["action"] == "deny"
 
 
@@ -286,16 +286,16 @@ def test_requirements_on_stdin_that_cannot_be_read_ask(command):
     "wget https://x.example/pkg.tgz && npm install ./pkg.tgz",
 ])
 def test_a_file_rewritten_by_the_same_command_is_not_trusted(command, tmp_path):
-    (tmp_path / "r.txt").write_text("requests\n")
-    (tmp_path / "pkg.whl").write_text("x")
-    (tmp_path / "pkg.tgz").write_text("x")
+    (tmp_path / "r.txt").write_text("requests\n", encoding="utf-8")
+    (tmp_path / "pkg.whl").write_text("x", encoding="utf-8")
+    (tmp_path / "pkg.tgz").write_text("x", encoding="utf-8")
     decision = decide(command, cwd=str(tmp_path))
     assert decision["action"] == "ask", (command, decision["lines"])
     assert "same command" in decision["reason"]
 
 
 def test_an_untouched_requirements_file_is_still_just_read(tmp_path):
-    (tmp_path / "r.txt").write_text("requests\n")
+    (tmp_path / "r.txt").write_text("requests\n", encoding="utf-8")
     for command in ("pip install -r r.txt", "echo hi > log.txt && pip install -r r.txt",
                     "git status && pip install -r r.txt"):
         assert decide(command, cwd=str(tmp_path))["action"] == "allow", command
@@ -305,11 +305,11 @@ def test_an_untouched_requirements_file_is_still_just_read(tmp_path):
 @pytest.fixture
 def protected(home):
     (home / ".claude").mkdir()
-    (home / ".claude" / "settings.json").write_text("{}")
-    (home / ".claude" / "settings.local.json").write_text("{}")
+    (home / ".claude" / "settings.json").write_text("{}", encoding="utf-8")
+    (home / ".claude" / "settings.local.json").write_text("{}", encoding="utf-8")
     (home / ".claude" / "projects").mkdir()
     (home / ".stillrunning").mkdir()
-    (home / ".stillrunning" / "overrides.json").write_text("{}")
+    (home / ".stillrunning" / "overrides.json").write_text("{}", encoding="utf-8")
     return home
 
 
@@ -413,7 +413,7 @@ def test_file_tools_cover_every_file_of_the_package(home, capsys):
 # ── finding 7: an override whose blocklist check could not run ───────────────
 def test_override_with_no_blocklist_answer_asks(home, monkeypatch, capsys):
     (home / ".stillrunning").mkdir()
-    (home / ".stillrunning" / "overrides.json").write_text(json.dumps({"allow": ["litellm"]}))
+    (home / ".stillrunning" / "overrides.json").write_text(json.dumps({"allow": ["litellm"]}), encoding="utf-8")
     monkeypatch.setattr(ch, "_blocklist_only_lookup", lambda *a, **k: None)     # offline / 429
     assert ch.lookup({"eco": "pip", "name": "litellm", "version": "1.82.7"}) == \
         {"status": "unverified", "why": "override_unchecked"}
@@ -483,12 +483,12 @@ def test_hook_process_answers_at_the_deadline_even_when_a_lookup_hangs(tmp_path)
         mod.lookup = hang
         mod.decide = functools.partial(mod.decide, deadline=0.5)
         mod._script_main()
-    """))
+    """), encoding="utf-8")
     event = json.dumps({"tool_name": "Bash", "cwd": str(tmp_path),
                         "tool_input": {"command": "pip install requests six"}})
     started = time.monotonic()
     done = subprocess.run([sys.executable, str(driver)], input=event, capture_output=True, text=True,
-                          timeout=30, env=dict(os.environ, HOME=str(tmp_path)))
+                          timeout=30, env=dict(os.environ, HOME=str(tmp_path), **({"USERPROFILE": str(tmp_path)} if os.name == "nt" else {})))
     took = time.monotonic() - started
     assert took < 10, f"the hook process waited {took:.1f}s for a hung lookup"
     out = json.loads(done.stdout)
@@ -684,13 +684,13 @@ def test_strict_mode_and_the_decision_log_keep_the_fields(store, home, capsys, m
     event = json.dumps({"tool_name": "Bash", "cwd": "/tmp", "tool_input": {"command": REMEMBERED}})
     assert ch.run_hook(event) == 0
     capsys.readouterr()
-    rows = [json.loads(line) for line in open(ch.decisions_path())]
+    rows = [json.loads(line) for line in open(ch.decisions_path(), encoding="utf-8")]
     assert rows[-1]["can_remember"] is True and len(rows[-1]["cmd_id"]) == 32
     event = json.dumps({"tool_name": "Write", "cwd": "/tmp",
                         "tool_input": {"file_path": "~/.stillrunning/remembered_commands.json"}})
     assert ch.run_hook(event) == 0
     assert json.loads(capsys.readouterr().out)["hookSpecificOutput"]["permissionDecision"] == "ask"
-    rows = [json.loads(line) for line in open(ch.decisions_path())]
+    rows = [json.loads(line) for line in open(ch.decisions_path(), encoding="utf-8")]
     assert rows[-1]["can_remember"] is False and rows[-1]["cmd_id"] is None
 
 
@@ -700,27 +700,27 @@ def test_remembering_works_end_to_end_in_the_bare_script_the_hook_runs_as(home):
     a different folder still asks."""
     from stillrunning import remembered
     command = "pip install git+https://github.com/x/y"
-    env = dict(os.environ, HOME=str(home))
+    env = dict(os.environ, HOME=str(home), **({"USERPROFILE": str(home)} if os.name == "nt" else {}))
 
     # the shipped file has the feature off: run a copy with the switch on
     import shutil
     pkg = home / "pkgcopy"
     shutil.copytree(os.path.dirname(ch.__file__), pkg, ignore=shutil.ignore_patterns("__pycache__"))
     script = pkg / "claude_hook.py"
-    text = script.read_text()
+    text = script.read_text(encoding="utf-8")
     assert text.count("REMEMBER_ENABLED = False") == 1
-    script.write_text(text.replace("REMEMBER_ENABLED = False", "REMEMBER_ENABLED = True"))
+    script.write_text(text.replace("REMEMBER_ENABLED = False", "REMEMBER_ENABLED = True"), encoding="utf-8")
 
     def run(cwd):
         event = json.dumps({"tool_name": "Bash", "cwd": cwd, "tool_input": {"command": command}})
         done = subprocess.run([sys.executable, "-I", "-S", str(script)], input=event, env=env,
-                              capture_output=True, text=True, timeout=30)
+                              capture_output=True, text=True, encoding="utf-8", timeout=30)
         assert done.returncode == 0, done.stderr
         return json.loads(done.stdout), done.stderr
 
     first, _ = run(str(home))
     assert first["hookSpecificOutput"]["permissionDecision"] == "ask"
-    row = [json.loads(line) for line in open(ch.decisions_path())][-1]
+    row = [json.loads(line) for line in open(ch.decisions_path(), encoding="utf-8")][-1]
     assert row["can_remember"] is True and row["cmd_id"] == remembered.command_id(command, str(home))
     remembered.remember(row["cmd_id"])
     second, stderr = run(str(home))

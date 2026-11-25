@@ -49,7 +49,7 @@ def test_opt_out_sends_nothing_and_writes_no_marker(sent, monkeypatch, tmp_path,
 
 
 def test_unwritable_marker_sends_nothing(sent, tmp_path):
-    (tmp_path / ".stillrunning").write_text("not a directory")
+    (tmp_path / ".stillrunning").write_text("not a directory", encoding="utf-8")
     assert not funnel.track_first_scan(0)
     assert sent == []
 

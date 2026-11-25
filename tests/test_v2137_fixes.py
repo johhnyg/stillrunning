@@ -121,7 +121,7 @@ def test_quota_exhaustion_warns(scan, capsys):
 
 
 def test_h4_intercept_missing_verdict_is_not_clean():
-    src = Path(intercept.__file__).read_text()
+    src = Path(intercept.__file__).read_text(encoding="utf-8")
     assert 'result.get("verdict", "CLEAN")' not in src
     assert 'verdict in ("DANGEROUS", "BLOCKED")' in src
 

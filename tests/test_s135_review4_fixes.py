@@ -327,10 +327,10 @@ PACKAGE_SILENT = [
 def home(monkeypatch, tmp_path):
     root = tmp_path / "home"
     (root / ".claude").mkdir(parents=True)
-    (root / ".claude" / "settings.json").write_text("{}")
+    (root / ".claude" / "settings.json").write_text("{}", encoding="utf-8")
     (root / ".stillrunning").mkdir(mode=0o700)
-    (root / ".stillrunning" / "overrides.json").write_text("{}")
-    (root / ".npmrc").write_text("")
+    (root / ".stillrunning" / "overrides.json").write_text("{}", encoding="utf-8")
+    (root / ".npmrc").write_text("", encoding="utf-8")
     monkeypatch.setenv("HOME", str(root))
     for name in list(os.environ):
         if name.startswith(("STILLRUNNING_", "PIP_", "UV_", "NPM_CONFIG_", "npm_config_", "POETRY_",
@@ -339,8 +339,8 @@ def home(monkeypatch, tmp_path):
     work = tmp_path / "work"
     for sub in ("app", "docs", "build"):
         (work / sub).mkdir(parents=True)
-    (work / "requirements.txt").write_text("evilx\n")
-    (work / "app" / "requirements.txt").write_text("evilx\n")
+    (work / "requirements.txt").write_text("evilx\n", encoding="utf-8")
+    (work / "app" / "requirements.txt").write_text("evilx\n", encoding="utf-8")
     monkeypatch.chdir(work)
     return root
 
@@ -354,7 +354,7 @@ def work(home):
 def plain(work):
     """A work folder whose requirements files name nothing listed."""
     for path in ("requirements.txt", os.path.join("app", "requirements.txt")):
-        with open(os.path.join(work, path), "w") as handle:
+        with open(os.path.join(work, path), "w", encoding="utf-8") as handle:
             handle.write("requests\n")
     return work
 
@@ -593,7 +593,7 @@ def test_a_requirements_file_is_read_however_the_flag_is_written(command, plain)
 
 
 def test_a_cluster_ending_in_c_marks_the_versions_as_uncertain(plain):
-    with open(os.path.join(plain, "constraints.txt"), "w") as handle:
+    with open(os.path.join(plain, "constraints.txt"), "w", encoding="utf-8") as handle:
         handle.write("requests<3\n")
     parsed = ch.parse_install_commands("pip install -Uc constraints.txt requests", cwd=plain, env={})
     assert [(p["name"], p.get("uncertain")) for p in parsed["packages"]] == [("requests", True)]
@@ -614,7 +614,7 @@ def test_shell_options_are_not_script_files(after, operands):
 
 
 def test_a_script_file_that_is_there_keeps_stdin_as_data(plain):
-    with open(os.path.join(plain, "process.sh"), "w") as handle:
+    with open(os.path.join(plain, "process.sh"), "w", encoding="utf-8") as handle:
         handle.write("cat\n")
     d = decide("bash process.sh <<EOF\npip install evilx\nEOF", plain)
     assert d["action"] == "allow" and d["records"] == []
@@ -630,7 +630,7 @@ def test_npx_dash_c_runs_its_string_as_a_command(work):
 @pytest.fixture
 def project(work):
     os.makedirs(os.path.join(work, ".claude"))
-    with open(os.path.join(work, ".claude", "settings.json"), "w") as handle:
+    with open(os.path.join(work, ".claude", "settings.json"), "w", encoding="utf-8") as handle:
         handle.write("{}")
     return work
 
@@ -674,7 +674,7 @@ def test_ordinary_git_in_the_hooks_own_repository_is_silent(command, package_rep
 
 
 def test_git_dash_c_names_the_folder(work, package_repo):
-    assert ch.touches_protection(f"git -C {package_repo} stash", work)
+    assert ch.touches_protection(f"git -C {str(package_repo).replace(os.sep, '/')} stash", work)   # bash form
     assert not ch.touches_protection("git -C docs stash", work)
 
 
@@ -734,9 +734,9 @@ def test_the_hook_script_blocks_a_package_hidden_behind_a_flag(home, work):
     planted in the local list (no server)."""
     import json
     import subprocess
-    with open(os.path.join(str(home), ".stillrunning", "known_bad_packages.json"), "w") as handle:
+    with open(os.path.join(str(home), ".stillrunning", "known_bad_packages.json"), "w", encoding="utf-8") as handle:
         json.dump({"npm": {"evilx": ["any"]}, "pip": {"evilx": ["any"]}}, handle)
-    env = dict(os.environ, HOME=str(home), STILLRUNNING_API_BASE="http://127.0.0.1:9")
+    env = dict(os.environ, HOME=str(home), **({"USERPROFILE": str(home)} if os.name == "nt" else {}), STILLRUNNING_API_BASE="http://127.0.0.1:9")
     for command, action in (("pnpm add -w evilx", "deny"),
                             ("npm install -w evilx", "deny"),
                             ("pip install --target evilx", "deny"),
@@ -745,7 +745,7 @@ def test_the_hook_script_blocks_a_package_hidden_behind_a_flag(home, work):
                             ("ls -la", None)):
         payload = json.dumps({"hook_event_name": "PreToolUse", "tool_name": "Bash", "cwd": work,
                               "tool_input": {"command": command}})
-        ran = subprocess.run([sys.executable, "-I", "-S", ch.__file__], input=payload, text=True,
+        ran = subprocess.run([sys.executable, "-I", "-S", ch.__file__], input=payload, text=True, encoding="utf-8",
                              capture_output=True, timeout=60, env=env, cwd=work)
         assert ran.returncode == 0, ran.stderr
         if action is None:

@@ -92,7 +92,7 @@ def test_utf8_streams_are_left_alone(monkeypatch):
 
 
 def test_cp1252_stream_is_switched_to_the_ascii_fallback(monkeypatch):
-    buf = io.TextIOWrapper(io.BytesIO(), encoding="cp1252")
+    buf = io.TextIOWrapper(io.BytesIO(), encoding="cp1252", newline="\n")   # no \r\n translation on Windows
     monkeypatch.setattr(sys, "stdout", buf)
     assert _stdio.make_output_safe(("stdout",)) == ["stdout"]
     print("✗ BLOCKED")          # would raise without the fix

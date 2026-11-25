@@ -275,14 +275,42 @@ def _cwd_from_stdin():
         data = json.loads(sys.stdin.read(200_000) or "{}")
         space = data.get("workspace") if isinstance(data.get("workspace"), dict) else {}
         for value in (space.get("project_dir"), space.get("current_dir"), data.get("cwd")):
-            if isinstance(value, str) and value.startswith("/"):
+            # Windows folders (C:\\…) were ignored, so the line was built for the
+            # wrong folder there; POSIX keeps exactly the old test.
+            if isinstance(value, str) and (value.startswith("/") or (os.name == "nt" and os.path.isabs(value))):
                 return value
     except (OSError, ValueError, AttributeError):
         return None
     return None
 
 
+def _safe_script_streams():
+    """The bare-script path (`python -I -S <this file>`, how Claude Code runs it)
+    cannot import the package, so the entry points' make_output_safe() never ran
+    here: on a Windows code page a non-ASCII warning (→, —) raised
+    UnicodeEncodeError and crashed the process (found on a real windows-latest
+    runner 2026-11-21). What reads these streams is Claude Code, which decodes
+    them as UTF-8 — so a stream that is not UTF-8 is switched to UTF-8 (the
+    status line's 🛡 arrives as 🛡, not as an ASCII tag). Windows only: on
+    Linux and macOS nothing here runs, in any locale, so their output is
+    exactly what it was."""
+    if os.name != "nt":
+        return
+    for stream in (sys.stdout, sys.stderr):
+        name = (getattr(stream, "encoding", "") or "").lower().replace("-", "").replace("_", "")
+        if name in ("utf8", "utf8sig"):
+            continue
+        try:
+            stream.reconfigure(encoding="utf-8", errors="backslashreplace")
+        except (AttributeError, ValueError, OSError):
+            try:
+                stream.reconfigure(errors="backslashreplace")
+            except (AttributeError, ValueError, OSError):
+                continue
+
+
 if __name__ == "__main__":
+    _safe_script_streams()
     try:
         sys.stdout.write(render(cwd=_cwd_from_stdin()) + "\n")
     except Exception:  # a status line must never print a traceback into the UI

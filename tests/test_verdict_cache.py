@@ -52,7 +52,7 @@ def db():
 
 
 def req(tmp_path, *lines, name="requirements.txt"):
-    (tmp_path / name).write_text("\n".join(lines) + "\n")
+    (tmp_path / name).write_text("\n".join(lines) + "\n", encoding="utf-8")
     return f"pip install -r {name}"
 
 
@@ -246,7 +246,7 @@ def test_ttl_parsing():
 # ─────────────────────────── blocklist wins ───────────────────────────
 def test_local_shipped_list_wins(tmp_path):
     command = verify(tmp_path)
-    with open(os.path.join(state(), "known_bad_packages.json"), "w") as handle:
+    with open(os.path.join(state(), "known_bad_packages.json"), "w", encoding="utf-8") as handle:
         json.dump({"pip": {"six": {}}}, handle)
     assert run(tmp_path, command, OFFLINE, cve_failed, T0 + 60)["action"] == "ask"
 
@@ -343,14 +343,14 @@ def test_saved_cve_state_hold_is_never_overridden(tmp_path, severity):
     command = verify(tmp_path)
     doc = {"schema": 2, "projects": {"/p": {"feed_updated_at": T0 - 30 * 86400, "results": {
         "pip:six@1.16.0": [{"id": "GHSA-hhhh-iiii-jjjj", "severity": severity, "fixed": None}]}}}}
-    with open(os.path.join(state(), "cve_state.json"), "w") as handle:
+    with open(os.path.join(state(), "cve_state.json"), "w", encoding="utf-8") as handle:
         json.dump(doc, handle)
     assert run(tmp_path, command, OFFLINE, cve_failed, T0 + 60)["action"] == "ask"
 
 
 def test_unreadable_cve_state_holds(tmp_path):
     command = verify(tmp_path)
-    with open(os.path.join(state(), "cve_state.json"), "w") as handle:
+    with open(os.path.join(state(), "cve_state.json"), "w", encoding="utf-8") as handle:
         handle.write("{not json")
     assert run(tmp_path, command, OFFLINE, cve_failed, T0 + 60)["action"] == "ask"
 
@@ -386,7 +386,7 @@ def test_nothing_is_stored_unless_both_checks_completed(tmp_path, monkeypatch):
 ])
 def test_range_tag_pre_and_constraints_are_never_served(tmp_path, lines, extra):
     verify(tmp_path)
-    (tmp_path / "constraints.txt").write_text("six==1.16.0\n")
+    (tmp_path / "constraints.txt").write_text("six==1.16.0\n", encoding="utf-8")
     command = req(tmp_path, *lines, name="other-requirements.txt") + extra
     out = run(tmp_path, command, OFFLINE, cve_failed, T0 + 60)
     assert out["action"] == "ask"
@@ -518,14 +518,14 @@ def test_requirement_hashes():
 
 
 def test_the_hash_reaches_the_parsed_package(tmp_path):
-    (tmp_path / "r.txt").write_text(f"six==1.16.0 \\\n    --hash={H1}\nidna==3.7\n")
+    (tmp_path / "r.txt").write_text(f"six==1.16.0 \\\n    --hash={H1}\nidna==3.7\n", encoding="utf-8")
     parsed = ch.parse_install_commands("pip install -r r.txt", cwd=str(tmp_path))
     by_name = {p["name"]: p for p in parsed["packages"]}
     assert by_name["six"]["hash"] == H1 and "hash" not in by_name["idna"]
 
 
 def test_the_same_pin_with_two_different_hashes_has_no_hash(tmp_path):
-    (tmp_path / "r.txt").write_text(f"six==1.16.0 --hash={H1}\nsix==1.16.0 --hash={H2}\n")
+    (tmp_path / "r.txt").write_text(f"six==1.16.0 --hash={H1}\nsix==1.16.0 --hash={H2}\n", encoding="utf-8")
     parsed = ch.parse_install_commands("pip install -r r.txt", cwd=str(tmp_path))
     six = [p for p in parsed["packages"] if p["name"] == "six"]
     assert len(six) == 1 and "hash" not in six[0] and six[0]["hash_conflict"]
@@ -535,7 +535,7 @@ def test_the_same_pin_with_two_different_hashes_has_no_hash(tmp_path):
 def test_a_local_wheel_is_not_looked_up_and_not_cached(tmp_path):
     wheel = tmp_path / "six-1.16.0-py3-none-any.whl"
     wheel.write_bytes(b"PK\x03\x04")
-    out = ch.decide(f"pip install {wheel}", cwd=str(tmp_path), lookup_fn=blk(OK),
+    out = ch.decide(f"pip install {str(wheel).replace(os.sep, '/')}", cwd=str(tmp_path), lookup_fn=blk(OK),
                     cve_fn=cve_none, now=T0)
     assert out["action"] == "allow" and rows() == []
 
@@ -647,7 +647,7 @@ def test_db_readable_by_others_is_tightened_and_still_ours(tmp_path):
 @pytest.mark.parametrize("content", ["{not json", "[]", '{"pip": 5}'])
 def test_unreadable_local_blocklist_means_no_cached_pass(tmp_path, content):
     command = verify(tmp_path)
-    with open(os.path.join(state(), "known_bad_packages.json"), "w") as handle:
+    with open(os.path.join(state(), "known_bad_packages.json"), "w", encoding="utf-8") as handle:
         handle.write(content)
     assert run(tmp_path, command, OFFLINE, cve_failed, T0 + 60)["action"] == "ask"
 
@@ -691,8 +691,8 @@ def test_each_package_counts_once_as_could_not_check(tmp_path):
     "uv pip sync req.txt",
 ])
 def test_uv_installs_never_carry_a_cache_hash(command, tmp_path):
-    (tmp_path / "req.txt").write_text("six==1.16.0 --hash=sha256:" + "a" * 64 + "\n")
-    (tmp_path / "uv.toml").write_text("[pip]\nverify-hashes = false\n")
+    (tmp_path / "req.txt").write_text("six==1.16.0 --hash=sha256:" + "a" * 64 + "\n", encoding="utf-8")
+    (tmp_path / "uv.toml").write_text("[pip]\nverify-hashes = false\n", encoding="utf-8")
     parsed = ch.parse_install_commands(command, cwd=str(tmp_path))
     six = [p for p in parsed["packages"] if p["name"] == "six"]
     assert six and not any(p.get("hash") for p in six)
