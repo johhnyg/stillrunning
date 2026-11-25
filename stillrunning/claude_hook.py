@@ -601,6 +601,25 @@ def _own_subcommand(rest):
     return False
 
 
+def _runs_stillrunning_at(cmd, start, program, lowered):
+    """Index of the word that runs stillrunning in this command (the program
+    itself, or the module of `python -m stillrunning`), or None."""
+    if start >= len(cmd):
+        return None
+    if _prog_name(cmd[start]) == "stillrunning":
+        return start
+    if _CODE_RUNNERS.match(_prog_name(cmd[start]) or ""):
+        for index in range(start + 1, len(cmd)):
+            word = lowered[index]
+            if re.match(r"^-[a-z]*m$", word) and index + 1 < len(cmd):
+                return index + 1 if lowered[index + 1] == "stillrunning" else None
+            if re.match(r"^-[a-z]*mstillrunning$", word):
+                return index
+            if not word.startswith("-"):
+                return None              # a script file or another module: not us
+    return None
+
+
 def _own_switch(cmd, start, program, args):
     """A command that changes stillrunning's own switches: a STILLRUNNING_*
     variable set or read, `stillrunning allow / remember / uninstall …`, or
@@ -628,14 +647,19 @@ def _own_switch(cmd, start, program, args):
         if name == "stillrunning" or module == "stillrunning":
             if switches(lowered[index + 1:]):
                 return True
-            # A word only known at run time (`$X`, `${X:-…}`, `$(…)`, `` `…` ``, "$@")
-            # could be any of the switches above: `X=allow; stillrunning $X evil`.
-            if any("$" in t or "`" in t for t in cmd[index + 1:]):
-                return True
-            # Words handed over by another program (`… | xargs stillrunning`,
-            # `parallel stillrunning ::: …`) are not on the command line at all.
-            if any(n in _ARG_FEEDERS for n in names[:index]):
-                return True
+    # Only for the program this command actually runs (wrappers such as nice, env,
+    # sudo, xargs are already skipped: `start`/`program`), never for a word that
+    # merely is "stillrunning" (`grep -r stillrunning $DIR`):
+    run_at = _runs_stillrunning_at(cmd, start, program, lowered)
+    if run_at is not None:
+        # A word only known at run time (`$X`, `${X:-…}`, `$(…)`, `` `…` ``, "$@")
+        # could be any of the switches above: `X=allow; stillrunning $X evil`.
+        if any("$" in t or "`" in t for t in cmd[run_at + 1:]):
+            return True
+        # Words handed over by another program (`… | xargs stillrunning`,
+        # `parallel stillrunning ::: …`) are not on the command line at all.
+        if any(n in _ARG_FEEDERS for n in names[:start]):
+            return True
     # `$sr remember last`, `$(which stillrunning) allow x`: the program is
     # only known at run time and the words after it are our own switches.
     if start < len(cmd) and cmd[start].startswith(("$", "`")):

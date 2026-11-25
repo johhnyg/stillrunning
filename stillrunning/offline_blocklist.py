@@ -283,28 +283,34 @@ def _build(folder, sources, log, force=False):
         sha = digest.hexdigest()
         name = "blocklist-%s.sqlite" % sha[:16]
         final_db = os.path.join(folder, name)
-        key_was_there = os.path.exists(os.path.join(folder, claude_hook.OFFLINE_KEY))
-        key = _key(folder)                     # before the database lands: nothing after it can fail on the key
+        key_path = os.path.join(folder, claude_hook.OFFLINE_KEY)
+        key_was_there = os.path.exists(key_path)
         already_there = os.path.exists(final_db)
-        size = os.path.getsize(tmp_db)
-        os.replace(tmp_db, final_db)
-        manifest = {"v": 1, "db": name, "sha256": sha, "size": size,
-                    "built": int(time.time()), "counts": counts, "source": "OSV.dev MAL advisories"}
-        if forced:
-            manifest["forced"] = forced                 # covered by the MAC; --status shows it
-            history.append(forced)
-        if history:                                     # carried by every later refresh, never dropped
-            manifest["forced_history"] = history[-FORCED_HISTORY_KEEP:]
-        manifest["mac"] = claude_hook.offline_manifest_mac(key, manifest)
+        moved = False
         try:
+            key = _key(folder)                 # before the database lands
+            size = os.path.getsize(tmp_db)
+            _replace_retrying(tmp_db, final_db)
+            moved = True
+            manifest = {"v": 1, "db": name, "sha256": sha, "size": size,
+                        "built": int(time.time()), "counts": counts, "source": "OSV.dev MAL advisories"}
+            if forced:
+                manifest["forced"] = forced             # covered by the MAC; --status shows it
+                history.append(forced)
+            if history:                                 # carried by every later refresh, never dropped
+                manifest["forced_history"] = history[-FORCED_HISTORY_KEEP:]
+            manifest["mac"] = claude_hook.offline_manifest_mac(key, manifest)
             _write_manifest(folder, manifest)
-        except Exception:
-            # A database or key with no manifest pointing at them would read as
-            # tampering (every install blocked): take back what this build added.
-            if not already_there:
-                _remove_quietly(final_db)
-            if not key_was_there and not os.path.exists(os.path.join(folder, claude_hook.OFFLINE_MANIFEST)):
-                _remove_quietly(os.path.join(folder, claude_hook.OFFLINE_KEY))
+        except BaseException:
+            # Anything (an error, Ctrl-C) between the key and the manifest: unless the
+            # manifest already points at this build's database (then the refresh is
+            # done), take back what this build added, so nothing is left that reads
+            # as tampering. The list in place before is never touched.
+            if not _manifest_names(folder, name):
+                if moved and not already_there:
+                    _remove_quietly(final_db)
+                if not key_was_there and not os.path.lexists(os.path.join(folder, claude_hook.OFFLINE_MANIFEST)):
+                    _remove_quietly(key_path)
             raise
         _prune(folder, keep=name)
         log("offline blocklist: %s (%d bytes, %s) in %.0f s"
@@ -357,6 +363,27 @@ def _previous_manifest(folder):
         return {}
     finally:
         claude_hook._OFFLINE_STATE.clear()
+
+
+def _manifest_names(folder, name):
+    """Does the manifest in place name this database? (the refresh's commit point)"""
+    try:
+        with open(os.path.join(folder, claude_hook.OFFLINE_MANIFEST), encoding="utf-8") as handle:
+            doc = json.load(handle)
+        return isinstance(doc, dict) and doc.get("db") == name
+    except (OSError, ValueError):  # lint: allowed-silent(no or unreadable manifest: not committed)
+        return False
+
+
+def _replace_retrying(src, dst):
+    for attempt in range(5):                 # Windows: a hook may hold the file open
+        try:
+            os.replace(src, dst)
+            return
+        except PermissionError:
+            if attempt == 4:
+                raise
+            time.sleep(0.2 * (attempt + 1))
 
 
 def _remove_quietly(path):

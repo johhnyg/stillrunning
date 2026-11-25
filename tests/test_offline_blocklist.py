@@ -1204,3 +1204,87 @@ def test_r6_an_interrupt_never_deletes_the_database_a_manifest_points_at(built, 
         ob.build(sources={"pip": str(feed), "npm": str(tmp_path / "npm.zip")}, log=lambda *a: None)
     ch._OFFLINE_STATE.clear()
     assert ch._offline_db()[0] == "ok"        # the manifest and its database are both there
+
+
+# ── review 7 (items 1 and 5) ──
+
+@pytest.mark.parametrize("command", [
+    "grep -r stillrunning $DIR", "echo stillrunning $HOME", 'rg stillrunning "$PWD"', "ls | xargs grep stillrunning",
+    "pip download stillrunning -d $TMP", "docker run --name stillrunning img $CMD", "python3 script.py stillrunning $X",
+    "cat ~/notes/stillrunning.md | xargs echo",
+])
+def test_r7_a_word_stillrunning_that_is_not_the_program_does_not_ask(home, command):
+    """IMPORTANT (review 7): the run-time-word rule fired on any word `stillrunning`,
+    not only on the program a command runs."""
+    assert not ch.touches_protection(command), command
+
+
+@pytest.mark.parametrize("command", [
+    "nice stillrunning $X evil", "sudo -u bob stillrunning $X evil", "env A=1 stillrunning $X", "timeout 5 stillrunning $X",
+    "python3 -Im stillrunning $X", "python3 -mstillrunning $X", "/usr/local/bin/stillrunning $X",
+])
+def test_r7_the_program_stillrunning_behind_wrappers_still_asks(home, command):
+    assert ch.touches_protection(command), command
+
+
+def _first_build_feed(monkeypatch, tmp_path):
+    feed = tmp_path / "feed.zip"
+    _zip(feed, PYPI)
+    monkeypatch.setattr(ob, "_download", lambda url, dest: open(dest, "wb").write(open(str(url), "rb").read()))
+    return {"pip": str(feed)}
+
+
+def _assert_nothing_left_as_tampering(home):
+    state = home / ".stillrunning"
+    left = sorted(f for f in os.listdir(str(state)) if not f.endswith(".lock"))
+    assert left == [], left
+    ch._OFFLINE_STATE.clear()
+    assert ch._offline_db() == ("missing", None)
+
+
+def test_r7_first_build_whose_database_rename_fails_leaves_no_key(home, monkeypatch, tmp_path):
+    """MINOR->fixed (review 7 item 5): a failure between creating the key and the
+    manifest left a lone key, read as tampering (every install blocked)."""
+    sources = _first_build_feed(monkeypatch, tmp_path)
+    monkeypatch.setattr(ob, "_replace_retrying", lambda a, b: (_ for _ in ()).throw(PermissionError(13, "in use")))
+    with pytest.raises(PermissionError):
+        ob.build(sources=sources, log=lambda *a: None)
+    _assert_nothing_left_as_tampering(home)
+
+
+def test_r7_ctrl_c_during_the_first_manifest_write_leaves_nothing(home, monkeypatch, tmp_path):
+    sources = _first_build_feed(monkeypatch, tmp_path)
+
+    def interrupted(path, tmp, manifest):          # before the manifest is replaced into place
+        raise KeyboardInterrupt
+    monkeypatch.setattr(ob, "_write_manifest_to", interrupted)
+    with pytest.raises(KeyboardInterrupt):
+        ob.build(sources=sources, log=lambda *a: None)
+    _assert_nothing_left_as_tampering(home)
+
+
+def test_r7_ctrl_c_right_after_the_first_manifest_landed_keeps_the_new_list(home, monkeypatch, tmp_path):
+    sources = _first_build_feed(monkeypatch, tmp_path)
+    real = ob._write_manifest_to
+
+    def interrupted(path, tmp, manifest):
+        real(path, tmp, manifest)
+        raise KeyboardInterrupt
+    monkeypatch.setattr(ob, "_write_manifest_to", interrupted)
+    with pytest.raises(KeyboardInterrupt):
+        ob.build(sources=sources, log=lambda *a: None)
+    ch._OFFLINE_STATE.clear()
+    assert ch._offline_db()[0] == "ok"
+
+
+def test_r7_failure_over_an_existing_list_keeps_it_and_its_key(built, monkeypatch, tmp_path):
+    folder, manifest = built
+    big = [_advisory("MAL-Q-%d" % i, "PyPI", "q-%d" % i, ranges=ALL_VERSIONS) for i in range(5)]
+    feed = tmp_path / "q.zip"
+    _zip(feed, big)
+    monkeypatch.setattr(ob, "_write_manifest_to", lambda p, t, m: (_ for _ in ()).throw(KeyboardInterrupt))
+    with pytest.raises(KeyboardInterrupt):
+        ob.build(sources={"pip": str(feed), "npm": str(tmp_path / "npm.zip")}, log=lambda *a: None)
+    ch._OFFLINE_STATE.clear()
+    assert ch._offline_db()[0] == "ok" and (folder / manifest["db"]).exists() and (folder / ch.OFFLINE_KEY).exists()
+    assert len([f for f in os.listdir(str(folder)) if ch._OFFLINE_DB_NAME.match(f)]) == 1     # the new one taken back

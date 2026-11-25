@@ -77,9 +77,15 @@ including known-malicious ones, instead of blocking them.
   `$(…)`, backticks, `"$@"`) or that `xargs`/`parallel` feeds is asked about:
   `X=allow; stillrunning $X evil` and `… | xargs stillrunning blocklist` ran
   without asking, for every own switch (the `allow`/`remember`/uninstall rules
-  had this gap before this release). `stillrunning scan $PKG` now asks too.
-- A failed first build also removes the key it created and its temporary
-  manifest, so nothing is left that reads as tampering.
+  had this gap before this release). This applies to the program a command
+  runs (also behind `nice`, `env`, `sudo`, `xargs`, `python -m`), not to a word
+  that merely says "stillrunning" (`grep -r stillrunning $DIR` does not ask).
+  `stillrunning scan $PKG` now asks too.
+- A refresh that fails or is interrupted (Ctrl-C) anywhere between creating
+  the key and writing the manifest takes back what it added (its database, a
+  key it created, its temporary manifest), so nothing is left that reads as
+  tampering; the list in place before is never touched, and once the new
+  manifest is in place the refresh counts as done.
 - pip pins are compared in their standard form (PEP 440): `1.0.0-rc1`,
   `1.0.0.rc1` and `1.0c1` all match a listed `1.0.0rc1` (also post, dev,
   alpha/beta spellings), offline and on the hosted path.
