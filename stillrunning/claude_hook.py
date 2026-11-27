@@ -583,13 +583,15 @@ _SELF_ARGS = {"allow", "--allow", "--block", "--untrust", "--trust", "remember",
 _ENV_WORDS = {"export", "declare", "typeset", "readonly", "local", "unset", "set", "setenv"}
 _ARG_FEEDERS = {"xargs", "parallel"}
 # `stillrunning blocklist --force` (accept a list that drops or halves part of the
-# blocklist) and `--unschedule` (stop refreshing it) change the protection itself.
+# blocklist), `--unschedule` (stop refreshing it) and `--schedule` (which writes the
+# refresh line from this HOME and this Python: `HOME=/tmp/x … --schedule` would put a
+# line in place that never runs) change the protection itself.
 # Every prefix from `--f` / `--u` up, with or without `=value`: which prefixes
 # argparse accepts depends on the Python version (3.15 passes `--u` and `--un` on
 # to the subcommand; 3.8 and 3.12 reject them as ambiguous with --uninstall-hook*).
 def _blocklist_switch(word):
     head = word.split("=", 1)[0]
-    return len(head) >= 3 and any(full.startswith(head) for full in ("--force", "--unschedule"))
+    return len(head) >= 3 and any(full.startswith(head) for full in ("--force", "--unschedule", "--schedule"))
 
 
 # The own words a glob could expand to (`stillrunning blocklist --unsched*`).
@@ -880,10 +882,11 @@ _GIT_VALUED = {"-C", "--git-dir", "--work-tree", "--namespace"}
 _PIPE = re.compile(r"(?<!\|)\|(?!\|)")
 
 
-def _mask_quotes(text):
+def _mask_quotes(text, keep_expansions=False):
     """The text with everything inside quotes replaced by `q` (quotes, word
     boundaries and operators outside them kept), so a word found in it stood
-    outside any quoted string."""
+    outside any quoted string. `keep_expansions`: keep `$` and backticks inside
+    double quotes, where the shell still expands them (never inside single quotes)."""
     out, quote, i = [], None, 0
     while i < len(text):
         ch = text[i]
@@ -902,6 +905,8 @@ def _mask_quotes(text):
             out.append("qq")
             i += 2
             continue
+        elif quote == '"' and keep_expansions and ch in "$`":
+            out.append(ch)
         else:
             out.append("q")
         i += 1
@@ -958,6 +963,11 @@ def _own_fail_closed(command, inner, commands):
     masked = _simple_commands(_tokenize(_mask_quotes(command)))
     if len(masked) != len(commands) or any(len(a) != len(b) for a, b in zip(masked, commands)):
         masked = commands                # could not line the two up: count every word
+    # the same, but with `$` and backticks kept where the shell expands them (unquoted
+    # and inside double quotes; `awk '{print $1}'` holds no run-time word)
+    expanding = _simple_commands(_tokenize(_mask_quotes(command, keep_expansions=True)))
+    if len(expanding) != len(commands) or any(len(a) != len(b) for a, b in zip(expanding, commands)):
+        expanding = commands
     # Quoted text is data (a commit message, a search pattern), except when the
     # command hands it to a shell to run (`xargs -I{} sh -c 'stillrunning {}'`).
     receivers = {n for n, words in enumerate(masked) if _names_stillrunning(words)
@@ -972,7 +982,7 @@ def _own_fail_closed(command, inner, commands):
     def run_time(n):
         """A run-time word in the command that receives the word `stillrunning`."""
         words, plain = commands[n], masked[n]
-        return any("$" in w or "`" in w for w in words) \
+        return any("$" in w or "`" in w for w in expanding[n]) \
             or any(_has_brace(w) or _is_glob(w) for w in plain) \
             or any(_prog_name(w) in _ARG_FEEDERS for w in words) \
             or bool(_PIPE.search(words.op) or words.stdin_file or words.here is not None or words.has_heredoc)
@@ -1171,7 +1181,7 @@ def _paths_touch_protection(command, cwds, depth):
 
 _SELF_PROTECT_TEXT = re.compile(
     r"stillrunning\b[^|;&\n]*(\ballow\b|uninstall|--block\b|--untrust\b|--trust\b|\bremember\b"
-    r"|\bforget\b|\bblocklist\b[^|;&\n]*--(force|unschedule|f\b|fo|for|forc|uns)"
+    r"|\bforget\b|\bblocklist\b[^|;&\n]*--(force|unschedule|schedule|f\b|fo|for|forc|uns|sc)"
     r"|\bwhitelist\b[^|;&\n]*\b(add|remove)\b|\s[^|;&\n]*[$`])"
     r"|\b(xargs|parallel)\b[^|;&\n]*\bstillrunning\b"
     r"|uninstall\s+(-\S+\s+)*stillrunning\b|\.stillrunning|\.claude/sett"

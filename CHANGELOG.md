@@ -61,9 +61,16 @@ including known-malicious ones, instead of blocking them.
   instead of falling back to the hosted lookup. With no list at all the hosted
   lookup runs as before.
 - The Claude Code hook asks a person before an agent may run
-  `stillrunning blocklist --force` or `--unschedule`, spelled out or as any
-  prefix argparse could accept (`--f`, `--u`, `--uns`, …, with or without
-  `=value`). Which prefixes argparse passes on to the subcommand depends on the
+  `stillrunning blocklist --force`, `--unschedule` or `--schedule`, spelled out
+  or as any prefix argparse could accept (`--f`, `--u`, `--uns`, `--sch`, …,
+  with or without `=value`). `--schedule` always asks because the line it
+  writes is built from the current `HOME` and Python: `HOME=/tmp/x stillrunning
+  blocklist --schedule`, or a run from a throwaway venv, would put a refresh
+  line in place that never runs. `stillrunning blocklist --schedule` itself now
+  refuses (exit 2, crontab unchanged) to replace an existing refresh line that
+  differs from the one it would write unless a person runs it at a terminal,
+  the same rule as `--force`; adding the first line, or finding the identical
+  line, needs no terminal. Which prefixes argparse passes on to the subcommand depends on the
   Python release, not only on the minor version: `blocklist --u` and `--un`
   reach `--unschedule` on 3.15.2 and 3.12.14, and are rejected as ambiguous
   (with `--uninstall-hook*`) on 3.8 and 3.12.3, so the hook asks for all of
@@ -91,7 +98,8 @@ including known-malicious ones, instead of blocking them.
   `setsid`, `chrt`, `taskset`, `ssh host`, …), interpreters (`python3.13t`, …)
   and launchers (`uvx`, `uv run -m`, `pipx run`, `parallel`, …). Matching them
   one by one always left one out (reviews 8 and 9).
-  - **run-time words:** `$X`, `${…}`, `$(…)`, backticks, `"$@"`, brace lists and
+  - **run-time words:** `$X`, `${…}`, `$(…)`, backticks, `"$@"` (unquoted or inside
+    double quotes; a `$` inside single quotes, `awk '{print $1}'`, is not one), brace lists and
     ranges (`--unschedul{e,e}`), globs (`*`, `?`, `[…]`; `name[extras]` is a
     package name, not a glob), and input given to that command by `xargs`,
     `parallel`, a pipe, `<`, a here-string (`<<<`) or a here-document. They count in the command that holds
@@ -125,7 +133,9 @@ including known-malicious ones, instead of blocking them.
     `for f in ~/stillrunning/tests/*.py; do …`, `export
     PYTHONPATH=~/stillrunning:$PYTHONPATH`, `journalctl -u stillrunning --since
     "$T"`, `git -C ~/stillrunning-x archive $A | tar -x -C $D`, `pipx upgrade
-    stillrunning $X`. `cd ~/stillrunning-x` is not
+    stillrunning $X`, `stat ~/stillrunning/*`, `file ~/stillrunning-dist-2.14.3/*`,
+    `sort ~/stillrunning/*.txt`, `docker logs stillrunning --tail $N`, `python3 -m
+    pytest ~/stillrunning/tests -k $K`. `cd ~/stillrunning-x` is not
     on the list either: `cd ~/stillrunning-x $X` would ask, `cd ~/stillrunning-x
     && make $X` does not (the run-time word is in another command).
 - Known limits of the own-command matching: indirect execution is not

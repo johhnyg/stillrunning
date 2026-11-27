@@ -499,6 +499,13 @@ def schedule(remove=False):
         if ours == [want]:
             print("Already scheduled (daily); crontab unchanged:\n  " + want)
             return 0
+        if ours and not _a_person_is_typing():
+            # The line is built from this HOME and this Python: from another HOME or a
+            # throwaway venv it would replace a working refresh with one that never runs.
+            print("A different offline-blocklist refresh line is already scheduled; it is only "
+                  "replaced when a person runs this at a terminal. Nothing was changed.\n"
+                  "  in place: " + "\n  in place: ".join(ours) + "\n  would be: " + want)
+            return 2
         new = rest + [want]
         said = "Scheduled: stillrunning blocklist --refresh daily at 04:41, lowest priority:\n  " + want
     ran = cve._crontab(["-"], "\n".join(new) + ("\n" if new else ""))

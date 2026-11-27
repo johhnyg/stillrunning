@@ -974,7 +974,8 @@ def test_r4_forcing_or_unscheduling_the_blocklist_asks(home, command):
 
 
 @pytest.mark.parametrize("command", [
-    "stillrunning blocklist --refresh", "stillrunning blocklist --status", "stillrunning blocklist --schedule",
+    "stillrunning blocklist --refresh", "stillrunning blocklist --status",
+    # (`--schedule` asks since review 11: see test_r11_blocklist_schedule_always_asks)
 ])
 def test_r4_ordinary_blocklist_commands_do_not_ask(home, command):
     assert not ch.touches_protection(command)
@@ -1090,7 +1091,7 @@ def test_r5_value_options_never_hide_an_own_subcommand(home, option, where, kind
 
 @pytest.mark.parametrize("command", [
     "stillrunning --token x blocklist --refresh", "stillrunning --name x blocklist --status",
-    "stillrunning blocklist --schedule --token x", "stillrunning --token x scan requests",
+    "stillrunning blocklist --status --token x", "stillrunning --token x scan requests",
     "stillrunning whitelist list --name x", "stillrunning --name x status",
 ])
 def test_r5_ordinary_commands_with_value_options_do_not_ask(home, command):
@@ -1542,3 +1543,80 @@ def test_r10_here_strings_handed_to_a_shell_are_judged(home, command):
 ])
 def test_r10_here_strings_to_other_programs_are_data(home, command):
     assert not ch.touches_protection(command, cwd=str(home)), command
+
+
+# ── review 11: --schedule, and `$` inside single quotes ──
+
+@pytest.mark.parametrize("command", [
+    "stillrunning blocklist --schedule", "HOME=/tmp/zz stillrunning blocklist --schedule",
+    "env HOME=/nonexistent stillrunning blocklist --schedule", "/tmp/venv/bin/python -m stillrunning blocklist --schedule",
+    "/tmp/venv/bin/stillrunning blocklist --schedule", "stillrunning blocklist --sch", "stillrunning blocklist --sched",
+    "python3 -m stillrunning blocklist --schedule", "uvx stillrunning blocklist --schedule",
+    "stillrunning blocklist --schedule=1",
+])
+def test_r11_blocklist_schedule_always_asks(home, command):
+    """IMPORTANT (review 11): `HOME=/tmp/zz stillrunning blocklist --schedule` replaced a
+    working refresh line with one that never runs, without asking."""
+    assert ch.touches_protection(command, cwd=str(home)), command
+    assert ch.decide(command, env={})["action"] == "ask", command
+
+
+@pytest.mark.parametrize("command", ["stillrunning blocklist --status", "stillrunning blocklist --refresh"])
+def test_r11_other_blocklist_switches_still_do_not_ask(home, command):
+    assert not ch.touches_protection(command, cwd=str(home)), command
+
+
+def _fake_crontab(monkeypatch, lines):
+    from stillrunning import cve
+    written = []
+    monkeypatch.setattr(cve, "_read_crontab", lambda: (list(lines), None))
+    monkeypatch.setattr(cve, "_crontab", lambda args, text=None: written.append(text) or
+                        type("Ran", (), {"returncode": 0, "stdout": "", "stderr": ""})())
+    return written
+
+
+@pytest.mark.skipif(os.name == "nt", reason="crontab")
+def test_r11_schedule_will_not_replace_a_different_refresh_line_without_a_person(home, monkeypatch, capsys):
+    old = "41 4 * * * nice -n 19 flock -n /x/.stillrunning/blocklist.lock timeout 1800 /usr/bin/python3 " \
+          "-m stillrunning blocklist --refresh >/dev/null 2>>/x/.stillrunning/blocklist_cron.log " + ob.CRON_MARK
+    written = _fake_crontab(monkeypatch, ["17 * * * * other job", old])
+    monkeypatch.setattr(ob, "_a_person_is_typing", lambda: False)
+    assert ob.schedule() == 2
+    assert written == []                                   # crontab left exactly as it was
+    assert "person" in capsys.readouterr().out.lower()
+
+
+@pytest.mark.skipif(os.name == "nt", reason="crontab")
+def test_r11_schedule_replaces_a_different_line_for_a_person(home, monkeypatch):
+    old = "41 4 * * * /old/python3 -m stillrunning blocklist --refresh " + ob.CRON_MARK
+    written = _fake_crontab(monkeypatch, ["17 * * * * other job", old])
+    monkeypatch.setattr(ob, "_a_person_is_typing", lambda: True)
+    assert ob.schedule() == 0
+    assert written and old not in written[0] and ob.cron_line() in written[0] and "other job" in written[0]
+
+
+@pytest.mark.skipif(os.name == "nt", reason="crontab")
+def test_r11_schedule_adds_a_first_line_and_keeps_an_identical_one_without_a_person(home, monkeypatch):
+    monkeypatch.setattr(ob, "_a_person_is_typing", lambda: False)
+    written = _fake_crontab(monkeypatch, ["17 * * * * other job"])
+    assert ob.schedule() == 0 and ob.cron_line() in written[0]
+    written = _fake_crontab(monkeypatch, ["17 * * * * other job", ob.cron_line()])
+    assert ob.schedule() == 0 and written == []
+
+
+@pytest.mark.parametrize("command", [
+    "awk '{print $1}' ~/stillrunning/x.txt", "sed -n 's/$/x/p' ~/stillrunning/x.txt",
+    "perl -ne 'print if /a$/' ~/stillrunning/a.txt", "jq '.a | $__loc__' ~/stillrunning/x.json",
+])
+def test_r11_a_dollar_inside_single_quotes_is_not_a_run_time_word(home, command):
+    """Nit (review 11): `$` inside single quotes is never expanded."""
+    assert not ch.touches_protection(command, cwd=str(home)), command
+
+
+@pytest.mark.parametrize("command", [
+    'X=--unschedule; stillrunning blocklist "$X"', 'sed -n "s/$X/y/p" ~/stillrunning/x.txt',
+    "stillrunning blocklist \"$(echo --unschedule)\"", 'X=allow; stillrunning "$X" evil',
+    "nohup sh -c 'stillrunning blocklist $1' _ --unschedule",
+])
+def test_r11_a_dollar_inside_double_quotes_still_counts(home, command):
+    assert ch.touches_protection(command, cwd=str(home)), command
