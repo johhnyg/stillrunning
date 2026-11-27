@@ -1028,6 +1028,10 @@ def _paths_touch_protection(command, cwds, depth):
         if body and depth < 3 and (fed[number] or _reads_stdin_as_shell(cmd)) and \
                 _paths_touch_protection(body, cwds, depth + 1):
             return True
+        # `bash <<<'…'`: a here-string a shell runs is judged like a here-document
+        if cmd.here is not None and depth < 3 and _reads_stdin_as_shell(cmd) and \
+                _paths_touch_protection(cmd.here, cwds, depth + 1):
+            return True
         if body and _CODE_RUNNERS.match(program) and _runs_stdin_as_code(cmd) and \
                 _code_touches(body, cwds):
             return True         # `python3 - <<EOF` whose code rewrites the protection

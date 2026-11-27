@@ -1515,3 +1515,30 @@ def test_r9_extras_are_not_globs(home, command):
 ])
 def test_r9_bracket_globs_still_ask(home, command):
     assert ch.touches_protection(command), command
+
+
+# ── review 10: here-strings handed to a shell ──
+
+@pytest.mark.parametrize("command", [
+    "bash <<<'stillrunning allow evil'", "sh <<< 'stillrunning --uninstall-hook-claude-code'",
+    "bash -s <<<'stillrunning blocklist --unschedule'", "sudo bash <<< \"stillrunning blocklist --unschedule\"",
+    "bash <<<'script -qc \"stillrunning blocklist --refresh --force\" /dev/null'",
+    "bash <<<'X=--unschedule; stillrunning blocklist $X'", "dash <<<'python3 -m stillrunning blocklist --uns'",
+    "at now <<< 'stillrunning blocklist --unschedule'", "bash <<< 'rm -rf ~/.stillrunning'",
+    "env bash <<<'stillrunning remember last'", "bash /dev/stdin <<<'stillrunning allow evil'",
+])
+def test_r10_here_strings_handed_to_a_shell_are_judged(home, command):
+    """Borderline (review 10): `bash <<<'…'` ran its text unjudged, while a
+    here-document to a shell was judged; it reached `blocklist --refresh --force`
+    through `script -qc`, which gives the child a terminal."""
+    assert ch.touches_protection(command, cwd=str(home)), command
+    assert ch.decide(command, env={})["action"] == "ask", command
+
+
+@pytest.mark.parametrize("command", [
+    "cat <<<'stillrunning allow evil'", "grep -c allow <<< 'stillrunning allow evil'",
+    "bash -c 'echo hi' <<< 'stillrunning allow evil'", "python3 <<< 'print(1)'", "bash <<<'echo hello'",
+    "wc -l <<< \"stillrunning blocklist --unschedule\"",
+])
+def test_r10_here_strings_to_other_programs_are_data(home, command):
+    assert not ch.touches_protection(command, cwd=str(home)), command

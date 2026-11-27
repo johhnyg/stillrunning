@@ -93,15 +93,17 @@ including known-malicious ones, instead of blocking them.
   one by one always left one out (reviews 8 and 9).
   - **run-time words:** `$X`, `${…}`, `$(…)`, backticks, `"$@"`, brace lists and
     ranges (`--unschedul{e,e}`), globs (`*`, `?`, `[…]`; `name[extras]` is a
-    package name, not a glob), and words fed to it by `xargs`, `parallel`, a
-    pipe, `<`, `<<<` or a here-document. They count in the command that holds
+    package name, not a glob), and input given to that command by `xargs`,
+    `parallel`, a pipe, `<`, a here-string (`<<<`) or a here-document. They count in the command that holds
     the word `stillrunning` (`stillrunning scan x && echo $?` does not ask), and
     for a variable that holds it (`sr=stillrunning; $sr $X evil`) anywhere in the
     line.
   - **quotes:** text in quotes is data (`git commit -m "stillrunning: fix $X"`,
     `pytest -k "stillrunning and $X"` do not ask), except text handed to a shell
-    to run (`bash -c`, `sh -c`, `ssh host '…'`, `script -qc`, `xargs … sh -c`),
-    which is judged as a command of its own; so is the inside of `$(…)`, and a
+    to run as a quoted argument (`bash -c '…'`, `sh -c "…"`, `ssh host '…'`,
+    `script -qc '…'`, `xargs -I{} sh -c '… {}'`) or as a here-document or
+    here-string to a shell (`bash <<EOF`, `bash <<<'…'`, `sh -s <<<'…'`,
+    `at now <<<'…'`), which is judged as a command of its own; so is the inside of `$(…)`, and a
     `$(…)` that prints the word counts for the command around it
     (`$(echo stillrunning) $X evil` asks).
   - The literal own-switch rules are unchanged and still apply without any
@@ -115,7 +117,15 @@ including known-malicious ones, instead of blocking them.
     `stillrunning cve --refresh --cwd "$PWD"`, `stillrunning scan-manifest
     req*.txt`, `cat pkgs.txt | xargs stillrunning check-package`, and
     `HOME=$(mktemp -d) python3 -m pytest ~/stillrunning/tests` (a path naming
-    stillrunning, and an assignment from `$(…)`). `cd ~/stillrunning-x` is not
+    stillrunning, and an assignment from `$(…)`). Working in a `stillrunning*`
+    checkout asks often: `du -sh ~/stillrunning-*`, `tar czf x.tgz
+    ~/stillrunning-dist-*`, `sha256sum ~/stillrunning-dist-2.14.3/*`, `twine
+    check ~/stillrunning-dist-*/*`, `cp ~/stillrunning/README.md $TMP/`, `sed -n
+    1,20p ~/stillrunning/stillrunning/*.py`, `diff ~/stillrunning/*.py /tmp`,
+    `for f in ~/stillrunning/tests/*.py; do …`, `export
+    PYTHONPATH=~/stillrunning:$PYTHONPATH`, `journalctl -u stillrunning --since
+    "$T"`, `git -C ~/stillrunning-x archive $A | tar -x -C $D`, `pipx upgrade
+    stillrunning $X`. `cd ~/stillrunning-x` is not
     on the list either: `cd ~/stillrunning-x $X` would ask, `cd ~/stillrunning-x
     && make $X` does not (the run-time word is in another command).
 - Known limits of the own-command matching: indirect execution is not
@@ -123,7 +133,16 @@ including known-malicious ones, instead of blocking them.
   other interpreters such as `python -c` and `node -e`, judged only by what
   their code imports or writes, and decoded payloads); a command that never
   spells the word `stillrunning` outside quotes or a shell string
-  (`X=allow; $sr $X evil` with `sr` set elsewhere, `S=stillrunnin; ${S}g $X`);
+  (`X=allow; $sr $X evil` with `sr` set elsewhere, `S=stillrunnin; ${S}g $X`,
+  and the program word in quotes behind a wrapper the hook does not skip:
+  `chrt 1 "stillrunning" $X evil`, `foo $'stillrunning' $X evil`); a variable
+  set through `export`, `declare`, `typeset`, `readonly` or `local`
+  (`export sr=stillrunning; $sr $X evil`; the bare `sr=stillrunning; …` asks);
+  quoted text that reaches a shell other than as a quoted argument, a
+  here-document or a here-string (`echo '…' | sh`, `printf '%s' '…' | xargs -0
+  sh -c`, `… | xargs -0 script -qc`, `C='…'; sh -c "$C"`); the output of a
+  read-only program that is then run (`X=allow; echo stillrunning $X evil |
+  xargs nohup`, `… | sh`: `echo` is on the allow-list);
   words that `find -exec`/`-execdir`/`-ok` supplies (`find /x -name allow
   -exec stillrunning {} evil \;`); and top-level switches spelled as argparse prefixes or
   with `=` (`--al x`, `--allow=x`). `find -exec` and the top-level prefixes are
