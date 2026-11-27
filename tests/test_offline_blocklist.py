@@ -1211,8 +1211,9 @@ def test_r6_an_interrupt_never_deletes_the_database_a_manifest_points_at(built, 
 
 @pytest.mark.parametrize("command", [
     "grep -r stillrunning $DIR", "echo stillrunning $HOME", 'rg stillrunning "$PWD"', "ls | xargs grep stillrunning",
-    "pip download stillrunning -d $TMP", "docker run --name stillrunning img $CMD", "python3 script.py stillrunning $X",
     "cat ~/notes/stillrunning.md | xargs echo",
+    # (review 9's fail-closed rule: `pip download stillrunning -d $TMP`, `docker run --name
+    # stillrunning img $CMD` and `python3 script.py stillrunning $X` now ask, see test_r9_*)
 ])
 def test_r7_a_word_stillrunning_that_is_not_the_program_does_not_ask(home, command):
     """IMPORTANT (review 7): the run-time-word rule fired on any word `stillrunning`,
@@ -1340,10 +1341,9 @@ def test_r8_launchers_that_run_stillrunning_ask(home, command):
 
 @pytest.mark.parametrize("command", [
     "uvx ruff check $X", "uvx --from black black $X", "uv run pytest $X", "pipx run black $X",
-    "uv run grep stillrunning $X", "uvx --python 3.12 ruff $X", "uv tool run ruff $X", "uv pip list",
-    "python3 -W ignore script.py stillrunning $X", "python3 -X dev other.py $X",
-    "python3 -m pytest stillrunning $X", "python3 -c 'print(1)' stillrunning $X", "python3 -W ignore -m pytest $X",
-    "uv run python -m pytest $X",
+    "uvx --python 3.12 ruff $X", "uv tool run ruff $X", "uv pip list", "python3 -X dev other.py $X",
+    "python3 -W ignore -m pytest $X", "uv run python -m pytest $X",
+    # (with the word `stillrunning` and a run-time word these now ask: review 9's fail-closed rule)
 ])
 def test_r8_launchers_and_python_running_something_else_do_not_ask(home, command):
     assert not ch.touches_protection(command), command
@@ -1435,3 +1435,83 @@ def test_r8_ctrl_c_while_writing_a_new_key_leaves_no_temp_file(home, monkeypatch
     with pytest.raises(KeyboardInterrupt):
         ob._key(str(folder))
     assert not [f for f in os.listdir(str(folder)) if f.endswith(".tmp")]
+
+
+# ── review 9: fail-closed with a read-only allow-list ──
+
+@pytest.mark.parametrize("command", [
+    # A: `uv run -m` is a flag; options may stand before the module
+    "uv run -m --no-sync stillrunning blocklist $(echo --unschedule)",
+    "uv run -m -q stillrunning blocklist $(echo --unschedule)",
+    "uv run --with x -m --python 3.12 stillrunning blocklist $(echo --unschedule)",
+    # B: words fed by parallel
+    "parallel stillrunning blocklist ::: $(echo --unschedule)", "parallel stillrunning blocklist :::: args.txt",
+    "parallel stillrunning ::: 'blocklist --unschedule'",
+    # C: wrappers and interpreter names the parser does not know
+    "flock -n /tmp/l stillrunning blocklist $(echo --unschedule)",
+    "nice -n 19 ionice -c 3 flock -n /tmp/l timeout 1800 python3 -m stillrunning blocklist $X",
+    "setsid stillrunning blocklist $(echo --unschedule)", "chrt -i 0 stillrunning blocklist $(echo --unschedule)",
+    "taskset -c 0 stillrunning blocklist $(echo --unschedule)",
+    "python3.13t -m stillrunning blocklist $(echo --unschedule)",
+    # review 9 section 5 (the same gaps for `allow`)
+    "setsid stillrunning $(echo allow) evil", "python3.13t -m stillrunning $(echo allow) evil",
+    "uv run -m --no-sync stillrunning $(echo allow) evil", "parallel stillrunning $(echo allow) ::: evil",
+    # wrappers that must ask by default
+    "nohup stillrunning blocklist $X", "stdbuf -oL stillrunning blocklist $X", "sudo -u bob stillrunning blocklist $X",
+    "env -i stillrunning blocklist $X", "ssh localhost stillrunning blocklist $X",
+    "frobnicate --wrap=7 stillrunning blocklist $X", "frobnicate -q stillrunning $(cat args)",
+    # the word only somewhere in the command, or only inside a substitution / assignment
+    "sr=stillrunning; $sr $X evil", "$(echo stillrunning) $X evil", "$(which stillrunning) blocklist $X",
+    "cat args | stillrunning blocklist", "stillrunning blocklist < args", "stillrunning blocklist <<< --unschedule",
+    "bash -c 'stillrunning blocklist $X'", "sh -c \"python3 -m stillrunning $X\"",
+    "nohup sh -c 'stillrunning blocklist $1' _ --unschedule",
+    "stillrunning blocklist --unsch{e,e}dule", "stillrunning blocklist --uns*",
+    # not read-only, so they ask too (the cost of the rule)
+    "pip download stillrunning -d $TMP", "docker run --name stillrunning img $CMD", "python3 script.py stillrunning $X",
+    "uv run grep stillrunning $X", "find . -name stillrunning -exec rm {} $X", "rg --pre ./x stillrunning $X",
+    "git -c core.pager=sh log stillrunning $X", "xargs -I{} sh -c 'stillrunning {}' < $F",
+])
+def test_r9_a_run_time_word_with_stillrunning_asks_unless_read_only(home, command):
+    """IMPORTANT (review 9 A, B, C): each new launcher or wrapper case left another one
+    out. Fail closed: a run-time word plus an unquoted word `stillrunning` asks, unless
+    the program that receives it is a read-only tool."""
+    assert ch.touches_protection(command), command
+    assert ch.decide(command, env={})["action"] == "ask", command
+
+
+@pytest.mark.parametrize("command", [
+    # review 7's read-only controls
+    "grep -r stillrunning $DIR", "echo stillrunning $HOME", 'rg stillrunning "$PWD"', "ls | xargs grep stillrunning",
+    "cat ~/notes/stillrunning.md | xargs echo",
+    # the rest of the read-only allow-list
+    "head -n 5 ~/stillrunning.log $X", "tail -f /var/log/stillrunning.log | grep $X", "wc -l stillrunning/*.py",
+    "printf '%s\\n' stillrunning $X", "find . -name 'stillrunning*' -newer $X", "find ~/stillrunning -type f | wc -l",
+    "git log --oneline -- stillrunning/ $X", "git -C ~/stillrunning-mcp status $X", "git diff HEAD -- stillrunning/$F",
+    "git show $REV:stillrunning/cli.py", "grep -r stillrunning *.py", "ls stillrunning/*", "grep -r stillrunning src/{a,b}",
+    "cat stillrunning.txt | grep -c $X",
+    # the word only inside quotes
+    'git commit -m "stillrunning: fix $X"', "echo 'stillrunning blocklist' > notes.txt && ls $X",
+    'pytest -k "stillrunning and $X"',
+    # no run-time word at all
+    "stillrunning scan requests", "stillrunning blocklist --status", "pip download stillrunning -d /tmp/x",
+    # no word stillrunning
+    "echo $HOME", "ls | xargs grep foo", "cp *.txt /tmp/", "$EDITOR *.py",
+])
+def test_r9_read_only_tools_and_quoted_mentions_do_not_ask(home, command):
+    assert not ch.touches_protection(command), command
+
+
+@pytest.mark.parametrize("command", [
+    "stillrunning check-package requests[socks]", "stillrunning scan 'requests[socks]'",
+    "python3 -m stillrunning scan requests[security,socks]", "stillrunning scan requests[socks]==2.31.0",
+])
+def test_r9_extras_are_not_globs(home, command):
+    """False ask (review 9): `name[extras]` was read as a glob."""
+    assert not ch.touches_protection(command), command
+
+
+@pytest.mark.parametrize("command", [
+    "stillrunning blocklist --[u]nschedule", "stillrunning blocklist [-]-unschedule", "stillrunning blocklist x[yz]*",
+])
+def test_r9_bracket_globs_still_ask(home, command):
+    assert ch.touches_protection(command), command

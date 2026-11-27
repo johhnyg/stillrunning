@@ -635,7 +635,7 @@ def _has_brace(word):
 def _runtime_word(word):
     """A word whose final form the shell decides at run time: an expansion
     (`$X`, `$(…)`, backticks, "$@"), a brace list or range, or a glob."""
-    return "$" in word or "`" in word or _has_brace(word) or bool(_GLOB_CHARS.search(word))
+    return "$" in word or "`" in word or _has_brace(word) or _is_glob(word)
 
 
 def _expanded(words):
@@ -866,6 +866,129 @@ def _own_switch(cmd, start, program, args):
     return False
 
 
+# ── own commands: fail closed, with a read-only allow-list ──
+# A command line with a word only known at run time ($X, ${…}, $(…), backticks,
+# a brace list, a glob, words fed by xargs / parallel / stdin) in which the word
+# "stillrunning" stands outside quotes is asked about, unless every program that
+# receives that word is one of these read-only tools. Unknown programs,
+# wrappers, interpreters and launchers ask: matching each of them (uv run -m,
+# parallel, flock, setsid, python3.13t, …) one by one always left one out.
+_READ_ONLY_RECEIVERS = {"grep", "rg", "ls", "cat", "head", "tail", "echo", "printf", "wc"}
+_FIND_ACTIONS = {"-exec", "-execdir", "-ok", "-okdir", "-delete", "-fprint", "-fprint0", "-fprintf", "-fls"}
+_GIT_READ_ONLY = {"log", "diff", "show", "status"}
+_GIT_VALUED = {"-C", "--git-dir", "--work-tree", "--namespace"}
+_PIPE = re.compile(r"(?<!\|)\|(?!\|)")
+
+
+def _mask_quotes(text):
+    """The text with everything inside quotes replaced by `q` (quotes, word
+    boundaries and operators outside them kept), so a word found in it stood
+    outside any quoted string."""
+    out, quote, i = [], None, 0
+    while i < len(text):
+        ch = text[i]
+        if quote is None:
+            if ch == "\\" and i + 1 < len(text):
+                out.append(text[i:i + 2])
+                i += 2
+                continue
+            if ch in "'\"":
+                quote = ch
+            out.append(ch)
+        elif ch == quote:
+            quote = None
+            out.append(ch)
+        elif quote == '"' and ch == "\\" and i + 1 < len(text):
+            out.append("qq")
+            i += 2
+            continue
+        else:
+            out.append("q")
+        i += 1
+    return "".join(out)
+
+
+def _names_stillrunning(tokens):
+    return any("stillrunning" in t.lower() for t in tokens)
+
+
+def _read_only_receiver(cmd):
+    """Is the program of this simple command a read-only tool (past `VAR=x`, and
+    past `xargs` and its options, which hand it words)?"""
+    i = 0
+    while i < len(cmd) and _ASSIGN.match(cmd[i]):
+        i += 1
+    if i < len(cmd) and _prog_name(cmd[i]) == "xargs":
+        i += 1
+        while i < len(cmd) and cmd[i].startswith("-"):
+            i += 2 if cmd[i] in _WRAPPER_FLAGS["xargs"] and i + 1 < len(cmd) else 1
+    if i >= len(cmd):
+        return False                     # only assignments (`sr=stillrunning`): not a reader
+    name, rest = _prog_name(cmd[i]), list(cmd[i + 1:])
+    if name in _READ_ONLY_RECEIVERS:
+        return not (name == "rg" and any(a == "--pre" or a.startswith("--pre=") for a in rest))
+    if name == "find":
+        return not any(a in _FIND_ACTIONS for a in rest)
+    if name == "git":
+        j = 0
+        while j < len(rest) and rest[j].startswith("-"):
+            if rest[j] == "-c" or rest[j].startswith("--config-env") or rest[j].startswith("--exec-path"):
+                return False             # `git -c core.pager=…` runs a program
+            j += 2 if rest[j] in _GIT_VALUED else 1
+        return j < len(rest) and rest[j] in _GIT_READ_ONLY and not any(
+            a.startswith(("--output", "--ext-diff", "--textconv")) for a in rest[j + 1:])
+    return False
+
+
+def _is_glob(word):
+    """A glob the shell would expand; `name[extras]` (with an optional version)
+    is a package name, not a glob."""
+    if not _GLOB_CHARS.search(word):
+        return False
+    if "*" not in word and "?" not in word and \
+            re.match(r"^[A-Za-z0-9][A-Za-z0-9._-]*\[[A-Za-z0-9._, -]*\]\s*(([=<>~!]=?|@|;).*)?$", word):
+        return False
+    return True
+
+
+def _own_fail_closed(command, inner, commands):
+    """The fail-closed own-command rule above, for one parsed level of the
+    command (substitution bodies, shell strings and here-documents a shell runs
+    are judged by the same rule when they are parsed in turn)."""
+    masked = _simple_commands(_tokenize(_mask_quotes(command)))
+    if len(masked) != len(commands) or any(len(a) != len(b) for a, b in zip(masked, commands)):
+        masked = commands                # could not line the two up: count every word
+    # Quoted text is data (a commit message, a search pattern), except when the
+    # command hands it to a shell to run (`xargs -I{} sh -c 'stillrunning {}'`).
+    receivers = {n for n, words in enumerate(masked) if _names_stillrunning(words)
+                 or (_is_shell_text(commands[n]) and _names_stillrunning(commands[n]))}
+    from_subst = any(_names_stillrunning([_mask_quotes(piece)]) for piece in inner)
+    if from_subst:
+        # `$(echo stillrunning) $X`: the outer command receives what it prints
+        receivers |= {n for n, words in enumerate(commands) if any(_SUBST_MARK in w for w in words)}
+    if not receivers:
+        return False
+
+    def run_time(n):
+        """A run-time word in the command that receives the word `stillrunning`."""
+        words, plain = commands[n], masked[n]
+        return any("$" in w or "`" in w for w in words) \
+            or any(_has_brace(w) or _is_glob(w) for w in plain) \
+            or any(_prog_name(w) in _ARG_FEEDERS for w in words) \
+            or bool(_PIPE.search(words.op) or words.stdin_file or words.here is not None or words.has_heredoc)
+
+    for n in receivers:
+        if _read_only_receiver(commands[n]):
+            continue
+        if run_time(n):
+            return True
+        # `sr=stillrunning; $sr $X evil`: a variable that holds the word, and a
+        # run-time word anywhere in the line
+        if all(_ASSIGN.match(w) for w in commands[n]) and any(run_time(m) for m in range(len(commands))):
+            return True
+    return False
+
+
 def _paths_touch_protection(command, cwds, depth):
     """Does the command change stillrunning's protection: write to, delete or
     replace a protected place, or flip one of its switches? A path counts only
@@ -880,6 +1003,8 @@ def _paths_touch_protection(command, cwds, depth):
         if depth < 3 and _paths_touch_protection(piece, cwds, depth + 1):
             return True
     commands = _simple_commands(_tokenize(command))
+    if _own_fail_closed(command, inner, commands):
+        return True
     by_stdin = any(_stdin_writer(c) for c in commands)
     fed = _shell_fed(commands)
     cwds = list(cwds)

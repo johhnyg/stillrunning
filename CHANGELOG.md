@@ -63,8 +63,11 @@ including known-malicious ones, instead of blocking them.
 - The Claude Code hook asks a person before an agent may run
   `stillrunning blocklist --force` or `--unschedule`, spelled out or as any
   prefix argparse could accept (`--f`, `--u`, `--uns`, …, with or without
-  `=value`; Python 3.15 accepts `blocklist --u` and `--un`, 3.8 and 3.12 reject
-  them), in the ways the next item lists; forced refreshes stay on
+  `=value`). Which prefixes argparse passes on to the subcommand depends on the
+  Python release, not only on the minor version: `blocklist --u` and `--un`
+  reach `--unschedule` on 3.15.2 and 3.12.14, and are rejected as ambiguous
+  (with `--uninstall-hook*`) on 3.8 and 3.12.3, so the hook asks for all of
+  them; the next items say which spellings of the command are covered. Forced refreshes stay on
   record in the manifest's history; a manifest removed while the database or
   key is still there counts as tampering; `introduced: "0.0.0"` (any all-zero
   spelling) means every version.
@@ -75,47 +78,56 @@ including known-malicious ones, instead of blocking them.
   release). A failed first build no longer leaves a database without a
   manifest (read as tampering), and any 0.0.0 pre-release (`0.0.0-0`,
   `0.0.0-alpha`, `0.0.0a0`) as an `introduced` version means every version.
-- A command that runs stillrunning and whose words after it are only known
-  at run time is asked about, for every own switch (the `allow`/`remember`/
-  uninstall rules had this gap before this release):
-  - **run-time words:** `$X`, `${…}`, `$(…)`, backticks, `"$@"`, brace lists
-    and ranges (`--unschedul{e,e}`, `{allow,x}`), globs (`*`, `?`, `[…]`, so a
-    file named `--unschedule` matched by `stillrunning blocklist *` cannot pass),
-    and words fed by `xargs` or `parallel`. `stillrunning scan $PKG` and
-    `stillrunning scan-manifest req*.txt` now ask too.
-  - **what counts as running stillrunning:** the program `stillrunning` (a
-    path, a brace list or a glob that could be it, and behind `nice`, `env`,
-    `sudo`, `timeout`, `xargs`, `script -qc`); `python -m stillrunning` for any
-    `python`/`python3.12`/`/usr/bin/python3`/`pypy` name, also past Python's
-    own options (`-W ignore`, `-Wignore`, `-X dev`, `-Xdev`,
-    `--check-hash-based-pycs x`) and in clusters (`-IBm stillrunning`,
-    `-mstillrunning`); and the launchers `uvx`, `uv tool run`, `pipx run` and
-    `uv run` (also `uv run -m` and `uv run python -m`), past their options that
-    take a value (`--python 3.12`, `--from X`, `--with X`, `--spec X`, …), with
-    a version or extras (`stillrunning@latest`, `stillrunning==2.14.3`,
-    `stillrunning[cli]`). The literal own switches are found behind a launcher
-    or version suffix too (`uvx stillrunning@latest allow evil`).
-  - **not the program:** a word that merely says "stillrunning" does not ask
-    on its run-time words (`grep -r stillrunning $DIR`, `uv run grep
-    stillrunning $X`, `python3 script.py stillrunning $X`).
-  - Where stillrunning is not proven to be the program (a word `stillrunning`
-    after an unknown wrapper such as `setsid`, or a program only known at run
-    time, `$sr`), brace lists are expanded and a glob counts as every own word
-    it could match, before the literal own-switch rules are applied
-    (`$sr blocklist --unsched*` asks; `grep -r stillrunning *.py` does not).
-- Known limits of the own-command matching (indirect execution is not
-  followed): `eval`, aliases and functions defined elsewhere, script files,
-  other interpreters (`python -c`, `node -e` are judged only by what their
-  code imports or writes), decoded payloads, and words assigned earlier in the
-  same command (`sr=stillrunning; $sr $X evil`, `X=allow; uvx stillrunning $X`
-  is asked about but `X=allow; $sr $X evil` is not); a `uvx`/`pipx`/`uv`
-  option this release does not know to take a value, when it is a short option
-  (`uvx -z v stillrunning $X`) or when two such options come before the
-  command (one unknown long option is covered by looking one word further);
-  words that `find -exec`/`-execdir`/`-ok` supplies (`{}`); top-level switches
-  spelled as argparse prefixes or with `=` (`--al x`, `--allow=x`). Words
-  assigned earlier in the same command, `find -exec` and the top-level
-  prefixes are planned for the next pull request.
+- **Own commands: fail-closed with a read-only allow-list.** A simple
+  command in which the word `stillrunning` stands outside quotes (in any word:
+  the program, a module, a package spec, a path) and which carries a run-time
+  word is asked about, unless its program is one of these read-only tools:
+  `grep`, `rg` (not with `--pre`), `ls`, `cat`, `head`, `tail`, `echo`,
+  `printf`, `wc`, `find` (not with `-exec`, `-execdir`, `-ok`, `-okdir`,
+  `-delete`, `-fprint*`, `-fls`), and `git log` / `diff` / `show` / `status`
+  (not with `git -c`, `--output`, `--ext-diff`, `--textconv`); `xargs` handing
+  words to one of these is read-only too. Every other program asks: unknown
+  programs, wrappers (`nohup`, `stdbuf`, `sudo -u`, `env -i`, `flock`,
+  `setsid`, `chrt`, `taskset`, `ssh host`, …), interpreters (`python3.13t`, …)
+  and launchers (`uvx`, `uv run -m`, `pipx run`, `parallel`, …). Matching them
+  one by one always left one out (reviews 8 and 9).
+  - **run-time words:** `$X`, `${…}`, `$(…)`, backticks, `"$@"`, brace lists and
+    ranges (`--unschedul{e,e}`), globs (`*`, `?`, `[…]`; `name[extras]` is a
+    package name, not a glob), and words fed to it by `xargs`, `parallel`, a
+    pipe, `<`, `<<<` or a here-document. They count in the command that holds
+    the word `stillrunning` (`stillrunning scan x && echo $?` does not ask), and
+    for a variable that holds it (`sr=stillrunning; $sr $X evil`) anywhere in the
+    line.
+  - **quotes:** text in quotes is data (`git commit -m "stillrunning: fix $X"`,
+    `pytest -k "stillrunning and $X"` do not ask), except text handed to a shell
+    to run (`bash -c`, `sh -c`, `ssh host '…'`, `script -qc`, `xargs … sh -c`),
+    which is judged as a command of its own; so is the inside of `$(…)`, and a
+    `$(…)` that prints the word counts for the command around it
+    (`$(echo stillrunning) $X evil` asks).
+  - The literal own-switch rules are unchanged and still apply without any
+    run-time word (`stillrunning allow evil`, `uvx stillrunning@latest allow
+    evil`, `stillrunnin{g,g} allow evil`, `$sr blocklist --unsched*`).
+  - **New false asks (the cost of the rule):** commands that name stillrunning
+    and carry a run-time word but are not read-only now ask, for example
+    `pip download stillrunning -d $TMP`, `docker run --name stillrunning img
+    $CMD`, `python3 script.py stillrunning $X`, `uv run grep stillrunning $X`,
+    `stillrunning scan $PKG`, `stillrunning scan $HOME/project`,
+    `stillrunning cve --refresh --cwd "$PWD"`, `stillrunning scan-manifest
+    req*.txt`, `cat pkgs.txt | xargs stillrunning check-package`, and
+    `HOME=$(mktemp -d) python3 -m pytest ~/stillrunning/tests` (a path naming
+    stillrunning, and an assignment from `$(…)`). `cd ~/stillrunning-x` is not
+    on the list either: `cd ~/stillrunning-x $X` would ask, `cd ~/stillrunning-x
+    && make $X` does not (the run-time word is in another command).
+- Known limits of the own-command matching: indirect execution is not
+  followed (`eval`, aliases and functions defined elsewhere, script files,
+  other interpreters such as `python -c` and `node -e`, judged only by what
+  their code imports or writes, and decoded payloads); a command that never
+  spells the word `stillrunning` outside quotes or a shell string
+  (`X=allow; $sr $X evil` with `sr` set elsewhere, `S=stillrunnin; ${S}g $X`);
+  words that `find -exec`/`-execdir`/`-ok` supplies (`find /x -name allow
+  -exec stillrunning {} evil \;`); and top-level switches spelled as argparse prefixes or
+  with `=` (`--al x`, `--allow=x`). `find -exec` and the top-level prefixes are
+  planned for the next pull request.
 - A refresh that fails or is interrupted (Ctrl-C) anywhere between creating
   the key and writing the manifest takes back what it added (its database, a
   key it created, its temporary manifest), so nothing is left that reads as
