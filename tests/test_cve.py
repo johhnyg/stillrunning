@@ -580,7 +580,7 @@ def test_schedule_adds_one_line_is_idempotent_and_unschedule_removes_only_its_ow
     assert cve.main(["--schedule", "--cwd", str(tmp_path)]) == 0
     lines = fake_crontab.read_text(encoding="utf-8").splitlines()
     assert len(lines) == 1 and lines[0].endswith(cve.CRON_MARK)
-    assert "flock -n" in lines[0] and "timeout 600" in lines[0] and "*/6" in lines[0]
+    assert "flock -n" in lines[0] and "timeout 600" in lines[0] and lines[0].startswith("17 * * * * ")
     assert "cve --refresh --cwd" in lines[0]
     assert "Scheduled" in capsys.readouterr().out
 
@@ -855,3 +855,113 @@ def test_a_zero_package_part_cannot_carry_a_nonzero_total(tmp_path, feed, no_ins
     entry["inventory"]["resolved"] = 1
     _write(doc)
     assert _surfaces(NOW) == ("UNKNOWN", "UNKNOWN")
+
+
+# ─────────────── copies Python never imports; new CVEs; what to update to ───────────────
+def _installed(monkeypatch, rows, shadowed):
+    monkeypatch.setattr(panel, "installed_packages", lambda root, problems=None: [
+        {"where": "installed", "file": "this machine", "eco": "pip", "name": n, "version": v}
+        for n, v in rows])
+    monkeypatch.setattr(cve, "_shadowed_copies", lambda: dict(shadowed))
+
+
+def test_a_copy_python_does_not_import_is_shown_but_not_counted(tmp_path, feed, monkeypatch):
+    """Ubuntu's /usr/lib/python3/dist-packages copy behind a newer pip copy in /usr/local:
+    nothing imports it, so it must not turn /shield red (it did: 5 "critical" entries on
+    the operator's box were all such copies)."""
+    root = project(tmp_path, "flask==0.12.0\n")
+    _installed(monkeypatch, [("requests", "2.5.0")], {("requests", "2.5.0"): "2.33.0"})
+    entry = cve.refresh(root, now=NOW)
+    assert [a["name"] for a in entry["affected"]] == ["flask"]
+    assert [(a["name"], a["loaded_version"]) for a in entry["not_loaded"]] == [("requests", "2.33.0")]
+    data = cve.load(now=NOW + 60, root=str(root))
+    assert data["state"] == "AFFECTED" and data["counts"]["critical"] == 0
+    assert data["counts"]["affected_packages"] == 1
+    text = cve.render(data)
+    assert "Not loaded by this Python" in text and "imported instead: 2.33.0" in text
+    assert "(1 critical)" not in cve.headline(data)
+    assert "critical" not in line(now=NOW + 60)            # the status line agrees
+    # the hook's verdict cache still knows the version is vulnerable
+    assert entry["results"]["pip:requests@2.5.0"]
+
+
+def test_a_shadowed_copy_that_a_project_file_also_pins_still_counts(tmp_path, feed, monkeypatch):
+    root = project(tmp_path, "requests==2.5.0\n")
+    _installed(monkeypatch, [("requests", "2.5.0")], {("requests", "2.5.0"): "2.33.0"})
+    entry = cve.refresh(root, now=NOW)
+    assert [a["name"] for a in entry["affected"]] == ["requests"] and entry["not_loaded"] == []
+
+
+def test_only_a_copy_in_another_folder_behind_the_first_is_shadowed(monkeypatch, tmp_path):
+    class Dist:
+        def __init__(self, name, version, folder):
+            self.metadata, self.version, self.folder = {"Name": name}, version, folder
+
+        def locate_file(self, path):
+            return self.folder
+
+    a, b = str(tmp_path / "local"), str(tmp_path / "lib")
+    dists = [Dist("Requests", "2.33.0", a), Dist("idna", "3.15", a), Dist("idna", "3.18", a),
+             Dist("requests", "2.31.0", b), Dist("idna", "3.6", b), Dist("flask", "3.1.3", b),
+             Dist("pyjwt", "2.7.0", b), Dist("PyJWT", "2.7.0", a)]
+    import importlib.metadata as md
+    monkeypatch.setattr(md, "distributions", lambda: iter(dists))
+    out = cve._shadowed_copies()
+    assert out == {("requests", "2.31.0"): "2.33.0", ("idna", "3.6"): "3.15"}
+
+
+def test_new_vulnerabilities_are_flagged_for_a_day_and_keep_their_first_date(tmp_path, feed,
+                                                                             no_installed):
+    root = project(tmp_path, "requests==2.5.0\n")
+    feed.table[("PyPI", "requests", "2.5.0")] = []
+    cve.refresh(root, now=NOW)                                  # the first look: clear
+    feed.table[("PyPI", "requests", "2.5.0")] = [CRIT, CRIT_PYSEC]
+    cve.refresh(root, now=NOW + 3600)                           # published since
+    data = cve.load(now=NOW + 7200, root=str(root))
+    assert data["new_vulns"] == 1 and "1 new in 24h" in cve.headline(data)
+    assert "[NEW]" in cve.render(data)
+    cve.refresh(root, now=NOW + 3 * 3600)                       # later hourly refreshes
+    assert cve.load(now=NOW + 4 * 3600, root=str(root))["new_vulns"] == 1
+    cve.refresh(root, now=NOW + 26 * 3600)
+    data = cve.load(now=NOW + 26 * 3600, root=str(root))
+    assert data["new_vulns"] == 0 and "new" not in cve.headline(data)
+    assert "[NEW]" not in cve.render(data)
+    assert data["affected"][0]["vulns"][0]["first_seen"] == NOW + 3600
+
+
+def test_the_first_refresh_of_a_folder_calls_nothing_new(tmp_path, feed, no_installed):
+    root = project(tmp_path, "requests==2.5.0\n")
+    cve.refresh(root, now=NOW)
+    data = cve.load(now=NOW + 60, root=str(root))
+    assert data["state"] == "AFFECTED" and data["new_vulns"] == 0
+
+
+def test_each_affected_package_says_what_to_update_to(tmp_path, feed, monkeypatch):
+    root = project(tmp_path, "requests==2.5.0\n")
+    _installed(monkeypatch, [("urllib3", "1.26.0")], {})
+    cve.refresh(root, now=NOW)
+    text = cve.render(cve.load(now=NOW + 60, root=str(root)))
+    assert "update: set requests>=2.20.0 in requirements.txt" in text
+    assert "update: pip install 'urllib3>=1.26.5'" in text
+
+
+def test_update_to_needs_a_fix_for_every_vulnerability():
+    v = lambda f: {"fixed": f}
+    assert cve.update_to({"vulns": [v("1.2.0"), v("1.10.1"), v("1.9")]}) == "1.10.1"
+    assert cve.update_to({"vulns": [v("1.2.0"), v(None)]}) is None
+    assert cve.update_to({"vulns": []}) is None
+
+
+def test_a_state_saved_before_this_change_still_reads(tmp_path, feed, no_installed):
+    root = project(tmp_path, "requests==2.5.0\n")
+    cve.refresh(root, now=NOW)
+    doc = json.load(open(state_file()))
+    entry = doc["projects"][str(root)]
+    entry.pop("not_loaded")
+    entry.pop("since")
+    for a in entry["affected"]:
+        for v in a["vulns"]:
+            v.pop("first_seen")
+    json.dump(doc, open(state_file(), "w"))
+    data = cve.load(now=NOW + 60, root=str(root))
+    assert data["state"] == "AFFECTED" and data["new_vulns"] == 0 and data["not_loaded"] == []
