@@ -1,0 +1,12 @@
+{
+ "schema": 1,
+ "note": "Fresh reviews of PR #7, one per round, each on the head named here. 'important' counts the findings introduced by the PR that blocked merge; reviews 8 and 9 are counted from the fix lists the operator approved for the next round.",
+ "reviews": [
+  {"commit": "e104acc", "review": "review 8", "verdict": "REJECT", "important": 2},
+  {"commit": "cf98523", "review": "review 9", "verdict": "REJECT", "important": 3},
+  {"commit": "6a33dae", "review": "review 10", "verdict": "APPROVE", "important": 0},
+  {"commit": "b2c8fd7", "review": "review 11", "verdict": "REJECT", "important": 1},
+  {"commit": "87edb95", "review": "review 12", "verdict": "REJECT", "important": 3, "pre_existing": 2},
+  {"commit": "841eb9b", "review": "review 13", "verdict": "REJECT", "important": 2, "pre_existing": 3}
+ ]
+}

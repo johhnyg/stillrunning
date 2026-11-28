@@ -58,3 +58,9 @@ jobs:
           --deselect tests/test_v230_fixes.py::TestScanCommand::test_scan_blocked_package_returns_1
           --deselect tests/test_v230_fixes.py::TestScanCommand::test_scan_nonexistent_package_returns_2
           --deselect tests/test_v250_fixes.py::TestVersionUpdate::test_version_is_250
+      - name: Attack-suite gate
+        # Fails if a probe caught at any commit on docs/scoreboard.jsonl is now
+        # allowed, if must-allow controls drop, or if the false-ask debt goes up.
+        # Probe strings only reach touches_protection(); no shell runs them.
+        if: ${{ runner.os == 'Linux' }}
+        run: python tools/scoreboard.py check

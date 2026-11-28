@@ -1,0 +1,761 @@
+{
+ "schema": 1,
+ "controls": [
+  {
+   "id": "C-a72785ef7d",
+   "command": "stillrunning blocklist --refresh",
+   "kind": "must-allow",
+   "found_by": "review 4",
+   "reason": "pinned by test_r4_ordinary_blocklist_commands_do_not_ask"
+  },
+  {
+   "id": "C-7f985b3968",
+   "command": "stillrunning blocklist --status",
+   "kind": "must-allow",
+   "found_by": "review 4",
+   "reason": "pinned by test_r4_ordinary_blocklist_commands_do_not_ask"
+  },
+  {
+   "id": "C-4002358098",
+   "command": "stillrunning --token x blocklist --refresh",
+   "kind": "must-allow",
+   "found_by": "review 5",
+   "reason": "pinned by test_r5_ordinary_commands_with_value_options_do_not_ask"
+  },
+  {
+   "id": "C-2e3cf7bd13",
+   "command": "stillrunning --name x blocklist --status",
+   "kind": "must-allow",
+   "found_by": "review 5",
+   "reason": "pinned by test_r5_ordinary_commands_with_value_options_do_not_ask"
+  },
+  {
+   "id": "C-ce00a9d472",
+   "command": "stillrunning blocklist --status --token x",
+   "kind": "must-allow",
+   "found_by": "review 5",
+   "reason": "pinned by test_r5_ordinary_commands_with_value_options_do_not_ask"
+  },
+  {
+   "id": "C-ec0ceee1ee",
+   "command": "stillrunning --token x scan requests",
+   "kind": "must-allow",
+   "found_by": "review 5",
+   "reason": "pinned by test_r5_ordinary_commands_with_value_options_do_not_ask"
+  },
+  {
+   "id": "C-518999e0f8",
+   "command": "stillrunning whitelist list --name x",
+   "kind": "must-allow",
+   "found_by": "review 5",
+   "reason": "pinned by test_r5_ordinary_commands_with_value_options_do_not_ask"
+  },
+  {
+   "id": "C-260d5bb5d9",
+   "command": "stillrunning --name x status",
+   "kind": "must-allow",
+   "found_by": "review 5",
+   "reason": "pinned by test_r5_ordinary_commands_with_value_options_do_not_ask"
+  },
+  {
+   "id": "C-d982198aa9",
+   "command": "stillrunning scan requests",
+   "kind": "must-allow",
+   "found_by": "review 6",
+   "reason": "pinned by test_r6_ordinary_commands_still_do_not_ask"
+  },
+  {
+   "id": "C-a23a6d74fb",
+   "command": "stillrunning --version",
+   "kind": "must-allow",
+   "found_by": "review 6",
+   "reason": "pinned by test_r6_ordinary_commands_still_do_not_ask"
+  },
+  {
+   "id": "C-1c9f7e061c",
+   "command": "echo $HOME",
+   "kind": "must-allow",
+   "found_by": "review 6",
+   "reason": "pinned by test_r6_ordinary_commands_still_do_not_ask"
+  },
+  {
+   "id": "C-45995bb529",
+   "command": "ls | xargs grep foo",
+   "kind": "must-allow",
+   "found_by": "review 6",
+   "reason": "pinned by test_r6_ordinary_commands_still_do_not_ask"
+  },
+  {
+   "id": "C-8d4c44e276",
+   "command": "git commit -m \"$MSG\"",
+   "kind": "must-allow",
+   "found_by": "review 6",
+   "reason": "pinned by test_r6_ordinary_commands_still_do_not_ask"
+  },
+  {
+   "id": "C-5d249c9fa0",
+   "command": "stillrunning scan requests && echo $?",
+   "kind": "must-allow",
+   "found_by": "review 6",
+   "reason": "pinned by test_r6_ordinary_commands_still_do_not_ask"
+  },
+  {
+   "id": "C-571aecfaf5",
+   "command": "npm install --force lodash",
+   "kind": "must-allow",
+   "found_by": "review 6",
+   "reason": "pinned by test_r6_ordinary_commands_still_do_not_ask"
+  },
+  {
+   "id": "C-ba4a63a372",
+   "command": "parallel gzip ::: a b",
+   "kind": "must-allow",
+   "found_by": "review 6",
+   "reason": "pinned by test_r6_ordinary_commands_still_do_not_ask"
+  },
+  {
+   "id": "C-701b150e3d",
+   "command": "grep -r stillrunning $DIR",
+   "kind": "must-allow",
+   "found_by": "review 7",
+   "reason": "pinned by test_r7_a_word_stillrunning_that_is_not_the_program_does_not_ask"
+  },
+  {
+   "id": "C-836e95a4f6",
+   "command": "echo stillrunning $HOME",
+   "kind": "must-allow",
+   "found_by": "review 7",
+   "reason": "pinned by test_r7_a_word_stillrunning_that_is_not_the_program_does_not_ask"
+  },
+  {
+   "id": "C-a46e7bfb95",
+   "command": "rg stillrunning \"$PWD\"",
+   "kind": "must-allow",
+   "found_by": "review 7",
+   "reason": "pinned by test_r7_a_word_stillrunning_that_is_not_the_program_does_not_ask"
+  },
+  {
+   "id": "C-3346b286e9",
+   "command": "ls | xargs grep stillrunning",
+   "kind": "must-allow",
+   "found_by": "review 7",
+   "reason": "pinned by test_r7_a_word_stillrunning_that_is_not_the_program_does_not_ask"
+  },
+  {
+   "id": "C-b631edb6aa",
+   "command": "cat ~/notes/stillrunning.md | xargs echo",
+   "kind": "must-allow",
+   "found_by": "review 7",
+   "reason": "pinned by test_r7_a_word_stillrunning_that_is_not_the_program_does_not_ask"
+  },
+  {
+   "id": "C-d602b60b21",
+   "command": "uvx ruff check $X",
+   "kind": "must-allow",
+   "found_by": "review 8",
+   "reason": "pinned by test_r8_launchers_and_python_running_something_else_do_not_ask"
+  },
+  {
+   "id": "C-141d558d9f",
+   "command": "uvx --from black black $X",
+   "kind": "must-allow",
+   "found_by": "review 8",
+   "reason": "pinned by test_r8_launchers_and_python_running_something_else_do_not_ask"
+  },
+  {
+   "id": "C-bb7310c376",
+   "command": "uv run pytest $X",
+   "kind": "must-allow",
+   "found_by": "review 8",
+   "reason": "pinned by test_r8_launchers_and_python_running_something_else_do_not_ask"
+  },
+  {
+   "id": "C-9e7f31837c",
+   "command": "pipx run black $X",
+   "kind": "must-allow",
+   "found_by": "review 8",
+   "reason": "pinned by test_r8_launchers_and_python_running_something_else_do_not_ask"
+  },
+  {
+   "id": "C-c109961d97",
+   "command": "uvx --python 3.12 ruff $X",
+   "kind": "must-allow",
+   "found_by": "review 8",
+   "reason": "pinned by test_r8_launchers_and_python_running_something_else_do_not_ask"
+  },
+  {
+   "id": "C-f327f39d39",
+   "command": "uv tool run ruff $X",
+   "kind": "must-allow",
+   "found_by": "review 8",
+   "reason": "pinned by test_r8_launchers_and_python_running_something_else_do_not_ask"
+  },
+  {
+   "id": "C-8d8215ff79",
+   "command": "uv pip list",
+   "kind": "must-allow",
+   "found_by": "review 8",
+   "reason": "pinned by test_r8_launchers_and_python_running_something_else_do_not_ask"
+  },
+  {
+   "id": "C-f3cac5c724",
+   "command": "python3 -X dev other.py $X",
+   "kind": "must-allow",
+   "found_by": "review 8",
+   "reason": "pinned by test_r8_launchers_and_python_running_something_else_do_not_ask"
+  },
+  {
+   "id": "C-6ef5b6defa",
+   "command": "python3 -W ignore -m pytest $X",
+   "kind": "must-allow",
+   "found_by": "review 8",
+   "reason": "pinned by test_r8_launchers_and_python_running_something_else_do_not_ask"
+  },
+  {
+   "id": "C-e57f13bb10",
+   "command": "uv run python -m pytest $X",
+   "kind": "must-allow",
+   "found_by": "review 8",
+   "reason": "pinned by test_r8_launchers_and_python_running_something_else_do_not_ask"
+  },
+  {
+   "id": "C-d168008661",
+   "command": "echo {a,b}",
+   "kind": "must-allow",
+   "found_by": "review 8",
+   "reason": "pinned by test_r8_braces_and_globs_elsewhere_do_not_ask"
+  },
+  {
+   "id": "C-d7dbf0ad0d",
+   "command": "cp *.txt /tmp/",
+   "kind": "must-allow",
+   "found_by": "review 8",
+   "reason": "pinned by test_r8_braces_and_globs_elsewhere_do_not_ask"
+  },
+  {
+   "id": "C-51c17383a8",
+   "command": "ls stillrunning/*",
+   "kind": "must-allow",
+   "found_by": "review 8",
+   "reason": "pinned by test_r8_braces_and_globs_elsewhere_do_not_ask"
+  },
+  {
+   "id": "C-d3205a282f",
+   "command": "grep -r stillrunning *.py",
+   "kind": "must-allow",
+   "found_by": "review 8",
+   "reason": "pinned by test_r8_braces_and_globs_elsewhere_do_not_ask"
+  },
+  {
+   "id": "C-72b5f43730",
+   "command": "$EDITOR *.py",
+   "kind": "must-allow",
+   "found_by": "review 8",
+   "reason": "pinned by test_r8_braces_and_globs_elsewhere_do_not_ask"
+  },
+  {
+   "id": "C-7a5922e504",
+   "command": "mv file.{txt,bak}",
+   "kind": "must-allow",
+   "found_by": "review 8",
+   "reason": "pinned by test_r8_braces_and_globs_elsewhere_do_not_ask"
+  },
+  {
+   "id": "C-54e1ad3b57",
+   "command": "grep -r stillrunning src/{a,b}",
+   "kind": "must-allow",
+   "found_by": "review 8",
+   "reason": "pinned by test_r8_braces_and_globs_elsewhere_do_not_ask"
+  },
+  {
+   "id": "C-e4ef05624d",
+   "command": "head -n 5 ~/stillrunning.log $X",
+   "kind": "must-allow",
+   "found_by": "review 9",
+   "reason": "pinned by test_r9_read_only_tools_and_quoted_mentions_do_not_ask"
+  },
+  {
+   "id": "C-6382fc975f",
+   "command": "tail -f /var/log/stillrunning.log | grep $X",
+   "kind": "must-allow",
+   "found_by": "review 9",
+   "reason": "pinned by test_r9_read_only_tools_and_quoted_mentions_do_not_ask"
+  },
+  {
+   "id": "C-cc2fd6999e",
+   "command": "wc -l stillrunning/*.py",
+   "kind": "must-allow",
+   "found_by": "review 9",
+   "reason": "pinned by test_r9_read_only_tools_and_quoted_mentions_do_not_ask"
+  },
+  {
+   "id": "C-f6333f59a9",
+   "command": "printf '%s\\n' stillrunning $X",
+   "kind": "must-allow",
+   "found_by": "review 9",
+   "reason": "pinned by test_r9_read_only_tools_and_quoted_mentions_do_not_ask"
+  },
+  {
+   "id": "C-859f19ddb2",
+   "command": "find . -name 'stillrunning*' -newer $X",
+   "kind": "must-allow",
+   "found_by": "review 9",
+   "reason": "pinned by test_r9_read_only_tools_and_quoted_mentions_do_not_ask"
+  },
+  {
+   "id": "C-ae4cac1655",
+   "command": "find ~/stillrunning -type f | wc -l",
+   "kind": "must-allow",
+   "found_by": "review 9",
+   "reason": "pinned by test_r9_read_only_tools_and_quoted_mentions_do_not_ask"
+  },
+  {
+   "id": "C-feedf159f9",
+   "command": "git log --oneline -- stillrunning/ $X",
+   "kind": "must-allow",
+   "found_by": "review 9",
+   "reason": "pinned by test_r9_read_only_tools_and_quoted_mentions_do_not_ask"
+  },
+  {
+   "id": "C-7cc7556023",
+   "command": "git -C ~/stillrunning-mcp status $X",
+   "kind": "must-allow",
+   "found_by": "review 9",
+   "reason": "pinned by test_r9_read_only_tools_and_quoted_mentions_do_not_ask"
+  },
+  {
+   "id": "C-3b2ab8d3c0",
+   "command": "git diff HEAD -- stillrunning/$F",
+   "kind": "must-allow",
+   "found_by": "review 9",
+   "reason": "pinned by test_r9_read_only_tools_and_quoted_mentions_do_not_ask"
+  },
+  {
+   "id": "C-dfd18964e3",
+   "command": "git show $REV:stillrunning/cli.py",
+   "kind": "must-allow",
+   "found_by": "review 9",
+   "reason": "pinned by test_r9_read_only_tools_and_quoted_mentions_do_not_ask"
+  },
+  {
+   "id": "C-a9dc4e18e2",
+   "command": "cat stillrunning.txt | grep -c $X",
+   "kind": "must-allow",
+   "found_by": "review 9",
+   "reason": "pinned by test_r9_read_only_tools_and_quoted_mentions_do_not_ask"
+  },
+  {
+   "id": "C-9db41694a4",
+   "command": "git commit -m \"stillrunning: fix $X\"",
+   "kind": "must-allow",
+   "found_by": "review 9",
+   "reason": "pinned by test_r9_read_only_tools_and_quoted_mentions_do_not_ask"
+  },
+  {
+   "id": "C-ae46e12cd1",
+   "command": "echo 'stillrunning blocklist' > notes.txt && ls $X",
+   "kind": "must-allow",
+   "found_by": "review 9",
+   "reason": "pinned by test_r9_read_only_tools_and_quoted_mentions_do_not_ask"
+  },
+  {
+   "id": "C-3505ccabcb",
+   "command": "pytest -k \"stillrunning and $X\"",
+   "kind": "must-allow",
+   "found_by": "review 9",
+   "reason": "pinned by test_r9_read_only_tools_and_quoted_mentions_do_not_ask"
+  },
+  {
+   "id": "C-520e0a2519",
+   "command": "pip download stillrunning -d /tmp/x",
+   "kind": "must-allow",
+   "found_by": "review 9",
+   "reason": "pinned by test_r9_read_only_tools_and_quoted_mentions_do_not_ask"
+  },
+  {
+   "id": "C-10aa4de774",
+   "command": "stillrunning check-package requests[socks]",
+   "kind": "must-allow",
+   "found_by": "review 9",
+   "reason": "pinned by test_r9_extras_are_not_globs"
+  },
+  {
+   "id": "C-b63db28834",
+   "command": "stillrunning scan 'requests[socks]'",
+   "kind": "must-allow",
+   "found_by": "review 9",
+   "reason": "pinned by test_r9_extras_are_not_globs"
+  },
+  {
+   "id": "C-16d01054d9",
+   "command": "python3 -m stillrunning scan requests[security,socks]",
+   "kind": "must-allow",
+   "found_by": "review 9",
+   "reason": "pinned by test_r9_extras_are_not_globs"
+  },
+  {
+   "id": "C-b8049f7fb1",
+   "command": "stillrunning scan requests[socks]==2.31.0",
+   "kind": "must-allow",
+   "found_by": "review 9",
+   "reason": "pinned by test_r9_extras_are_not_globs"
+  },
+  {
+   "id": "C-11b745698b",
+   "command": "cat <<<'stillrunning allow evil'",
+   "kind": "must-allow",
+   "found_by": "review 10",
+   "reason": "pinned by test_r10_here_strings_to_other_programs_are_data"
+  },
+  {
+   "id": "C-182468a0b3",
+   "command": "grep -c allow <<< 'stillrunning allow evil'",
+   "kind": "must-allow",
+   "found_by": "review 10",
+   "reason": "pinned by test_r10_here_strings_to_other_programs_are_data"
+  },
+  {
+   "id": "C-dbc307fba7",
+   "command": "bash -c 'echo hi' <<< 'stillrunning allow evil'",
+   "kind": "must-allow",
+   "found_by": "review 10",
+   "reason": "pinned by test_r10_here_strings_to_other_programs_are_data"
+  },
+  {
+   "id": "C-85ca91d679",
+   "command": "python3 <<< 'print(1)'",
+   "kind": "must-allow",
+   "found_by": "review 10",
+   "reason": "pinned by test_r10_here_strings_to_other_programs_are_data"
+  },
+  {
+   "id": "C-20b591c6e6",
+   "command": "bash <<<'echo hello'",
+   "kind": "must-allow",
+   "found_by": "review 10",
+   "reason": "pinned by test_r10_here_strings_to_other_programs_are_data"
+  },
+  {
+   "id": "C-a0da2a019f",
+   "command": "wc -l <<< \"stillrunning blocklist --unschedule\"",
+   "kind": "must-allow",
+   "found_by": "review 10",
+   "reason": "pinned by test_r10_here_strings_to_other_programs_are_data"
+  },
+  {
+   "id": "C-b7ba09fbb6",
+   "command": "awk '{print $1}' ~/stillrunning/x.txt",
+   "kind": "must-allow",
+   "found_by": "review 11",
+   "reason": "pinned by test_r11_a_dollar_inside_single_quotes_is_not_a_run_time_word"
+  },
+  {
+   "id": "C-832b1e2d18",
+   "command": "sed -n 's/$/x/p' ~/stillrunning/x.txt",
+   "kind": "must-allow",
+   "found_by": "review 11",
+   "reason": "pinned by test_r11_a_dollar_inside_single_quotes_is_not_a_run_time_word"
+  },
+  {
+   "id": "C-7d4a8b85d9",
+   "command": "perl -ne 'print if /a$/' ~/stillrunning/a.txt",
+   "kind": "must-allow",
+   "found_by": "review 11",
+   "reason": "pinned by test_r11_a_dollar_inside_single_quotes_is_not_a_run_time_word"
+  },
+  {
+   "id": "C-7945d6ca7c",
+   "command": "jq '.a | $__loc__' ~/stillrunning/x.json",
+   "kind": "must-allow",
+   "found_by": "review 11",
+   "reason": "pinned by test_r11_a_dollar_inside_single_quotes_is_not_a_run_time_word"
+  },
+  {
+   "id": "C-aea0d4553a",
+   "command": "bash -c 'stillrunning blocklist --status'",
+   "kind": "must-allow",
+   "found_by": "review 12",
+   "reason": "pinned by test_r12_controls_still_allow"
+  },
+  {
+   "id": "C-9a9e847675",
+   "command": "bash -c ls",
+   "kind": "must-allow",
+   "found_by": "review 12",
+   "reason": "pinned by test_r12_controls_still_allow"
+  },
+  {
+   "id": "C-867ee46a47",
+   "command": "git commit -m 'stillrunning${IFS}x'",
+   "kind": "must-allow",
+   "found_by": "review 12",
+   "reason": "pinned by test_r12_controls_still_allow"
+  },
+  {
+   "id": "C-472b36f45a",
+   "command": "stillrunning scan x && echo $?",
+   "kind": "must-allow",
+   "found_by": "review 12",
+   "reason": "pinned by test_r12_controls_still_allow"
+  },
+  {
+   "id": "C-ac7f2df592",
+   "command": "grep -r 'stillrunning${IFS}' ~/notes",
+   "kind": "must-allow",
+   "found_by": "review 12",
+   "reason": "pinned by test_r12_controls_still_allow"
+  },
+  {
+   "id": "C-d1ff0289ce",
+   "command": "ssh host uptime",
+   "kind": "must-allow",
+   "found_by": "review 12",
+   "reason": "pinned by test_r12_controls_still_allow"
+  },
+  {
+   "id": "C-81dae43bfa",
+   "command": "pip download stillrunning -d $TMP",
+   "kind": "false-ask-debt",
+   "found_by": "CHANGELOG / reviews",
+   "reason": "asks today; should not"
+  },
+  {
+   "id": "C-b4bd40e575",
+   "command": "docker run --name stillrunning img $CMD",
+   "kind": "false-ask-debt",
+   "found_by": "CHANGELOG / reviews",
+   "reason": "asks today; should not"
+  },
+  {
+   "id": "C-bd27c15a9a",
+   "command": "python3 script.py stillrunning $X",
+   "kind": "false-ask-debt",
+   "found_by": "CHANGELOG / reviews",
+   "reason": "asks today; should not"
+  },
+  {
+   "id": "C-99a49ba058",
+   "command": "uv run grep stillrunning $X",
+   "kind": "false-ask-debt",
+   "found_by": "CHANGELOG / reviews",
+   "reason": "asks today; should not"
+  },
+  {
+   "id": "C-a6c9dd462b",
+   "command": "stillrunning scan $PKG",
+   "kind": "false-ask-debt",
+   "found_by": "CHANGELOG / reviews",
+   "reason": "asks today; should not"
+  },
+  {
+   "id": "C-013c0c2b7d",
+   "command": "stillrunning scan $HOME/project",
+   "kind": "false-ask-debt",
+   "found_by": "CHANGELOG / reviews",
+   "reason": "asks today; should not"
+  },
+  {
+   "id": "C-04c76bfc12",
+   "command": "stillrunning cve --refresh --cwd \"$PWD\"",
+   "kind": "false-ask-debt",
+   "found_by": "CHANGELOG / reviews",
+   "reason": "asks today; should not"
+  },
+  {
+   "id": "C-14f75115e6",
+   "command": "stillrunning scan-manifest req*.txt",
+   "kind": "false-ask-debt",
+   "found_by": "CHANGELOG / reviews",
+   "reason": "asks today; should not"
+  },
+  {
+   "id": "C-1372792a29",
+   "command": "cat pkgs.txt | xargs stillrunning check-package",
+   "kind": "false-ask-debt",
+   "found_by": "CHANGELOG / reviews",
+   "reason": "asks today; should not"
+  },
+  {
+   "id": "C-39b0238f7b",
+   "command": "du -sh ~/stillrunning-*",
+   "kind": "false-ask-debt",
+   "found_by": "CHANGELOG / reviews",
+   "reason": "asks today; should not"
+  },
+  {
+   "id": "C-22dae93973",
+   "command": "tar czf x.tgz ~/stillrunning-dist-*",
+   "kind": "false-ask-debt",
+   "found_by": "CHANGELOG / reviews",
+   "reason": "asks today; should not"
+  },
+  {
+   "id": "C-7f01c7420a",
+   "command": "sha256sum ~/stillrunning-dist-2.14.3/*",
+   "kind": "false-ask-debt",
+   "found_by": "CHANGELOG / reviews",
+   "reason": "asks today; should not"
+  },
+  {
+   "id": "C-319efec024",
+   "command": "cp ~/stillrunning/README.md $TMP/",
+   "kind": "false-ask-debt",
+   "found_by": "CHANGELOG / reviews",
+   "reason": "asks today; should not"
+  },
+  {
+   "id": "C-e52b35b59f",
+   "command": "sed -n 1,20p ~/stillrunning/stillrunning/*.py",
+   "kind": "false-ask-debt",
+   "found_by": "CHANGELOG / reviews",
+   "reason": "asks today; should not"
+  },
+  {
+   "id": "C-cc589f79be",
+   "command": "diff ~/stillrunning/*.py /tmp",
+   "kind": "false-ask-debt",
+   "found_by": "CHANGELOG / reviews",
+   "reason": "asks today; should not"
+  },
+  {
+   "id": "C-92bc11be80",
+   "command": "export PYTHONPATH=~/stillrunning:$PYTHONPATH",
+   "kind": "false-ask-debt",
+   "found_by": "CHANGELOG / reviews",
+   "reason": "asks today; should not"
+  },
+  {
+   "id": "C-c42342b121",
+   "command": "journalctl -u stillrunning --since \"$T\"",
+   "kind": "false-ask-debt",
+   "found_by": "CHANGELOG / reviews",
+   "reason": "asks today; should not"
+  },
+  {
+   "id": "C-f08ca47ccb",
+   "command": "pipx upgrade stillrunning $X",
+   "kind": "false-ask-debt",
+   "found_by": "CHANGELOG / reviews",
+   "reason": "asks today; should not"
+  },
+  {
+   "id": "C-8719f9a9fa",
+   "command": "stat ~/stillrunning/*",
+   "kind": "false-ask-debt",
+   "found_by": "CHANGELOG / reviews",
+   "reason": "asks today; should not"
+  },
+  {
+   "id": "C-4a40e0c67d",
+   "command": "sort ~/stillrunning/*.txt",
+   "kind": "false-ask-debt",
+   "found_by": "CHANGELOG / reviews",
+   "reason": "asks today; should not"
+  },
+  {
+   "id": "C-6e534b0e5c",
+   "command": "docker logs stillrunning --tail $N",
+   "kind": "false-ask-debt",
+   "found_by": "CHANGELOG / reviews",
+   "reason": "asks today; should not"
+  },
+  {
+   "id": "C-85e60e4200",
+   "command": "python3 -m pytest ~/stillrunning/tests -k $K",
+   "kind": "false-ask-debt",
+   "found_by": "CHANGELOG / reviews",
+   "reason": "asks today; should not"
+  },
+  {
+   "id": "C-dfccb523c0",
+   "command": "awk '{print $(NF)}' ~/stillrunning/x.txt",
+   "kind": "false-ask-debt",
+   "found_by": "CHANGELOG / reviews",
+   "reason": "asks today; should not"
+  },
+  {
+   "id": "C-951f806480",
+   "command": "bash -c 'stillrunning scan .; echo $?'",
+   "kind": "false-ask-debt",
+   "found_by": "CHANGELOG / reviews",
+   "reason": "asks today; should not"
+  },
+  {
+   "id": "C-db88266ed8",
+   "command": "ssh host 'cd $HOME/app && stillrunning scan .'",
+   "kind": "false-ask-debt",
+   "found_by": "CHANGELOG / reviews",
+   "reason": "asks today; should not"
+  },
+  {
+   "id": "C-33014ed7e9",
+   "command": "watch -n 5 'ls -la ~/.stillrunning/*.db'",
+   "kind": "false-ask-debt",
+   "found_by": "CHANGELOG / reviews",
+   "reason": "asks today; should not"
+  },
+  {
+   "id": "C-04ac63b4d4",
+   "command": "bash -c 'cd ~/stillrunning-x && make test JOBS=$(nproc)'",
+   "kind": "false-ask-debt",
+   "found_by": "CHANGELOG / reviews",
+   "reason": "asks today; should not"
+  },
+  {
+   "id": "C-ab94a8775c",
+   "command": "xxd -l 64 ~/.claude/settings.json",
+   "kind": "false-ask-debt",
+   "found_by": "CHANGELOG / reviews",
+   "reason": "asks today; should not"
+  },
+  {
+   "id": "C-395de9d31d",
+   "command": "uniq -f 1 ~/.claude/settings.json",
+   "kind": "false-ask-debt",
+   "found_by": "CHANGELOG / reviews",
+   "reason": "asks today; should not"
+  },
+  {
+   "id": "C-fa7b080f3e",
+   "command": "git log",
+   "kind": "must-allow",
+   "found_by": "operator",
+   "reason": "ordinary command"
+  },
+  {
+   "id": "C-3577a6caaf",
+   "command": "pytest -k $K",
+   "kind": "must-allow",
+   "found_by": "operator",
+   "reason": "ordinary command"
+  },
+  {
+   "id": "C-8fced96520",
+   "command": "cat ~/.claude/settings.json",
+   "kind": "must-allow",
+   "found_by": "operator",
+   "reason": "ordinary command"
+  },
+  {
+   "id": "C-534a6034a2",
+   "command": "jq . ~/.claude/settings.json",
+   "kind": "must-allow",
+   "found_by": "operator",
+   "reason": "ordinary command"
+  },
+  {
+   "id": "C-e9b0f9c081",
+   "command": "ls ~/.stillrunning",
+   "kind": "must-allow",
+   "found_by": "operator",
+   "reason": "ordinary command"
+  },
+  {
+   "id": "C-4edf1b24f4",
+   "command": "pip install requests",
+   "kind": "must-allow",
+   "found_by": "operator",
+   "reason": "ordinary command"
+  }
+ ]
+}
