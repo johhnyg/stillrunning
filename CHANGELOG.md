@@ -9,11 +9,34 @@
 
 ## Unreleased (not published)
 
-Five batches since 2.14.3, newest first below. Two change behaviour: the
+Six batches since 2.14.3, newest first below. Three change behaviour:
+/shield's CVE count leaves out installed copies Python never imports; the
 hook failing closed changes what is blocked (a crash or timeout of the hook
 now blocks, and a command over the 128K-character limit is asked about), and
 setup changes the exit code of `--setup` (BREAKING, below). The other three
 change nothing that is checked or blocked.
+
+### /shield: what to update, new CVEs, copies Python never imports (2026-11-28)
+
+- `stillrunning cve` and /shield count only the copies this project and this
+  Python use. An installed copy that sits behind another copy of the same
+  package earlier on `sys.path` (Ubuntu's `/usr/lib/python3/dist-packages`
+  copy behind a newer one pip put in `/usr/local`) is listed under "Not loaded
+  by this Python" with the version imported instead, and no longer turns the
+  headline red. A version that a project file also names still counts. Two
+  copies in one folder cannot be told apart, so neither is treated as unused.
+  The hook's verdict cache is unchanged: it still knows such a version is
+  vulnerable.
+- Each affected package gets an `update:` line with the lowest version that
+  fixes every listed vulnerability (`pip install 'x>=N'` for an installed copy,
+  `set x>=N in <file>` for a project file), or says that no version fixes all
+  of them yet.
+- A vulnerability first reported after a folder's first refresh is marked
+  `[NEW]` for 24 hours, and the headline adds "N new in 24h" (the first
+  refresh of a folder marks nothing new). State saved before this change still
+  reads; dates start at the next refresh.
+- `stillrunning cve --schedule` now refreshes every hour (was every 6 hours);
+  run it again to replace an existing 6-hour line.
 
 ### Setup never ends silently unprotected (setup fuzz, 2026-11-24)
 

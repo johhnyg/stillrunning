@@ -87,6 +87,36 @@ def _sendable(eco, name, version):
 
 
 # ─────────────────────────────── inventory ───────────────────────────────
+NEW_S = 24 * 3600          # a vulnerability first seen this recently is "new"
+
+
+def _shadowed_copies():
+    """Installed copies this Python never imports: a distribution listed after
+    another copy of the same name that sits in a different folder earlier on
+    sys.path (Ubuntu's /usr/lib/python3/dist-packages copy behind a newer one
+    pip put in /usr/local). → {(normalized name, version): the version imported}.
+    Two copies in one folder cannot be told apart, so neither counts as shadowed."""
+    first, out = {}, {}
+    try:
+        from importlib import metadata
+        for dist in metadata.distributions():
+            name = dist.metadata["Name"] if dist.metadata else None
+            version = panel._exact(dist.version)
+            if not name or not version:
+                continue
+            key = claude_hook.normalize("pip", name)
+            folder = os.path.realpath(str(dist.locate_file("")))
+            if key not in first:
+                first[key] = (folder, version)
+            elif first[key][0] != folder and first[key][1] != version:
+                out[(key, version)] = first[key][1]
+    except Exception as exc:
+        claude_hook._warn(f"cve: could not tell which installed copies are imported "
+                          f"({type(exc).__name__}); every copy counts")
+        return {}
+    return out
+
+
 def inventory(root):
     """→ {"packages": [resolved {eco,name,version,place}], "parts": [...],
     "complete": bool}. Every part says how many packages were resolved to one
@@ -139,6 +169,7 @@ def inventory(root):
         part["why"] = "; ".join(reasons) or None
     problems = []
     installed = panel.installed_packages(root, problems)
+    shadowed = _shadowed_copies()
     places = {}
     for p in installed:
         places.setdefault(p["file"], []).append(p)
@@ -161,9 +192,14 @@ def inventory(root):
             part["unresolved"] = max(part["unresolved"], 1)
             part["why"] = "; ".join(whys)
         parts.append(part)
-        resolved += [{"eco": "pip", "name": p["name"], "version": p["version"],
-                      "place": "installed" if place == "this machine" else f"installed in {place}"}
-                     for p in good]
+        for p in good:
+            row = {"eco": "pip", "name": p["name"], "version": p["version"],
+                   "place": "installed" if place == "this machine" else f"installed in {place}"}
+            loaded = shadowed.get((claude_hook.normalize("pip", p["name"]), p["version"])) \
+                if place == "this machine" else None
+            if loaded:
+                row["loaded_instead"] = loaded
+            resolved.append(row)
     return {"packages": resolved, "parts": parts,
             "complete": bool(parts) and all(p["unresolved"] == 0 for p in parts)}
 
@@ -303,21 +339,34 @@ def refresh(root, now=None, **kw):
     items, clusters, failures, newest, cache = check(inv["packages"], now=now, cache=cache, **kw)
     dropped = len({(p["eco"], claude_hook.normalize(p["eco"], p["name"]), p["version"])
                    for p in inv["packages"]}) - len(items)
-    where = {}
+    where, live, loaded_instead = {}, set(), {}
     for p in inv["packages"]:
         key = (p["eco"], claude_hook.normalize(p["eco"], p["name"]), p["version"])
         where.setdefault(key, [])
         if p["place"] not in where[key]:
             where[key].append(p["place"])
-    affected, results = [], {}
+        if p.get("loaded_instead"):
+            loaded_instead.setdefault(key, p["loaded_instead"])
+        else:
+            live.add(key)
+    seen, since = _first_seen(_load_json(state_path()), root, now)
+    affected, not_loaded, results = [], [], {}
     for item, found in zip(items, clusters):
         if found is None:
             continue
         results[f"{item[0]}:{item[1]}@{item[2]}"] = [c for c in found if c["severity"] != "MALICIOUS"]
         if found:
-            affected.append({"eco": item[0], "name": item[1], "version": item[2],
-                             "where": where.get(item, [])[:6], "vulns": found[:20]})
+            vulns = [dict(c, first_seen=seen.get((item[0], item[1], item[2], c.get("id")), now))
+                     for c in found[:20]]
+            row = {"eco": item[0], "name": item[1], "version": item[2],
+                   "where": where.get(item, [])[:6], "vulns": vulns}
+            if item in loaded_instead and item not in live:
+                # only a copy this Python does not import: shown, not counted
+                not_loaded.append(dict(row, loaded_version=loaded_instead[item]))
+            else:
+                affected.append(row)
     affected.sort(key=lambda a: (-osv.RANK[osv.worst(a["vulns"])], a["name"]))
+    not_loaded.sort(key=lambda a: (-osv.RANK[osv.worst(a["vulns"])], a["name"]))
     not_checked = sum(1 for c in clusters if c is None) + max(0, dropped)
     answered = any(c is not None for c in clusters)
     entry = {
@@ -329,7 +378,10 @@ def refresh(root, now=None, **kw):
                       "unresolved": sum(p["unresolved"] for p in inv["parts"])},
         "check": {"complete": not failures and not_checked == 0, "not_checked": not_checked,
                   "failures": [osv.WHY.get(f, osv.WHY["garbage"]) for f in failures]},
-        "affected": affected, "results": results,
+        "affected": affected, "not_loaded": not_loaded, "results": results,
+        # vulnerabilities first seen after this time are "new" (the first refresh
+        # of a folder sets it, so a first look does not call everything new)
+        "since": since,
     }
     entry["summary"] = _summary(entry)
     doc = _load_json(state_path())
@@ -346,6 +398,26 @@ def refresh(root, now=None, **kw):
     except OSError as exc:
         claude_hook._warn(f"cve: could not save the state ({type(exc).__name__})")
     return entry
+
+
+def _first_seen(doc, root, now):
+    """→ (when each (eco, name, version, vulnerability id) was first reported for
+    this folder, the folder's baseline time). No saved entry, or one saved before
+    this was recorded: no dates and the baseline is now."""
+    out = {}
+    try:
+        entry = doc["projects"][root]
+        since = _num(entry.get("since"))
+        if since is None:
+            return {}, now
+        for a in (entry.get("affected") or []) + (entry.get("not_loaded") or []):
+            for v in a["vulns"]:
+                t = _num(v.get("first_seen"))
+                if t is not None:
+                    out[(a["eco"], a["name"], a["version"], v["id"])] = t
+    except (KeyError, TypeError, AttributeError):
+        return {}, now
+    return out, since
 
 
 def _counts(affected):
@@ -381,7 +453,9 @@ def _clean_vuln(v):
         todo = f"upgrade to {fixed}"
     else:
         todo = "no fixed version is known yet; check whether you use the affected feature"
-    return {"id": v["id"], "ids": ids, "severity": sev, "fixed": fixed, "todo": todo}
+    first_seen = _num(v.get("first_seen"))
+    return {"id": v["id"], "ids": ids, "severity": sev, "fixed": fixed, "todo": todo,
+            "first_seen": first_seen}
 
 
 def _clean_affected(a):
@@ -395,7 +469,27 @@ def _clean_affected(a):
     if not vulns or len(vulns) != len(raw):
         return None
     where = [w for w in a.get("where") or [] if isinstance(w, str) and _SAFE_PLACE.match(w)][:6]
-    return {"eco": a["eco"], "name": name, "version": version, "where": where, "vulns": vulns}
+    out = {"eco": a["eco"], "name": name, "version": version, "where": where, "vulns": vulns}
+    if "loaded_version" in a:
+        loaded = str(a.get("loaded_version") or "")
+        if not osv.SAFE_VERSION.match(loaded):
+            return None
+        out["loaded_version"] = loaded
+    return out
+
+
+def _is_new(v, since, now):
+    t = v.get("first_seen")
+    return since is not None and t is not None and t > since and 0 <= now - t <= NEW_S
+
+
+def update_to(a):
+    """The lowest version that fixes every listed vulnerability, or None when
+    one of them has no fix (or none is known)."""
+    keyed = [(osv._vkey(v["fixed"]), v["fixed"]) for v in a["vulns"] if v["fixed"]]
+    if not keyed or len(keyed) != len(a["vulns"]) or any(k is None for k, _ in keyed):
+        return None
+    return max(keyed)[1]
 
 
 def _clean_part(p):
@@ -422,7 +516,8 @@ def _blank(now):
             "newest_modified": None,
             "counts": {"affected_packages": 0, "critical": 0, "malicious": 0, "worst": None,
                        "resolved": 0, "unresolved": 0, "not_checked": 0},
-            "inventory": [], "affected": [], "failures": []}
+            "inventory": [], "affected": [], "not_loaded": [], "new_vulns": 0, "since": None,
+            "failures": []}
 
 
 def evaluate_for(entry, now, root):
@@ -488,6 +583,12 @@ def evaluate_for(entry, now, root):
                newest_modified=modified if isinstance(modified, str)
                and osv.SAFE_TIME.match(modified) else None,
                inventory=parts, affected=affected, failures=clean_failures)
+    raw_not_loaded = entry.get("not_loaded")
+    if isinstance(raw_not_loaded, list):
+        out["not_loaded"] = [c for c in (_clean_affected(a) for a in raw_not_loaded)
+                             if c and "loaded_version" in c]
+    out["since"] = _num(entry.get("since"))
+    out["new_vulns"] = sum(1 for a in affected for v in a["vulns"] if _is_new(v, out["since"], now))
     out["counts"] = dict(counts, resolved=resolved, unresolved=unresolved, not_checked=not_checked)
     blocking = []
     if not consistent:
@@ -586,6 +687,8 @@ def headline(data):
         bits = [f"{c[k]} {k}" for k in ("critical", "malicious") if c.get(k)]
         detail = (f"{n} affected dep{'s' if n != 1 else ''} ("
                   + (", ".join(bits) or f"worst {(c['worst'] or 'unknown').lower()}") + ")")
+        if data.get("new_vulns"):
+            detail += f" · {data['new_vulns']} new in 24h"
     elif data["state"] == "CLEAR":
         detail = "clear"
     else:
@@ -607,14 +710,35 @@ def render(data):
                 continue
             extra = f", {p['unresolved']} not resolved ({p['why']})" if p["unresolved"] else ""
             out.append(f"  {p['part']} [{p['kind']}]: {p['resolved']} resolved{extra}")
+    def new(v):
+        return _is_new(v, data.get("since"), data["generated_at"])
+
     if data["affected"]:
-        out += ["", "Affected:"]
+        out += ["", "To update (the copies this project and this Python use):"]
         for a in data["affected"]:
             out.append(f"  {a['name']} {a['version']} ({a['eco']}) · {', '.join(a['where']) or '?'}")
             for v in a["vulns"]:
                 out.append(f"    {v['id']} · {(v['severity'] or 'unknown severity').lower()}"
                            f" · {('fixed in ' + v['fixed']) if v['fixed'] else 'no fix known'}"
-                           f" → {v['todo']}")
+                           f" → {v['todo']}" + ("  [NEW]" if new(v) else ""))
+            target = update_to(a)
+            if target and a["eco"] == "pip":
+                files = [w for w in a["where"] if not w.startswith("installed")]
+                if any(w.startswith("installed") for w in a["where"]):
+                    out.append(f"    update: pip install '{a['name']}>={target}'")
+                for f in files:
+                    out.append(f"    update: set {a['name']}>={target} in {f}")
+            elif target:
+                out.append(f"    update: to {target} or later")
+            else:
+                out.append("    update: no version fixes all of these yet")
+    if data["not_loaded"]:
+        out += ["", "Not loaded by this Python (an older copy behind the one it imports; "
+                    "not counted above, update it with the package manager that installed it):"]
+        for a in data["not_loaded"]:
+            worst = (osv.worst(a["vulns"]) or "unknown").lower()
+            out.append(f"  {a['name']} {a['version']} · imported instead: {a['loaded_version']}"
+                       f" · {len(a['vulns'])} known, worst {worst}")
     out += ["", "This shortens the time to patch known bugs in packages you already use. It does "
                 "not detect malware or stop attacks, and it covers only what OSV.dev knows."]
     return "\n".join(out)
@@ -627,7 +751,7 @@ def cron_line(cwd):
     lock, log = os.path.join(state, "cve.lock"), os.path.join(state, "cve_cron.log")
     cmd = (f"flock -n {shlex.quote(lock)} timeout 600 {shlex.quote(sys.executable)} -m stillrunning "
            f"cve --refresh --cwd {shlex.quote(os.path.realpath(cwd))} >/dev/null 2>>{shlex.quote(log)}")
-    return f"17 */6 * * * {cmd} {CRON_MARK}"
+    return f"17 * * * * {cmd} {CRON_MARK}"
 
 
 def _crontab(args, text=None):
@@ -670,10 +794,10 @@ def schedule(cwd, remove=False):
     else:
         want = cron_line(cwd)
         if ours == [want]:
-            print("Already scheduled (every 6 hours); crontab unchanged:\n  " + want)
+            print("Already scheduled (every hour); crontab unchanged:\n  " + want)
             return 0
         new = rest + [want]
-        said = ("Scheduled: stillrunning cve --refresh every 6 hours (" +
+        said = ("Scheduled: stillrunning cve --refresh every hour (" +
                 ("replaced the earlier line" if ours else "added one line") + "):\n  " + want)
     ran = _crontab(["-"], "\n".join(new) + ("\n" if new else ""))
     if ran.returncode != 0:
