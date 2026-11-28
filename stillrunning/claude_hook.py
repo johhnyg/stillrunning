@@ -123,6 +123,52 @@ _DESTRUCTIVE = {"rm", "rmdir", "mv", "shred", "unlink", "chmod", "chown", "chgrp
 _FILE_WRITERS = _DESTRUCTIVE | {"cp", "tee", "sed", "perl", "dd", "ln", "install", "patch",
                                 "touch", "ed", "ex", "sponge", "rsync", "scp", "ruby"}
 _LAST_ARG_WRITERS = {"cp", "scp", "rsync", "install", "ln"}
+
+
+def _read_only_outputs(program, args):
+    """Files a program on the read-only list writes anyway, given an output
+    option or operand (`sort -o F`, `uniq IN OUT`, `xxd -r IN OUT`, `tree -o F`,
+    `find -fprint F`), and whether it edits or deletes the files it is given
+    (`yq -i`, `find -delete`, `find -exec`). → (written files, not read-only)."""
+    written, edits = [], False
+    if program == "sort":
+        at = 0
+        while at < len(args):
+            arg = args[at]
+            if arg == "--":
+                break
+            long_ = re.match(r"^--o(u(t(p(u(t)?)?)?)?)?(=(.*))?$", arg, re.S)
+            short = re.match(r"^-([bcCdfghiMmnRrsuVz]*)o(.*)$", arg, re.S)
+            if long_ or short:
+                value = (long_.group(7) if long_ else short.group(2)) or ""
+                if long_ and long_.group(6) is None or short and not value:
+                    value = args[at + 1] if at + 1 < len(args) else ""
+                    at += 1
+                written.append(value)
+            elif re.match(r"^-[A-Za-z]*[ktST]$", arg):
+                at += 1                     # -k 2, -t o, -S 1G, -T dir: the value is not -o
+            at += 1
+    elif program in ("tree",):
+        for at, arg in enumerate(args):
+            if arg == "-o" and at + 1 < len(args):
+                written.append(args[at + 1])
+            elif arg.startswith("-o") and len(arg) > 2:
+                written.append(arg[2:])
+    elif program in ("uniq", "xxd"):
+        operands = [a for a in args if not a.startswith("-") or a == "-"]
+        written += operands[1:2]            # uniq [IN [OUT]], xxd [IN [OUT]]
+    elif program == "yq":
+        edits = any(re.match(r"^-[A-Za-z]*i|^--inplace", a) for a in args)
+    elif program == "find":
+        for at, arg in enumerate(args):
+            if arg in ("-fprint", "-fprint0", "-fprintf", "-fls") and at + 1 < len(args):
+                written.append(args[at + 1])
+            elif arg == "-delete":
+                edits = True
+            elif arg in ("-exec", "-execdir", "-ok", "-okdir"):
+                ran = _prog_name(args[at + 1]) if at + 1 < len(args) else ""
+                edits = edits or ran not in _READ_ONLY      # `-exec grep -l foo {} \;` only reads
+    return [w for w in written if w], edits
 _CODE_RUNNERS = re.compile(r"^(python|pypy)[\d.]*$|^(py|perl|ruby|node|nodejs|php|lua|deno|bun|awk|gawk)$")
 
 
@@ -406,8 +452,10 @@ def _path_kinds(word, cwds):
         low = text.lower()
         if ".still" in low:
             kinds.add("state")
-        if ".claude/sett" in low:
-            kinds.add("settings")
+        tail = re.search(r"\.claude/([^/]+)$", low)
+        if ".claude/sett" in low or tail and ("$" in tail.group(1) or any(
+                _comp_match(tail.group(1), name) for name in _SETTINGS_NAMES)):
+            kinds.add("settings")       # `$D/.claude/settings.json`, `$D/.claude/s*.json`, `$D/.claude/$F`
         elif low.rstrip("/").endswith(".claude"):
             kinds.add("claude_dir")
         if os.name == "nt":
@@ -676,7 +724,8 @@ def _paths_touch_protection(command, cwds, depth):
         if body and _CODE_RUNNERS.match(program) and _runs_stdin_as_code(cmd) and \
                 _code_touches(body, cwds):
             return True         # `python3 - <<EOF` whose code rewrites the protection
-        for target in cmd.writes:
+        outputs, edits_given = _read_only_outputs(program, args) if program in _READ_ONLY else ([], False)
+        for target in list(cmd.writes) + outputs:
             if _path_kinds(target, cwds) & {"state", "settings", "claude_dir", "pkg"}:
                 return True
         if sets_switch:
@@ -689,7 +738,8 @@ def _paths_touch_protection(command, cwds, depth):
                 return True
         in_place = any(re.match(r"^-[A-Za-z]*i|^--in-place", a) for a in args)
         edits = program in ("sed", "perl", "ruby", "awk", "gawk")
-        read_only = not by_stdin and (program in _READ_ONLY or (edits and not in_place))
+        read_only = not by_stdin and ((program in _READ_ONLY and not edits_given)
+                                      or (edits and not in_place))
         writer = by_stdin or (program in _FILE_WRITERS and (not edits or in_place)) \
             or (os.name == "nt" and program in _WIN_FILE_WRITERS)
         recursive = any(re.match(r"^-[A-Za-z]*[rR]|^--recursive", a) for a in args)

@@ -9,11 +9,33 @@
 
 ## Unreleased (not published)
 
-Five batches since 2.14.3, newest first below. Two change behaviour: the
+Six batches since 2.14.3, newest first below. Three change behaviour:
+writes to Claude Code's settings through `sort -o` and similar now ask; the
 hook failing closed changes what is blocked (a crash or timeout of the hook
 now blocks, and a command over the 128K-character limit is asked about), and
 setup changes the exit code of `--setup` (BREAKING, below). The other three
 change nothing that is checked or blocked.
+
+### Writes to Claude Code's settings through "read-only" programs ask (2026-11-28)
+
+- The hook asks before a command writes `~/.claude/settings.json`,
+  `~/.claude/settings.local.json` or a project's `.claude/settings*.json`
+  through a program on its read-only list that writes a file anyway:
+  `sort -o F` / `-oF` / `-uo F` / `--output[=]F` (and its prefixes such as
+  `--outp=F`), `uniq IN OUT`, `xxd [-r] IN OUT`, `tree -o F`, and
+  `find -fprint/-fprint0/-fprintf/-fls F`; `yq -i` / `--inplace` and
+  `find -delete` / `-exec` / `-execdir` / `-ok` count as changing the files they
+  are given. Before, `sort -o $HOME/.claude/settings.json $HOME/.claude/settings.json`
+  rewrote the file that switches the hook on without asking. Every spelling of
+  the path the hook already resolved counts (`~`, `$HOME`, `${HOME}`, globs
+  such as `setting?.json` or `s*.json`, brace lists, `cd ~/.claude && … settings.json`,
+  `bash -c '…'`), and a path behind an unknown variable now also counts when its
+  last part could be a settings file (`$D/.claude/s*.json`, `$D/.claude/$F`).
+  Reading stays allowed: `cat`, `jq .`, `grep`, `sort` / `uniq` / `xxd` without
+  an output there, `sort -o /tmp/out ~/.claude/settings.json`.
+- Redirects (`>`, `>>`, `1>`, `exec 3>`), `tee`, `sed -i`, `perl -pi`, `cp`,
+  `mv`, `install`, `dd of=`, `rm`, `ln`, `curl -o`, `wget -O` and inline
+  Python that writes the file already asked; tests now pin them.
 
 ### Setup never ends silently unprotected (setup fuzz, 2026-11-24)
 
