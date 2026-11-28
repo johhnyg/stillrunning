@@ -1,0 +1,2505 @@
+{
+ "schema": 1,
+ "probes": [
+  {
+   "id": "P-e251347a5e",
+   "command": "stillrunning blocklist --refresh --force",
+   "expect": "ask",
+   "category": "own-switch",
+   "found_by": "review 4",
+   "round": 5,
+   "status": "fixed",
+   "reason": "pinned by test_r4_forcing_or_unscheduling_the_blocklist_asks"
+  },
+  {
+   "id": "P-550232ad50",
+   "command": "stillrunning blocklist --force --refresh",
+   "expect": "ask",
+   "category": "own-switch",
+   "found_by": "review 4",
+   "round": 5,
+   "status": "fixed",
+   "reason": "pinned by test_r4_forcing_or_unscheduling_the_blocklist_asks"
+  },
+  {
+   "id": "P-bda08f6624",
+   "command": "stillrunning blocklist --refresh --fo",
+   "expect": "ask",
+   "category": "prefix",
+   "found_by": "review 4",
+   "round": 5,
+   "status": "fixed",
+   "reason": "pinned by test_r4_forcing_or_unscheduling_the_blocklist_asks"
+  },
+  {
+   "id": "P-a6e2a8681a",
+   "command": "stillrunning blocklist --unschedule",
+   "expect": "ask",
+   "category": "own-switch",
+   "found_by": "review 4",
+   "round": 5,
+   "status": "fixed",
+   "reason": "pinned by test_r4_forcing_or_unscheduling_the_blocklist_asks"
+  },
+  {
+   "id": "P-b020b766d5",
+   "command": "python3 -m stillrunning blocklist --refresh --force",
+   "expect": "ask",
+   "category": "launcher",
+   "found_by": "review 4",
+   "round": 5,
+   "status": "fixed",
+   "reason": "pinned by test_r4_forcing_or_unscheduling_the_blocklist_asks"
+  },
+  {
+   "id": "P-a9d2f4c316",
+   "command": "script -qc 'stillrunning blocklist --refresh --force' /dev/null",
+   "expect": "ask",
+   "category": "shell-string",
+   "found_by": "review 4",
+   "round": 5,
+   "status": "fixed",
+   "reason": "pinned by test_r4_forcing_or_unscheduling_the_blocklist_asks"
+  },
+  {
+   "id": "P-e630affc1f",
+   "command": "sr=stillrunning; $sr blocklist --refresh --force",
+   "expect": "ask",
+   "category": "run-time-word",
+   "found_by": "review 4",
+   "round": 5,
+   "status": "fixed",
+   "reason": "pinned by test_r4_forcing_or_unscheduling_the_blocklist_asks"
+  },
+  {
+   "id": "P-aba26dd781",
+   "command": "cd /tmp && stillrunning blocklist --refresh --force=1",
+   "expect": "ask",
+   "category": "own-switch",
+   "found_by": "review 4",
+   "round": 5,
+   "status": "fixed",
+   "reason": "pinned by test_r4_forcing_or_unscheduling_the_blocklist_asks"
+  },
+  {
+   "id": "P-d062fbc46f",
+   "command": "U=--unschedule; stillrunning blocklist $U",
+   "expect": "ask",
+   "category": "run-time-word",
+   "found_by": "review 6",
+   "round": 7,
+   "status": "fixed",
+   "reason": "pinned by test_r6_run_time_words_in_a_stillrunning_command_ask"
+  },
+  {
+   "id": "P-36bd877375",
+   "command": "X=blocklist; stillrunning $X --unschedule",
+   "expect": "ask",
+   "category": "run-time-word",
+   "found_by": "review 6",
+   "round": 7,
+   "status": "fixed",
+   "reason": "pinned by test_r6_run_time_words_in_a_stillrunning_command_ask"
+  },
+  {
+   "id": "P-fe3d498d3d",
+   "command": "stillrunning blocklist $(echo --unschedule)",
+   "expect": "ask",
+   "category": "run-time-word",
+   "found_by": "review 6",
+   "round": 7,
+   "status": "fixed",
+   "reason": "pinned by test_r6_run_time_words_in_a_stillrunning_command_ask"
+  },
+  {
+   "id": "P-2da7d9c320",
+   "command": "stillrunning $(echo blocklist) --unschedule",
+   "expect": "ask",
+   "category": "run-time-word",
+   "found_by": "review 6",
+   "round": 7,
+   "status": "fixed",
+   "reason": "pinned by test_r6_run_time_words_in_a_stillrunning_command_ask"
+  },
+  {
+   "id": "P-9dc616ebe2",
+   "command": "stillrunning ${B:-blocklist} --unschedule",
+   "expect": "ask",
+   "category": "run-time-word",
+   "found_by": "review 6",
+   "round": 7,
+   "status": "fixed",
+   "reason": "pinned by test_r6_run_time_words_in_a_stillrunning_command_ask"
+  },
+  {
+   "id": "P-77b23f7267",
+   "command": "stillrunning blocklist `echo --unschedule`",
+   "expect": "ask",
+   "category": "run-time-word",
+   "found_by": "review 6",
+   "round": 7,
+   "status": "fixed",
+   "reason": "pinned by test_r6_run_time_words_in_a_stillrunning_command_ask"
+  },
+  {
+   "id": "P-ea468b38f0",
+   "command": "echo --unschedule | xargs stillrunning blocklist",
+   "expect": "ask",
+   "category": "wrapper",
+   "found_by": "review 6",
+   "round": 7,
+   "status": "fixed",
+   "reason": "pinned by test_r6_run_time_words_in_a_stillrunning_command_ask"
+  },
+  {
+   "id": "P-0ccd6b6db2",
+   "command": "echo blocklist --unschedule | xargs stillrunning",
+   "expect": "ask",
+   "category": "wrapper",
+   "found_by": "review 6",
+   "round": 7,
+   "status": "fixed",
+   "reason": "pinned by test_r6_run_time_words_in_a_stillrunning_command_ask"
+  },
+  {
+   "id": "P-e08781781e",
+   "command": "f(){ stillrunning blocklist \"$@\"; }; f --unschedule",
+   "expect": "ask",
+   "category": "quoting",
+   "found_by": "review 6",
+   "round": 7,
+   "status": "fixed",
+   "reason": "pinned by test_r6_run_time_words_in_a_stillrunning_command_ask"
+  },
+  {
+   "id": "P-17c18d0479",
+   "command": "parallel stillrunning ::: \"blocklist --unschedule\"",
+   "expect": "ask",
+   "category": "launcher",
+   "found_by": "review 6",
+   "round": 7,
+   "status": "fixed",
+   "reason": "pinned by test_r6_run_time_words_in_a_stillrunning_command_ask"
+  },
+  {
+   "id": "P-f1918a919c",
+   "command": "F=--force; script -qc \"stillrunning blocklist --refresh $F\" /dev/null",
+   "expect": "ask",
+   "category": "shell-string",
+   "found_by": "review 6",
+   "round": 7,
+   "status": "fixed",
+   "reason": "pinned by test_r6_run_time_words_in_a_stillrunning_command_ask"
+  },
+  {
+   "id": "P-d766bdf57f",
+   "command": "script -qc 'F=--force; stillrunning blocklist --refresh $F' /dev/null",
+   "expect": "ask",
+   "category": "shell-string",
+   "found_by": "review 6",
+   "round": 7,
+   "status": "fixed",
+   "reason": "pinned by test_r6_run_time_words_in_a_stillrunning_command_ask"
+  },
+  {
+   "id": "P-c00f769697",
+   "command": "A=add; stillrunning whitelist $A evil",
+   "expect": "ask",
+   "category": "run-time-word",
+   "found_by": "review 6",
+   "round": 7,
+   "status": "fixed",
+   "reason": "pinned by test_r6_run_time_words_in_a_stillrunning_command_ask"
+  },
+  {
+   "id": "P-157ea79397",
+   "command": "W=whitelist; stillrunning $W add evil",
+   "expect": "ask",
+   "category": "run-time-word",
+   "found_by": "review 6",
+   "round": 7,
+   "status": "fixed",
+   "reason": "pinned by test_r6_run_time_words_in_a_stillrunning_command_ask"
+  },
+  {
+   "id": "P-bbe052a288",
+   "command": "echo whitelist add evil | xargs stillrunning",
+   "expect": "ask",
+   "category": "wrapper",
+   "found_by": "review 6",
+   "round": 7,
+   "status": "fixed",
+   "reason": "pinned by test_r6_run_time_words_in_a_stillrunning_command_ask"
+  },
+  {
+   "id": "P-2bd07f86ac",
+   "command": "X=allow; stillrunning $X evil",
+   "expect": "ask",
+   "category": "run-time-word",
+   "found_by": "review 6",
+   "round": 7,
+   "status": "fixed",
+   "reason": "pinned by test_r6_run_time_words_in_a_stillrunning_command_ask"
+  },
+  {
+   "id": "P-29680c04b4",
+   "command": "R=remember; stillrunning $R last",
+   "expect": "ask",
+   "category": "run-time-word",
+   "found_by": "review 6",
+   "round": 7,
+   "status": "fixed",
+   "reason": "pinned by test_r6_run_time_words_in_a_stillrunning_command_ask"
+  },
+  {
+   "id": "P-193c06b6d7",
+   "command": "U=--uninstall-hook-claude-code; stillrunning $U",
+   "expect": "ask",
+   "category": "run-time-word",
+   "found_by": "review 6",
+   "round": 7,
+   "status": "fixed",
+   "reason": "pinned by test_r6_run_time_words_in_a_stillrunning_command_ask"
+  },
+  {
+   "id": "P-a559f6dad2",
+   "command": "sr=stillrunning; $sr blocklist $U",
+   "expect": "ask",
+   "category": "run-time-word",
+   "found_by": "review 6",
+   "round": 7,
+   "status": "fixed",
+   "reason": "pinned by test_r6_run_time_words_in_a_stillrunning_command_ask"
+  },
+  {
+   "id": "P-417d791401",
+   "command": "nice stillrunning $X evil",
+   "expect": "ask",
+   "category": "wrapper",
+   "found_by": "review 6",
+   "round": 7,
+   "status": "fixed",
+   "reason": "pinned by test_r6_run_time_words_in_a_stillrunning_command_ask"
+  },
+  {
+   "id": "P-3b09c03707",
+   "command": "python3 -m stillrunning $X evil",
+   "expect": "ask",
+   "category": "launcher",
+   "found_by": "review 6",
+   "round": 7,
+   "status": "fixed",
+   "reason": "pinned by test_r6_run_time_words_in_a_stillrunning_command_ask"
+  },
+  {
+   "id": "P-bb24f16d23",
+   "command": "env stillrunning $(cat cmd.txt)",
+   "expect": "ask",
+   "category": "wrapper",
+   "found_by": "review 6",
+   "round": 7,
+   "status": "fixed",
+   "reason": "pinned by test_r6_run_time_words_in_a_stillrunning_command_ask"
+  },
+  {
+   "id": "P-4cd4dee34d",
+   "command": "echo allow evil | xargs -n2 stillrunning",
+   "expect": "ask",
+   "category": "wrapper",
+   "found_by": "review 6",
+   "round": 7,
+   "status": "fixed",
+   "reason": "pinned by test_r6_run_time_words_in_a_stillrunning_command_ask"
+  },
+  {
+   "id": "P-c48fb34481",
+   "command": "sudo -u bob stillrunning $X evil",
+   "expect": "ask",
+   "category": "wrapper",
+   "found_by": "review 7",
+   "round": 8,
+   "status": "fixed",
+   "reason": "pinned by test_r7_the_program_stillrunning_behind_wrappers_still_asks"
+  },
+  {
+   "id": "P-82075828ca",
+   "command": "env A=1 stillrunning $X",
+   "expect": "ask",
+   "category": "wrapper",
+   "found_by": "review 7",
+   "round": 8,
+   "status": "fixed",
+   "reason": "pinned by test_r7_the_program_stillrunning_behind_wrappers_still_asks"
+  },
+  {
+   "id": "P-5bb3896903",
+   "command": "timeout 5 stillrunning $X",
+   "expect": "ask",
+   "category": "wrapper",
+   "found_by": "review 7",
+   "round": 8,
+   "status": "fixed",
+   "reason": "pinned by test_r7_the_program_stillrunning_behind_wrappers_still_asks"
+  },
+  {
+   "id": "P-56ed4100de",
+   "command": "python3 -Im stillrunning $X",
+   "expect": "ask",
+   "category": "run-time-word",
+   "found_by": "review 7",
+   "round": 8,
+   "status": "fixed",
+   "reason": "pinned by test_r7_the_program_stillrunning_behind_wrappers_still_asks"
+  },
+  {
+   "id": "P-4467a217cd",
+   "command": "python3 -mstillrunning $X",
+   "expect": "ask",
+   "category": "run-time-word",
+   "found_by": "review 7",
+   "round": 8,
+   "status": "fixed",
+   "reason": "pinned by test_r7_the_program_stillrunning_behind_wrappers_still_asks"
+  },
+  {
+   "id": "P-2902c149b7",
+   "command": "/usr/local/bin/stillrunning $X",
+   "expect": "ask",
+   "category": "run-time-word",
+   "found_by": "review 7",
+   "round": 8,
+   "status": "fixed",
+   "reason": "pinned by test_r7_the_program_stillrunning_behind_wrappers_still_asks"
+  },
+  {
+   "id": "P-29d8857d0a",
+   "command": "X=--unschedule; python3 -W ignore -m stillrunning blocklist $X",
+   "expect": "ask",
+   "category": "launcher",
+   "found_by": "review 8",
+   "round": 9,
+   "status": "fixed",
+   "reason": "pinned by test_r8_python_options_before_dash_m_still_ask"
+  },
+  {
+   "id": "P-d19fe7a2de",
+   "command": "python3 -Wignore -m stillrunning blocklist $X",
+   "expect": "ask",
+   "category": "launcher",
+   "found_by": "review 8",
+   "round": 9,
+   "status": "fixed",
+   "reason": "pinned by test_r8_python_options_before_dash_m_still_ask"
+  },
+  {
+   "id": "P-a23b7ad9c6",
+   "command": "python3 -X dev -m stillrunning blocklist \"$X\"",
+   "expect": "ask",
+   "category": "launcher",
+   "found_by": "review 8",
+   "round": 9,
+   "status": "fixed",
+   "reason": "pinned by test_r8_python_options_before_dash_m_still_ask"
+  },
+  {
+   "id": "P-7e55d0eac8",
+   "command": "python3 -Xdev -m stillrunning $X evil",
+   "expect": "ask",
+   "category": "launcher",
+   "found_by": "review 8",
+   "round": 9,
+   "status": "fixed",
+   "reason": "pinned by test_r8_python_options_before_dash_m_still_ask"
+  },
+  {
+   "id": "P-eb97367084",
+   "command": "python3 -IW ignore -m stillrunning $X",
+   "expect": "ask",
+   "category": "launcher",
+   "found_by": "review 8",
+   "round": 9,
+   "status": "fixed",
+   "reason": "pinned by test_r8_python_options_before_dash_m_still_ask"
+  },
+  {
+   "id": "P-0719243b0c",
+   "command": "python3 -IBm stillrunning $X",
+   "expect": "ask",
+   "category": "run-time-word",
+   "found_by": "review 8",
+   "round": 9,
+   "status": "fixed",
+   "reason": "pinned by test_r8_python_options_before_dash_m_still_ask"
+  },
+  {
+   "id": "P-b671ca10f2",
+   "command": "python3 -W ignore -mstillrunning $X",
+   "expect": "ask",
+   "category": "run-time-word",
+   "found_by": "review 8",
+   "round": 9,
+   "status": "fixed",
+   "reason": "pinned by test_r8_python_options_before_dash_m_still_ask"
+  },
+  {
+   "id": "P-6c88906ad0",
+   "command": "python3 -W ignore -X dev -IB -m stillrunning $X",
+   "expect": "ask",
+   "category": "launcher",
+   "found_by": "review 8",
+   "round": 9,
+   "status": "fixed",
+   "reason": "pinned by test_r8_python_options_before_dash_m_still_ask"
+  },
+  {
+   "id": "P-d31786aba3",
+   "command": "python3 --check-hash-based-pycs never -m stillrunning $X",
+   "expect": "ask",
+   "category": "launcher",
+   "found_by": "review 8",
+   "round": 9,
+   "status": "fixed",
+   "reason": "pinned by test_r8_python_options_before_dash_m_still_ask"
+  },
+  {
+   "id": "P-9b5b9b8d9b",
+   "command": "python3.12 -W ignore -m stillrunning $X",
+   "expect": "ask",
+   "category": "launcher",
+   "found_by": "review 8",
+   "round": 9,
+   "status": "fixed",
+   "reason": "pinned by test_r8_python_options_before_dash_m_still_ask"
+  },
+  {
+   "id": "P-5102d7d40e",
+   "command": "/usr/bin/python3 -X dev -m stillrunning $X",
+   "expect": "ask",
+   "category": "launcher",
+   "found_by": "review 8",
+   "round": 9,
+   "status": "fixed",
+   "reason": "pinned by test_r8_python_options_before_dash_m_still_ask"
+  },
+  {
+   "id": "P-a718841e29",
+   "command": "env python3 -W ignore -m stillrunning $X",
+   "expect": "ask",
+   "category": "launcher",
+   "found_by": "review 8",
+   "round": 9,
+   "status": "fixed",
+   "reason": "pinned by test_r8_python_options_before_dash_m_still_ask"
+  },
+  {
+   "id": "P-bb2422db77",
+   "command": "env -u A python3 -Xdev -m stillrunning $X",
+   "expect": "ask",
+   "category": "launcher",
+   "found_by": "review 8",
+   "round": 9,
+   "status": "fixed",
+   "reason": "pinned by test_r8_python_options_before_dash_m_still_ask"
+  },
+  {
+   "id": "P-bdf20edd3f",
+   "command": "python3 -W ignore -m stillrunning blocklist $(echo --unschedule)",
+   "expect": "ask",
+   "category": "launcher",
+   "found_by": "review 8",
+   "round": 9,
+   "status": "fixed",
+   "reason": "pinned by test_r8_python_options_before_dash_m_still_ask"
+  },
+  {
+   "id": "P-4a584551d5",
+   "command": "echo --unschedule | xargs python3 -W ignore -m stillrunning blocklist",
+   "expect": "ask",
+   "category": "launcher",
+   "found_by": "review 8",
+   "round": 9,
+   "status": "fixed",
+   "reason": "pinned by test_r8_python_options_before_dash_m_still_ask"
+  },
+  {
+   "id": "P-f6a54d2215",
+   "command": "script -qc 'python3 -W ignore -m stillrunning blocklist --refresh $X' /dev/null",
+   "expect": "ask",
+   "category": "shell-string",
+   "found_by": "review 8",
+   "round": 9,
+   "status": "fixed",
+   "reason": "pinned by test_r8_python_options_before_dash_m_still_ask"
+  },
+  {
+   "id": "P-4a493a5cbd",
+   "command": "python3 -W ignore -m stillrunning $X evil",
+   "expect": "ask",
+   "category": "launcher",
+   "found_by": "review 8",
+   "round": 9,
+   "status": "fixed",
+   "reason": "pinned by test_r8_python_options_before_dash_m_still_ask"
+  },
+  {
+   "id": "P-8749301ef1",
+   "command": "X=allow; python3 -X dev -m stillrunning $X evil",
+   "expect": "ask",
+   "category": "launcher",
+   "found_by": "review 8",
+   "round": 9,
+   "status": "fixed",
+   "reason": "pinned by test_r8_python_options_before_dash_m_still_ask"
+  },
+  {
+   "id": "P-a2fc7af1bd",
+   "command": "uvx stillrunning blocklist $X",
+   "expect": "ask",
+   "category": "launcher",
+   "found_by": "review 8",
+   "round": 9,
+   "status": "fixed",
+   "reason": "pinned by test_r8_launchers_that_run_stillrunning_ask"
+  },
+  {
+   "id": "P-c8587a7c24",
+   "command": "uvx stillrunning@latest $X evil",
+   "expect": "ask",
+   "category": "launcher",
+   "found_by": "review 8",
+   "round": 9,
+   "status": "fixed",
+   "reason": "pinned by test_r8_launchers_that_run_stillrunning_ask"
+  },
+  {
+   "id": "P-da41f7c747",
+   "command": "uvx stillrunning==2.14.3 $X",
+   "expect": "ask",
+   "category": "launcher",
+   "found_by": "review 8",
+   "round": 9,
+   "status": "fixed",
+   "reason": "pinned by test_r8_launchers_that_run_stillrunning_ask"
+  },
+  {
+   "id": "P-499ed5e69d",
+   "command": "uvx 'stillrunning[cli]' $X",
+   "expect": "ask",
+   "category": "launcher",
+   "found_by": "review 8",
+   "round": 9,
+   "status": "fixed",
+   "reason": "pinned by test_r8_launchers_that_run_stillrunning_ask"
+  },
+  {
+   "id": "P-aeb8031c35",
+   "command": "uvx --python 3.12 stillrunning $X",
+   "expect": "ask",
+   "category": "launcher",
+   "found_by": "review 8",
+   "round": 9,
+   "status": "fixed",
+   "reason": "pinned by test_r8_launchers_that_run_stillrunning_ask"
+  },
+  {
+   "id": "P-bfd6a35a68",
+   "command": "uvx -p 3.12 stillrunning $X",
+   "expect": "ask",
+   "category": "launcher",
+   "found_by": "review 8",
+   "round": 9,
+   "status": "fixed",
+   "reason": "pinned by test_r8_launchers_that_run_stillrunning_ask"
+  },
+  {
+   "id": "P-2db31dee46",
+   "command": "uvx --from stillrunning stillrunning $X",
+   "expect": "ask",
+   "category": "launcher",
+   "found_by": "review 8",
+   "round": 9,
+   "status": "fixed",
+   "reason": "pinned by test_r8_launchers_that_run_stillrunning_ask"
+  },
+  {
+   "id": "P-3fa6eae31b",
+   "command": "uvx --from stillrunning==2.14.3 stillrunning blocklist $X",
+   "expect": "ask",
+   "category": "launcher",
+   "found_by": "review 8",
+   "round": 9,
+   "status": "fixed",
+   "reason": "pinned by test_r8_launchers_that_run_stillrunning_ask"
+  },
+  {
+   "id": "P-433ba5c9a0",
+   "command": "uvx --with requests --isolated stillrunning $X",
+   "expect": "ask",
+   "category": "launcher",
+   "found_by": "review 8",
+   "round": 9,
+   "status": "fixed",
+   "reason": "pinned by test_r8_launchers_that_run_stillrunning_ask"
+  },
+  {
+   "id": "P-2e87291d25",
+   "command": "uvx --python=3.12 stillrunning $X",
+   "expect": "ask",
+   "category": "launcher",
+   "found_by": "review 8",
+   "round": 9,
+   "status": "fixed",
+   "reason": "pinned by test_r8_launchers_that_run_stillrunning_ask"
+  },
+  {
+   "id": "P-944120148d",
+   "command": "pipx run stillrunning $X",
+   "expect": "ask",
+   "category": "launcher",
+   "found_by": "review 8",
+   "round": 9,
+   "status": "fixed",
+   "reason": "pinned by test_r8_launchers_that_run_stillrunning_ask"
+  },
+  {
+   "id": "P-27e63d3569",
+   "command": "pipx run --spec stillrunning stillrunning $X",
+   "expect": "ask",
+   "category": "launcher",
+   "found_by": "review 8",
+   "round": 9,
+   "status": "fixed",
+   "reason": "pinned by test_r8_launchers_that_run_stillrunning_ask"
+  },
+  {
+   "id": "P-fcb2ae4055",
+   "command": "pipx run --spec stillrunning==2.14.3 --python python3.12 stillrunning $X",
+   "expect": "ask",
+   "category": "launcher",
+   "found_by": "review 8",
+   "round": 9,
+   "status": "fixed",
+   "reason": "pinned by test_r8_launchers_that_run_stillrunning_ask"
+  },
+  {
+   "id": "P-c481c3a8c8",
+   "command": "pipx run stillrunning==2.14.3 $X",
+   "expect": "ask",
+   "category": "launcher",
+   "found_by": "review 8",
+   "round": 9,
+   "status": "fixed",
+   "reason": "pinned by test_r8_launchers_that_run_stillrunning_ask"
+  },
+  {
+   "id": "P-7d62e37617",
+   "command": "uv run stillrunning $X",
+   "expect": "ask",
+   "category": "launcher",
+   "found_by": "review 8",
+   "round": 9,
+   "status": "fixed",
+   "reason": "pinned by test_r8_launchers_that_run_stillrunning_ask"
+  },
+  {
+   "id": "P-5aac41391f",
+   "command": "uv run --with requests stillrunning $X",
+   "expect": "ask",
+   "category": "launcher",
+   "found_by": "review 8",
+   "round": 9,
+   "status": "fixed",
+   "reason": "pinned by test_r8_launchers_that_run_stillrunning_ask"
+  },
+  {
+   "id": "P-1876f976eb",
+   "command": "uv run python -m stillrunning $X",
+   "expect": "ask",
+   "category": "launcher",
+   "found_by": "review 8",
+   "round": 9,
+   "status": "fixed",
+   "reason": "pinned by test_r8_launchers_that_run_stillrunning_ask"
+  },
+  {
+   "id": "P-3fc75cf59c",
+   "command": "uv run python3 -W ignore -m stillrunning $X",
+   "expect": "ask",
+   "category": "launcher",
+   "found_by": "review 8",
+   "round": 9,
+   "status": "fixed",
+   "reason": "pinned by test_r8_launchers_that_run_stillrunning_ask"
+  },
+  {
+   "id": "P-91cb7f4d87",
+   "command": "uv run -m stillrunning $X",
+   "expect": "ask",
+   "category": "launcher",
+   "found_by": "review 8",
+   "round": 9,
+   "status": "fixed",
+   "reason": "pinned by test_r8_launchers_that_run_stillrunning_ask"
+  },
+  {
+   "id": "P-642f04b4a8",
+   "command": "uv run --module stillrunning $X",
+   "expect": "ask",
+   "category": "launcher",
+   "found_by": "review 8",
+   "round": 9,
+   "status": "fixed",
+   "reason": "pinned by test_r8_launchers_that_run_stillrunning_ask"
+  },
+  {
+   "id": "P-da9c98f967",
+   "command": "uv tool run stillrunning $X",
+   "expect": "ask",
+   "category": "run-time-word",
+   "found_by": "review 8",
+   "round": 9,
+   "status": "fixed",
+   "reason": "pinned by test_r8_launchers_that_run_stillrunning_ask"
+  },
+  {
+   "id": "P-0912992854",
+   "command": "uv tool run --with requests stillrunning $X",
+   "expect": "ask",
+   "category": "run-time-word",
+   "found_by": "review 8",
+   "round": 9,
+   "status": "fixed",
+   "reason": "pinned by test_r8_launchers_that_run_stillrunning_ask"
+  },
+  {
+   "id": "P-da1749a02e",
+   "command": "uv tool run --from stillrunning@latest stillrunning $X",
+   "expect": "ask",
+   "category": "run-time-word",
+   "found_by": "review 8",
+   "round": 9,
+   "status": "fixed",
+   "reason": "pinned by test_r8_launchers_that_run_stillrunning_ask"
+  },
+  {
+   "id": "P-9dc5a57f15",
+   "command": "uv -q tool run stillrunning $X",
+   "expect": "ask",
+   "category": "run-time-word",
+   "found_by": "review 8",
+   "round": 9,
+   "status": "fixed",
+   "reason": "pinned by test_r8_launchers_that_run_stillrunning_ask"
+  },
+  {
+   "id": "P-baedadc9fa",
+   "command": "uv --directory /tmp run stillrunning $X",
+   "expect": "ask",
+   "category": "run-time-word",
+   "found_by": "review 8",
+   "round": 9,
+   "status": "fixed",
+   "reason": "pinned by test_r8_launchers_that_run_stillrunning_ask"
+  },
+  {
+   "id": "P-8cc64a247f",
+   "command": "uv run -- stillrunning $X",
+   "expect": "ask",
+   "category": "launcher",
+   "found_by": "review 8",
+   "round": 9,
+   "status": "fixed",
+   "reason": "pinned by test_r8_launchers_that_run_stillrunning_ask"
+  },
+  {
+   "id": "P-1e4510fcfc",
+   "command": "echo --unschedule | xargs uvx stillrunning blocklist",
+   "expect": "ask",
+   "category": "launcher",
+   "found_by": "review 8",
+   "round": 9,
+   "status": "fixed",
+   "reason": "pinned by test_r8_launchers_that_run_stillrunning_ask"
+  },
+  {
+   "id": "P-a23b70cab0",
+   "command": "nice uvx stillrunning $X",
+   "expect": "ask",
+   "category": "launcher",
+   "found_by": "review 8",
+   "round": 9,
+   "status": "fixed",
+   "reason": "pinned by test_r8_launchers_that_run_stillrunning_ask"
+  },
+  {
+   "id": "P-d0eef4c0a5",
+   "command": "X=allow; uvx stillrunning $X evil",
+   "expect": "ask",
+   "category": "launcher",
+   "found_by": "review 8",
+   "round": 9,
+   "status": "fixed",
+   "reason": "pinned by test_r8_launchers_that_run_stillrunning_ask"
+  },
+  {
+   "id": "P-5c7dc61de3",
+   "command": "uvx stillrunning@latest allow evil",
+   "expect": "ask",
+   "category": "launcher",
+   "found_by": "review 8",
+   "round": 9,
+   "status": "fixed",
+   "reason": "pinned by test_r8_launchers_that_run_stillrunning_ask"
+  },
+  {
+   "id": "P-123b6d5a68",
+   "command": "uvx stillrunning==2.14.3 blocklist --unschedule",
+   "expect": "ask",
+   "category": "launcher",
+   "found_by": "review 8",
+   "round": 9,
+   "status": "fixed",
+   "reason": "pinned by test_r8_launchers_that_run_stillrunning_ask"
+  },
+  {
+   "id": "P-aab0a670b4",
+   "command": "pipx run stillrunning --uninstall-hook-claude-code",
+   "expect": "ask",
+   "category": "launcher",
+   "found_by": "review 8",
+   "round": 9,
+   "status": "fixed",
+   "reason": "pinned by test_r8_launchers_that_run_stillrunning_ask"
+  },
+  {
+   "id": "P-957aa2f646",
+   "command": "uv tool run stillrunning@latest remember last",
+   "expect": "ask",
+   "category": "own-switch",
+   "found_by": "review 8",
+   "round": 9,
+   "status": "fixed",
+   "reason": "pinned by test_r8_launchers_that_run_stillrunning_ask"
+  },
+  {
+   "id": "P-477e693f4d",
+   "command": "stillrunning {allow,allow} evil",
+   "expect": "ask",
+   "category": "glob/brace",
+   "found_by": "review 8",
+   "round": 9,
+   "status": "fixed",
+   "reason": "pinned by test_r8_braces_and_globs_count_as_run_time_words"
+  },
+  {
+   "id": "P-4c5cb9ef04",
+   "command": "stillrunning whitelist ad{d,d} evil",
+   "expect": "ask",
+   "category": "glob/brace",
+   "found_by": "review 8",
+   "round": 9,
+   "status": "fixed",
+   "reason": "pinned by test_r8_braces_and_globs_count_as_run_time_words"
+  },
+  {
+   "id": "P-f183e072cc",
+   "command": "stillrunning whitelist *",
+   "expect": "ask",
+   "category": "glob/brace",
+   "found_by": "review 8",
+   "round": 9,
+   "status": "fixed",
+   "reason": "pinned by test_r8_braces_and_globs_count_as_run_time_words"
+  },
+  {
+   "id": "P-f9b585bc32",
+   "command": "stillrunning blocklist --unschedul{e,e}",
+   "expect": "ask",
+   "category": "glob/brace",
+   "found_by": "review 8",
+   "round": 9,
+   "status": "fixed",
+   "reason": "pinned by test_r8_braces_and_globs_count_as_run_time_words"
+  },
+  {
+   "id": "P-e09feb0ce2",
+   "command": "script -qc 'stillrunning blocklist --refresh --forc{e,e}' /dev/null",
+   "expect": "ask",
+   "category": "shell-string",
+   "found_by": "review 8",
+   "round": 9,
+   "status": "fixed",
+   "reason": "pinned by test_r8_braces_and_globs_count_as_run_time_words"
+  },
+  {
+   "id": "P-4adf7cd21b",
+   "command": "stillrunning blocklist *",
+   "expect": "ask",
+   "category": "glob/brace",
+   "found_by": "review 8",
+   "round": 9,
+   "status": "fixed",
+   "reason": "pinned by test_r8_braces_and_globs_count_as_run_time_words"
+  },
+  {
+   "id": "P-4ce987071e",
+   "command": "stillrunning blocklist --unsched?le",
+   "expect": "ask",
+   "category": "glob/brace",
+   "found_by": "review 8",
+   "round": 9,
+   "status": "fixed",
+   "reason": "pinned by test_r8_braces_and_globs_count_as_run_time_words"
+  },
+  {
+   "id": "P-f4259c0918",
+   "command": "stillrunning blocklist --[u]nschedule",
+   "expect": "ask",
+   "category": "glob/brace",
+   "found_by": "review 8",
+   "round": 9,
+   "status": "fixed",
+   "reason": "pinned by test_r8_braces_and_globs_count_as_run_time_words"
+  },
+  {
+   "id": "P-6724b3bf29",
+   "command": "python3 -m stillrunning {allow,allow} evil",
+   "expect": "ask",
+   "category": "launcher",
+   "found_by": "review 8",
+   "round": 9,
+   "status": "fixed",
+   "reason": "pinned by test_r8_braces_and_globs_count_as_run_time_words"
+  },
+  {
+   "id": "P-0b12a73459",
+   "command": "uvx stillrunning blocklist --unschedul*",
+   "expect": "ask",
+   "category": "launcher",
+   "found_by": "review 8",
+   "round": 9,
+   "status": "fixed",
+   "reason": "pinned by test_r8_braces_and_globs_count_as_run_time_words"
+  },
+  {
+   "id": "P-7a8ea11932",
+   "command": "stillrunning blocklist --{force,refresh}",
+   "expect": "ask",
+   "category": "glob/brace",
+   "found_by": "review 8",
+   "round": 9,
+   "status": "fixed",
+   "reason": "pinned by test_r8_braces_and_globs_count_as_run_time_words"
+  },
+  {
+   "id": "P-e64a6f31a4",
+   "command": "stillrunning {remember,x} last",
+   "expect": "ask",
+   "category": "glob/brace",
+   "found_by": "review 8",
+   "round": 9,
+   "status": "fixed",
+   "reason": "pinned by test_r8_braces_and_globs_count_as_run_time_words"
+  },
+  {
+   "id": "P-f96d108c8f",
+   "command": "stillrunnin{g,g} allow evil",
+   "expect": "ask",
+   "category": "glob/brace",
+   "found_by": "review 8",
+   "round": 9,
+   "status": "fixed",
+   "reason": "pinned by test_r8_braces_and_globs_count_as_run_time_words"
+  },
+  {
+   "id": "P-1e50c04dd1",
+   "command": "/usr/local/bin/stillrunnin? allow evil",
+   "expect": "ask",
+   "category": "glob/brace",
+   "found_by": "review 8",
+   "round": 9,
+   "status": "fixed",
+   "reason": "pinned by test_r8_braces_and_globs_count_as_run_time_words"
+  },
+  {
+   "id": "P-81aac7a8bc",
+   "command": "python3 -m stillrunnin{g,g} $X",
+   "expect": "ask",
+   "category": "launcher",
+   "found_by": "review 8",
+   "round": 9,
+   "status": "fixed",
+   "reason": "pinned by test_r8_braces_and_globs_count_as_run_time_words"
+  },
+  {
+   "id": "P-e6d02fa0c1",
+   "command": "setsid stillrunning {allow,allow} evil",
+   "expect": "ask",
+   "category": "wrapper",
+   "found_by": "review 8",
+   "round": 9,
+   "status": "fixed",
+   "reason": "pinned by test_r8_braces_and_globs_count_as_run_time_words"
+  },
+  {
+   "id": "P-9bd17aa074",
+   "command": "setsid stillrunning whitelist ad{d,d} evil",
+   "expect": "ask",
+   "category": "wrapper",
+   "found_by": "review 8",
+   "round": 9,
+   "status": "fixed",
+   "reason": "pinned by test_r8_braces_and_globs_count_as_run_time_words"
+  },
+  {
+   "id": "P-48ef0b8bd8",
+   "command": "$sr {allow,allow} evil",
+   "expect": "ask",
+   "category": "glob/brace",
+   "found_by": "review 8",
+   "round": 9,
+   "status": "fixed",
+   "reason": "pinned by test_r8_braces_and_globs_count_as_run_time_words"
+  },
+  {
+   "id": "P-51531340eb",
+   "command": "$sr whitelist ad{d,d} evil",
+   "expect": "ask",
+   "category": "glob/brace",
+   "found_by": "review 8",
+   "round": 9,
+   "status": "fixed",
+   "reason": "pinned by test_r8_braces_and_globs_count_as_run_time_words"
+  },
+  {
+   "id": "P-39042a5acb",
+   "command": "$sr blocklist --unschedul{e,e}",
+   "expect": "ask",
+   "category": "glob/brace",
+   "found_by": "review 8",
+   "round": 9,
+   "status": "fixed",
+   "reason": "pinned by test_r8_braces_and_globs_count_as_run_time_words"
+  },
+  {
+   "id": "P-5c386f720c",
+   "command": "$sr blocklist --unsched*",
+   "expect": "ask",
+   "category": "glob/brace",
+   "found_by": "review 8",
+   "round": 9,
+   "status": "fixed",
+   "reason": "pinned by test_r8_braces_and_globs_count_as_run_time_words"
+  },
+  {
+   "id": "P-40ac0b95d3",
+   "command": "uv run -m --no-sync stillrunning blocklist $(echo --unschedule)",
+   "expect": "ask",
+   "category": "launcher",
+   "found_by": "review 9",
+   "round": 10,
+   "status": "fixed",
+   "reason": "pinned by test_r9_a_run_time_word_with_stillrunning_asks_unless_read_only"
+  },
+  {
+   "id": "P-0754de7f55",
+   "command": "uv run -m -q stillrunning blocklist $(echo --unschedule)",
+   "expect": "ask",
+   "category": "launcher",
+   "found_by": "review 9",
+   "round": 10,
+   "status": "fixed",
+   "reason": "pinned by test_r9_a_run_time_word_with_stillrunning_asks_unless_read_only"
+  },
+  {
+   "id": "P-9516690c65",
+   "command": "uv run --with x -m --python 3.12 stillrunning blocklist $(echo --unschedule)",
+   "expect": "ask",
+   "category": "launcher",
+   "found_by": "review 9",
+   "round": 10,
+   "status": "fixed",
+   "reason": "pinned by test_r9_a_run_time_word_with_stillrunning_asks_unless_read_only"
+  },
+  {
+   "id": "P-39569ce092",
+   "command": "parallel stillrunning blocklist ::: $(echo --unschedule)",
+   "expect": "ask",
+   "category": "launcher",
+   "found_by": "review 9",
+   "round": 10,
+   "status": "fixed",
+   "reason": "pinned by test_r9_a_run_time_word_with_stillrunning_asks_unless_read_only"
+  },
+  {
+   "id": "P-151cd159b1",
+   "command": "parallel stillrunning blocklist :::: args.txt",
+   "expect": "ask",
+   "category": "launcher",
+   "found_by": "review 9",
+   "round": 10,
+   "status": "fixed",
+   "reason": "pinned by test_r9_a_run_time_word_with_stillrunning_asks_unless_read_only"
+  },
+  {
+   "id": "P-88c60dd7e3",
+   "command": "parallel stillrunning ::: 'blocklist --unschedule'",
+   "expect": "ask",
+   "category": "launcher",
+   "found_by": "review 9",
+   "round": 10,
+   "status": "fixed",
+   "reason": "pinned by test_r9_a_run_time_word_with_stillrunning_asks_unless_read_only"
+  },
+  {
+   "id": "P-096514e115",
+   "command": "flock -n /tmp/l stillrunning blocklist $(echo --unschedule)",
+   "expect": "ask",
+   "category": "shell-string",
+   "found_by": "review 9",
+   "round": 10,
+   "status": "fixed",
+   "reason": "pinned by test_r9_a_run_time_word_with_stillrunning_asks_unless_read_only"
+  },
+  {
+   "id": "P-41505e57f9",
+   "command": "nice -n 19 ionice -c 3 flock -n /tmp/l timeout 1800 python3 -m stillrunning blocklist $X",
+   "expect": "ask",
+   "category": "shell-string",
+   "found_by": "review 9",
+   "round": 10,
+   "status": "fixed",
+   "reason": "pinned by test_r9_a_run_time_word_with_stillrunning_asks_unless_read_only"
+  },
+  {
+   "id": "P-ba9f5be685",
+   "command": "setsid stillrunning blocklist $(echo --unschedule)",
+   "expect": "ask",
+   "category": "wrapper",
+   "found_by": "review 9",
+   "round": 10,
+   "status": "fixed",
+   "reason": "pinned by test_r9_a_run_time_word_with_stillrunning_asks_unless_read_only"
+  },
+  {
+   "id": "P-fa8d15ef8c",
+   "command": "chrt -i 0 stillrunning blocklist $(echo --unschedule)",
+   "expect": "ask",
+   "category": "wrapper",
+   "found_by": "review 9",
+   "round": 10,
+   "status": "fixed",
+   "reason": "pinned by test_r9_a_run_time_word_with_stillrunning_asks_unless_read_only"
+  },
+  {
+   "id": "P-5126f8f9aa",
+   "command": "taskset -c 0 stillrunning blocklist $(echo --unschedule)",
+   "expect": "ask",
+   "category": "wrapper",
+   "found_by": "review 9",
+   "round": 10,
+   "status": "fixed",
+   "reason": "pinned by test_r9_a_run_time_word_with_stillrunning_asks_unless_read_only"
+  },
+  {
+   "id": "P-3dd0b5aadd",
+   "command": "python3.13t -m stillrunning blocklist $(echo --unschedule)",
+   "expect": "ask",
+   "category": "launcher",
+   "found_by": "review 9",
+   "round": 10,
+   "status": "fixed",
+   "reason": "pinned by test_r9_a_run_time_word_with_stillrunning_asks_unless_read_only"
+  },
+  {
+   "id": "P-5888ca4310",
+   "command": "setsid stillrunning $(echo allow) evil",
+   "expect": "ask",
+   "category": "wrapper",
+   "found_by": "review 9",
+   "round": 10,
+   "status": "fixed",
+   "reason": "pinned by test_r9_a_run_time_word_with_stillrunning_asks_unless_read_only"
+  },
+  {
+   "id": "P-d39e23eb2d",
+   "command": "python3.13t -m stillrunning $(echo allow) evil",
+   "expect": "ask",
+   "category": "launcher",
+   "found_by": "review 9",
+   "round": 10,
+   "status": "fixed",
+   "reason": "pinned by test_r9_a_run_time_word_with_stillrunning_asks_unless_read_only"
+  },
+  {
+   "id": "P-bb50dce0ae",
+   "command": "uv run -m --no-sync stillrunning $(echo allow) evil",
+   "expect": "ask",
+   "category": "launcher",
+   "found_by": "review 9",
+   "round": 10,
+   "status": "fixed",
+   "reason": "pinned by test_r9_a_run_time_word_with_stillrunning_asks_unless_read_only"
+  },
+  {
+   "id": "P-da8fbd94b0",
+   "command": "parallel stillrunning $(echo allow) ::: evil",
+   "expect": "ask",
+   "category": "launcher",
+   "found_by": "review 9",
+   "round": 10,
+   "status": "fixed",
+   "reason": "pinned by test_r9_a_run_time_word_with_stillrunning_asks_unless_read_only"
+  },
+  {
+   "id": "P-bea92a6a21",
+   "command": "nohup stillrunning blocklist $X",
+   "expect": "ask",
+   "category": "wrapper",
+   "found_by": "review 9",
+   "round": 10,
+   "status": "fixed",
+   "reason": "pinned by test_r9_a_run_time_word_with_stillrunning_asks_unless_read_only"
+  },
+  {
+   "id": "P-33670a9323",
+   "command": "stdbuf -oL stillrunning blocklist $X",
+   "expect": "ask",
+   "category": "wrapper",
+   "found_by": "review 9",
+   "round": 10,
+   "status": "fixed",
+   "reason": "pinned by test_r9_a_run_time_word_with_stillrunning_asks_unless_read_only"
+  },
+  {
+   "id": "P-bfd006ba7e",
+   "command": "sudo -u bob stillrunning blocklist $X",
+   "expect": "ask",
+   "category": "wrapper",
+   "found_by": "review 9",
+   "round": 10,
+   "status": "fixed",
+   "reason": "pinned by test_r9_a_run_time_word_with_stillrunning_asks_unless_read_only"
+  },
+  {
+   "id": "P-11f3fd55f3",
+   "command": "env -i stillrunning blocklist $X",
+   "expect": "ask",
+   "category": "wrapper",
+   "found_by": "review 9",
+   "round": 10,
+   "status": "fixed",
+   "reason": "pinned by test_r9_a_run_time_word_with_stillrunning_asks_unless_read_only"
+  },
+  {
+   "id": "P-f15943be2f",
+   "command": "ssh localhost stillrunning blocklist $X",
+   "expect": "ask",
+   "category": "shell-string",
+   "found_by": "review 9",
+   "round": 10,
+   "status": "fixed",
+   "reason": "pinned by test_r9_a_run_time_word_with_stillrunning_asks_unless_read_only"
+  },
+  {
+   "id": "P-c84c3add3a",
+   "command": "frobnicate --wrap=7 stillrunning blocklist $X",
+   "expect": "ask",
+   "category": "run-time-word",
+   "found_by": "review 9",
+   "round": 10,
+   "status": "fixed",
+   "reason": "pinned by test_r9_a_run_time_word_with_stillrunning_asks_unless_read_only"
+  },
+  {
+   "id": "P-7429070f15",
+   "command": "frobnicate -q stillrunning $(cat args)",
+   "expect": "ask",
+   "category": "run-time-word",
+   "found_by": "review 9",
+   "round": 10,
+   "status": "fixed",
+   "reason": "pinned by test_r9_a_run_time_word_with_stillrunning_asks_unless_read_only"
+  },
+  {
+   "id": "P-38758c544a",
+   "command": "sr=stillrunning; $sr $X evil",
+   "expect": "ask",
+   "category": "run-time-word",
+   "found_by": "review 9",
+   "round": 10,
+   "status": "fixed",
+   "reason": "pinned by test_r9_a_run_time_word_with_stillrunning_asks_unless_read_only"
+  },
+  {
+   "id": "P-90dc3920bb",
+   "command": "$(echo stillrunning) $X evil",
+   "expect": "ask",
+   "category": "run-time-word",
+   "found_by": "review 9",
+   "round": 10,
+   "status": "fixed",
+   "reason": "pinned by test_r9_a_run_time_word_with_stillrunning_asks_unless_read_only"
+  },
+  {
+   "id": "P-2fb23824f3",
+   "command": "$(which stillrunning) blocklist $X",
+   "expect": "ask",
+   "category": "run-time-word",
+   "found_by": "review 9",
+   "round": 10,
+   "status": "fixed",
+   "reason": "pinned by test_r9_a_run_time_word_with_stillrunning_asks_unless_read_only"
+  },
+  {
+   "id": "P-6667efee32",
+   "command": "cat args | stillrunning blocklist",
+   "expect": "ask",
+   "category": "own-switch",
+   "found_by": "review 9",
+   "round": 10,
+   "status": "fixed",
+   "reason": "pinned by test_r9_a_run_time_word_with_stillrunning_asks_unless_read_only"
+  },
+  {
+   "id": "P-a2bb03d50a",
+   "command": "stillrunning blocklist < args",
+   "expect": "ask",
+   "category": "own-switch",
+   "found_by": "review 9",
+   "round": 10,
+   "status": "fixed",
+   "reason": "pinned by test_r9_a_run_time_word_with_stillrunning_asks_unless_read_only"
+  },
+  {
+   "id": "P-33d9effd84",
+   "command": "stillrunning blocklist <<< --unschedule",
+   "expect": "ask",
+   "category": "here-string",
+   "found_by": "review 9",
+   "round": 10,
+   "status": "fixed",
+   "reason": "pinned by test_r9_a_run_time_word_with_stillrunning_asks_unless_read_only"
+  },
+  {
+   "id": "P-5b34d242d1",
+   "command": "bash -c 'stillrunning blocklist $X'",
+   "expect": "ask",
+   "category": "shell-string",
+   "found_by": "review 9",
+   "round": 10,
+   "status": "fixed",
+   "reason": "pinned by test_r9_a_run_time_word_with_stillrunning_asks_unless_read_only"
+  },
+  {
+   "id": "P-6619fc91e7",
+   "command": "sh -c \"python3 -m stillrunning $X\"",
+   "expect": "ask",
+   "category": "shell-string",
+   "found_by": "review 9",
+   "round": 10,
+   "status": "fixed",
+   "reason": "pinned by test_r9_a_run_time_word_with_stillrunning_asks_unless_read_only"
+  },
+  {
+   "id": "P-f611e2774e",
+   "command": "nohup sh -c 'stillrunning blocklist $1' _ --unschedule",
+   "expect": "ask",
+   "category": "shell-string",
+   "found_by": "review 9",
+   "round": 10,
+   "status": "fixed",
+   "reason": "pinned by test_r9_a_run_time_word_with_stillrunning_asks_unless_read_only"
+  },
+  {
+   "id": "P-8d80ee7c88",
+   "command": "stillrunning blocklist --unsch{e,e}dule",
+   "expect": "ask",
+   "category": "glob/brace",
+   "found_by": "review 9",
+   "round": 10,
+   "status": "fixed",
+   "reason": "pinned by test_r9_a_run_time_word_with_stillrunning_asks_unless_read_only"
+  },
+  {
+   "id": "P-e80c9782f1",
+   "command": "stillrunning blocklist --uns*",
+   "expect": "ask",
+   "category": "glob/brace",
+   "found_by": "review 9",
+   "round": 10,
+   "status": "fixed",
+   "reason": "pinned by test_r9_a_run_time_word_with_stillrunning_asks_unless_read_only"
+  },
+  {
+   "id": "P-49347a3d25",
+   "command": "find . -name stillrunning -exec rm {} $X",
+   "expect": "ask",
+   "category": "wrapper",
+   "found_by": "review 9",
+   "round": 10,
+   "status": "fixed",
+   "reason": "pinned by test_r9_a_run_time_word_with_stillrunning_asks_unless_read_only"
+  },
+  {
+   "id": "P-3b4eebb0b0",
+   "command": "rg --pre ./x stillrunning $X",
+   "expect": "ask",
+   "category": "run-time-word",
+   "found_by": "review 9",
+   "round": 10,
+   "status": "fixed",
+   "reason": "pinned by test_r9_a_run_time_word_with_stillrunning_asks_unless_read_only"
+  },
+  {
+   "id": "P-d37f440b84",
+   "command": "git -c core.pager=sh log stillrunning $X",
+   "expect": "ask",
+   "category": "run-time-word",
+   "found_by": "review 9",
+   "round": 10,
+   "status": "fixed",
+   "reason": "pinned by test_r9_a_run_time_word_with_stillrunning_asks_unless_read_only"
+  },
+  {
+   "id": "P-c95a6219a2",
+   "command": "xargs -I{} sh -c 'stillrunning {}' < $F",
+   "expect": "ask",
+   "category": "shell-string",
+   "found_by": "review 9",
+   "round": 10,
+   "status": "fixed",
+   "reason": "pinned by test_r9_a_run_time_word_with_stillrunning_asks_unless_read_only"
+  },
+  {
+   "id": "P-92673eed0d",
+   "command": "stillrunning blocklist [-]-unschedule",
+   "expect": "ask",
+   "category": "glob/brace",
+   "found_by": "review 9",
+   "round": 10,
+   "status": "fixed",
+   "reason": "pinned by test_r9_bracket_globs_still_ask"
+  },
+  {
+   "id": "P-67f30ac443",
+   "command": "stillrunning blocklist x[yz]*",
+   "expect": "ask",
+   "category": "glob/brace",
+   "found_by": "review 9",
+   "round": 10,
+   "status": "fixed",
+   "reason": "pinned by test_r9_bracket_globs_still_ask"
+  },
+  {
+   "id": "P-d5af40a461",
+   "command": "bash <<<'stillrunning allow evil'",
+   "expect": "ask",
+   "category": "here-string",
+   "found_by": "review 10",
+   "round": 11,
+   "status": "fixed",
+   "reason": "pinned by test_r10_here_strings_handed_to_a_shell_are_judged"
+  },
+  {
+   "id": "P-b7f60adcd4",
+   "command": "sh <<< 'stillrunning --uninstall-hook-claude-code'",
+   "expect": "ask",
+   "category": "here-string",
+   "found_by": "review 10",
+   "round": 11,
+   "status": "fixed",
+   "reason": "pinned by test_r10_here_strings_handed_to_a_shell_are_judged"
+  },
+  {
+   "id": "P-50fb2a454d",
+   "command": "bash -s <<<'stillrunning blocklist --unschedule'",
+   "expect": "ask",
+   "category": "here-string",
+   "found_by": "review 10",
+   "round": 11,
+   "status": "fixed",
+   "reason": "pinned by test_r10_here_strings_handed_to_a_shell_are_judged"
+  },
+  {
+   "id": "P-47749d982b",
+   "command": "sudo bash <<< \"stillrunning blocklist --unschedule\"",
+   "expect": "ask",
+   "category": "here-string",
+   "found_by": "review 10",
+   "round": 11,
+   "status": "fixed",
+   "reason": "pinned by test_r10_here_strings_handed_to_a_shell_are_judged"
+  },
+  {
+   "id": "P-8186b6e14d",
+   "command": "bash <<<'script -qc \"stillrunning blocklist --refresh --force\" /dev/null'",
+   "expect": "ask",
+   "category": "here-string",
+   "found_by": "review 10",
+   "round": 11,
+   "status": "fixed",
+   "reason": "pinned by test_r10_here_strings_handed_to_a_shell_are_judged"
+  },
+  {
+   "id": "P-fb0a76db4a",
+   "command": "bash <<<'X=--unschedule; stillrunning blocklist $X'",
+   "expect": "ask",
+   "category": "here-string",
+   "found_by": "review 10",
+   "round": 11,
+   "status": "fixed",
+   "reason": "pinned by test_r10_here_strings_handed_to_a_shell_are_judged"
+  },
+  {
+   "id": "P-1aee1ab6e1",
+   "command": "dash <<<'python3 -m stillrunning blocklist --uns'",
+   "expect": "ask",
+   "category": "here-string",
+   "found_by": "review 10",
+   "round": 11,
+   "status": "fixed",
+   "reason": "pinned by test_r10_here_strings_handed_to_a_shell_are_judged"
+  },
+  {
+   "id": "P-5c53d214f3",
+   "command": "at now <<< 'stillrunning blocklist --unschedule'",
+   "expect": "ask",
+   "category": "here-string",
+   "found_by": "review 10",
+   "round": 11,
+   "status": "fixed",
+   "reason": "pinned by test_r10_here_strings_handed_to_a_shell_are_judged"
+  },
+  {
+   "id": "P-b27d5c1144",
+   "command": "bash <<< 'rm -rf ~/.stillrunning'",
+   "expect": "ask",
+   "category": "here-string",
+   "found_by": "review 10",
+   "round": 11,
+   "status": "fixed",
+   "reason": "pinned by test_r10_here_strings_handed_to_a_shell_are_judged"
+  },
+  {
+   "id": "P-190e4fa6b9",
+   "command": "env bash <<<'stillrunning remember last'",
+   "expect": "ask",
+   "category": "here-string",
+   "found_by": "review 10",
+   "round": 11,
+   "status": "fixed",
+   "reason": "pinned by test_r10_here_strings_handed_to_a_shell_are_judged"
+  },
+  {
+   "id": "P-ffddcadcd1",
+   "command": "bash /dev/stdin <<<'stillrunning allow evil'",
+   "expect": "ask",
+   "category": "here-string",
+   "found_by": "review 10",
+   "round": 11,
+   "status": "fixed",
+   "reason": "pinned by test_r10_here_strings_handed_to_a_shell_are_judged"
+  },
+  {
+   "id": "P-51c8cce97e",
+   "command": "stillrunning blocklist --schedule",
+   "expect": "ask",
+   "category": "own-switch",
+   "found_by": "review 11",
+   "round": 12,
+   "status": "fixed",
+   "reason": "pinned by test_r11_blocklist_schedule_always_asks"
+  },
+  {
+   "id": "P-7be3644b8e",
+   "command": "HOME=/tmp/zz stillrunning blocklist --schedule",
+   "expect": "ask",
+   "category": "own-switch",
+   "found_by": "review 11",
+   "round": 12,
+   "status": "fixed",
+   "reason": "pinned by test_r11_blocklist_schedule_always_asks"
+  },
+  {
+   "id": "P-9d2105c29b",
+   "command": "env HOME=/nonexistent stillrunning blocklist --schedule",
+   "expect": "ask",
+   "category": "wrapper",
+   "found_by": "review 11",
+   "round": 12,
+   "status": "fixed",
+   "reason": "pinned by test_r11_blocklist_schedule_always_asks"
+  },
+  {
+   "id": "P-f79a2aaa42",
+   "command": "/tmp/venv/bin/python -m stillrunning blocklist --schedule",
+   "expect": "ask",
+   "category": "launcher",
+   "found_by": "review 11",
+   "round": 12,
+   "status": "fixed",
+   "reason": "pinned by test_r11_blocklist_schedule_always_asks"
+  },
+  {
+   "id": "P-270358cb9b",
+   "command": "/tmp/venv/bin/stillrunning blocklist --schedule",
+   "expect": "ask",
+   "category": "own-switch",
+   "found_by": "review 11",
+   "round": 12,
+   "status": "fixed",
+   "reason": "pinned by test_r11_blocklist_schedule_always_asks"
+  },
+  {
+   "id": "P-ad220ecf0b",
+   "command": "stillrunning blocklist --sch",
+   "expect": "ask",
+   "category": "prefix",
+   "found_by": "review 11",
+   "round": 12,
+   "status": "fixed",
+   "reason": "pinned by test_r11_blocklist_schedule_always_asks"
+  },
+  {
+   "id": "P-ceee8534f3",
+   "command": "stillrunning blocklist --sched",
+   "expect": "ask",
+   "category": "prefix",
+   "found_by": "review 11",
+   "round": 12,
+   "status": "fixed",
+   "reason": "pinned by test_r11_blocklist_schedule_always_asks"
+  },
+  {
+   "id": "P-efa27f7ea3",
+   "command": "python3 -m stillrunning blocklist --schedule",
+   "expect": "ask",
+   "category": "launcher",
+   "found_by": "review 11",
+   "round": 12,
+   "status": "fixed",
+   "reason": "pinned by test_r11_blocklist_schedule_always_asks"
+  },
+  {
+   "id": "P-42e8c3370a",
+   "command": "uvx stillrunning blocklist --schedule",
+   "expect": "ask",
+   "category": "launcher",
+   "found_by": "review 11",
+   "round": 12,
+   "status": "fixed",
+   "reason": "pinned by test_r11_blocklist_schedule_always_asks"
+  },
+  {
+   "id": "P-759eccb420",
+   "command": "stillrunning blocklist --schedule=1",
+   "expect": "ask",
+   "category": "own-switch",
+   "found_by": "review 11",
+   "round": 12,
+   "status": "fixed",
+   "reason": "pinned by test_r11_blocklist_schedule_always_asks"
+  },
+  {
+   "id": "P-317b432161",
+   "command": "X=--unschedule; stillrunning blocklist \"$X\"",
+   "expect": "ask",
+   "category": "quoting",
+   "found_by": "review 11",
+   "round": 12,
+   "status": "fixed",
+   "reason": "pinned by test_r11_a_dollar_inside_double_quotes_still_counts"
+  },
+  {
+   "id": "P-ab95a4e035",
+   "command": "sed -n \"s/$X/y/p\" ~/stillrunning/x.txt",
+   "expect": "ask",
+   "category": "quoting",
+   "found_by": "review 11",
+   "round": 12,
+   "status": "fixed",
+   "reason": "pinned by test_r11_a_dollar_inside_double_quotes_still_counts"
+  },
+  {
+   "id": "P-9d79e78814",
+   "command": "stillrunning blocklist \"$(echo --unschedule)\"",
+   "expect": "ask",
+   "category": "quoting",
+   "found_by": "review 11",
+   "round": 12,
+   "status": "fixed",
+   "reason": "pinned by test_r11_a_dollar_inside_double_quotes_still_counts"
+  },
+  {
+   "id": "P-5738154dec",
+   "command": "X=allow; stillrunning \"$X\" evil",
+   "expect": "ask",
+   "category": "quoting",
+   "found_by": "review 11",
+   "round": 12,
+   "status": "fixed",
+   "reason": "pinned by test_r11_a_dollar_inside_double_quotes_still_counts"
+  },
+  {
+   "id": "P-3efe57de65",
+   "command": "bash -c $'stillrunning\\tblocklist\\t--unschedule'",
+   "expect": "ask",
+   "category": "shell-string",
+   "found_by": "review 12",
+   "round": 13,
+   "status": "fixed",
+   "reason": "pinned by test_r12_shell_strings_and_lifted_quotes_ask"
+  },
+  {
+   "id": "P-5f5f39c2b8",
+   "command": "bash -c '{stillrunning,blocklist,--unschedule}'",
+   "expect": "ask",
+   "category": "shell-string",
+   "found_by": "review 12",
+   "round": 13,
+   "status": "fixed",
+   "reason": "pinned by test_r12_shell_strings_and_lifted_quotes_ask"
+  },
+  {
+   "id": "P-249fdd6a3a",
+   "command": "bash -c 'stillrunning${IFS}blocklist${IFS}--unschedule'",
+   "expect": "ask",
+   "category": "shell-string",
+   "found_by": "review 12",
+   "round": 13,
+   "status": "fixed",
+   "reason": "pinned by test_r12_shell_strings_and_lifted_quotes_ask"
+  },
+  {
+   "id": "P-e5e10a0258",
+   "command": "sh -c 'stillrunning${IFS}blocklist${IFS}--unschedule'",
+   "expect": "ask",
+   "category": "shell-string",
+   "found_by": "review 12",
+   "round": 13,
+   "status": "fixed",
+   "reason": "pinned by test_r12_shell_strings_and_lifted_quotes_ask"
+  },
+  {
+   "id": "P-f09de77bf0",
+   "command": "script -qc 'stillrunning${IFS}blocklist${IFS}--unschedule' /dev/null",
+   "expect": "ask",
+   "category": "terminal-code",
+   "found_by": "review 12",
+   "round": 13,
+   "status": "fixed",
+   "reason": "pinned by test_r12_shell_strings_and_lifted_quotes_ask"
+  },
+  {
+   "id": "P-4bc56af45c",
+   "command": "bash -c 'stillrunning$IFS\"blocklist\"$IFS--unschedule'",
+   "expect": "ask",
+   "category": "shell-string",
+   "found_by": "review 12",
+   "round": 13,
+   "status": "fixed",
+   "reason": "pinned by test_r12_shell_strings_and_lifted_quotes_ask"
+  },
+  {
+   "id": "P-1417274eda",
+   "command": "bash -c 'stillrunning${IFS}blocklist${IFS}--schedule'",
+   "expect": "ask",
+   "category": "shell-string",
+   "found_by": "review 12",
+   "round": 13,
+   "status": "fixed",
+   "reason": "pinned by test_r12_shell_strings_and_lifted_quotes_ask"
+  },
+  {
+   "id": "P-e034e68868",
+   "command": "bash -c 'stillrunning${IFS}allow${IFS}evil'",
+   "expect": "ask",
+   "category": "shell-string",
+   "found_by": "review 12",
+   "round": 13,
+   "status": "fixed",
+   "reason": "pinned by test_r12_shell_strings_and_lifted_quotes_ask"
+  },
+  {
+   "id": "P-d517f43b78",
+   "command": "X=allow bash -c 'stillrunning${IFS}$X${IFS}evil'",
+   "expect": "ask",
+   "category": "shell-string",
+   "found_by": "review 12",
+   "round": 13,
+   "status": "fixed",
+   "reason": "pinned by test_r12_shell_strings_and_lifted_quotes_ask"
+  },
+  {
+   "id": "P-aeaa184093",
+   "command": "bash -c \"stillrunning\\${IFS}\\$X\"",
+   "expect": "ask",
+   "category": "shell-string",
+   "found_by": "review 12",
+   "round": 13,
+   "status": "fixed",
+   "reason": "pinned by test_r12_shell_strings_and_lifted_quotes_ask"
+  },
+  {
+   "id": "P-8eb1eb92d3",
+   "command": "bash -c 'stillrunning$(echo \" allow evil\")'",
+   "expect": "ask",
+   "category": "shell-string",
+   "found_by": "review 12",
+   "round": 13,
+   "status": "fixed",
+   "reason": "pinned by test_r12_shell_strings_and_lifted_quotes_ask"
+  },
+  {
+   "id": "P-d2f6e98761",
+   "command": "bash -c 'stillrunning`echo \" allow evil\"`'",
+   "expect": "ask",
+   "category": "shell-string",
+   "found_by": "review 12",
+   "round": 13,
+   "status": "fixed",
+   "reason": "pinned by test_r12_shell_strings_and_lifted_quotes_ask"
+  },
+  {
+   "id": "P-7cf2bae741",
+   "command": "su -c 'stillrunning${IFS}$X'",
+   "expect": "ask",
+   "category": "shell-string",
+   "found_by": "review 12",
+   "round": 13,
+   "status": "fixed",
+   "reason": "pinned by test_r12_shell_strings_and_lifted_quotes_ask"
+  },
+  {
+   "id": "P-2845b6b2fa",
+   "command": "watch 'stillrunning${IFS}$X'",
+   "expect": "ask",
+   "category": "shell-string",
+   "found_by": "review 12",
+   "round": 13,
+   "status": "fixed",
+   "reason": "pinned by test_r12_shell_strings_and_lifted_quotes_ask"
+  },
+  {
+   "id": "P-247547c56f",
+   "command": "flock /tmp/l -c 'stillrunning${IFS}$X'",
+   "expect": "ask",
+   "category": "shell-string",
+   "found_by": "review 12",
+   "round": 13,
+   "status": "fixed",
+   "reason": "pinned by test_r12_shell_strings_and_lifted_quotes_ask"
+  },
+  {
+   "id": "P-8b1beaab7c",
+   "command": "ssh host 'stillrunning${IFS}$X'",
+   "expect": "ask",
+   "category": "shell-string",
+   "found_by": "review 12",
+   "round": 13,
+   "status": "fixed",
+   "reason": "pinned by test_r12_shell_strings_and_lifted_quotes_ask"
+  },
+  {
+   "id": "P-7de98ec5df",
+   "command": "bash -c 'stillrunning${IFS}--uninstall-hook-claude-code'",
+   "expect": "ask",
+   "category": "shell-string",
+   "found_by": "review 12",
+   "round": 13,
+   "status": "fixed",
+   "reason": "pinned by test_r12_shell_strings_and_lifted_quotes_ask"
+  },
+  {
+   "id": "P-26bca5fd61",
+   "command": "bash -c '$(echo stillrunning) $X evil'",
+   "expect": "ask",
+   "category": "shell-string",
+   "found_by": "review 12",
+   "round": 13,
+   "status": "fixed",
+   "reason": "pinned by test_r12_shell_strings_and_lifted_quotes_ask"
+  },
+  {
+   "id": "P-2b0793e43b",
+   "command": "bash -c '`echo stillrunning` $X evil'",
+   "expect": "ask",
+   "category": "shell-string",
+   "found_by": "review 12",
+   "round": 13,
+   "status": "fixed",
+   "reason": "pinned by test_r12_shell_strings_and_lifted_quotes_ask"
+  },
+  {
+   "id": "P-418e3a990f",
+   "command": "X=--unschedule; chrt 1 stillrunning --token '$(' blocklist $X; echo ')'",
+   "expect": "ask",
+   "category": "wrapper",
+   "found_by": "review 12",
+   "round": 13,
+   "status": "fixed",
+   "reason": "pinned by test_r12_shell_strings_and_lifted_quotes_ask"
+  },
+  {
+   "id": "P-61c4a5ef04",
+   "command": "X=--unschedule; chrt 1 stillrunning --token '`' blocklist $X; echo '`'",
+   "expect": "ask",
+   "category": "wrapper",
+   "found_by": "review 12",
+   "round": 13,
+   "status": "fixed",
+   "reason": "pinned by test_r12_shell_strings_and_lifted_quotes_ask"
+  },
+  {
+   "id": "P-a94ff1240a",
+   "command": "chrt 1 stillrunning --token '$(' $X evil ')'",
+   "expect": "ask",
+   "category": "wrapper",
+   "found_by": "review 12",
+   "round": 13,
+   "status": "fixed",
+   "reason": "pinned by test_r12_shell_strings_and_lifted_quotes_ask"
+  },
+  {
+   "id": "P-686464eb5e",
+   "command": "script -qc'rm -rf ~/.stillrunning' /dev/null",
+   "expect": "ask",
+   "category": "shell-string",
+   "found_by": "review 13",
+   "round": 14,
+   "status": "fixed",
+   "reason": "pinned by test_r13_attached_and_runner_named_shell_strings_ask"
+  },
+  {
+   "id": "P-7f6d754d7b",
+   "command": "script -qc'cp /tmp/x ~/.claude/settings.json' /dev/null",
+   "expect": "ask",
+   "category": "settings-write",
+   "found_by": "review 13",
+   "round": 14,
+   "status": "fixed",
+   "reason": "pinned by test_r13_attached_and_runner_named_shell_strings_ask"
+  },
+  {
+   "id": "P-100469889f",
+   "command": "script -qc'echo {} > ~/.claude/settings.json' /dev/null",
+   "expect": "ask",
+   "category": "settings-write",
+   "found_by": "review 13",
+   "round": 14,
+   "status": "fixed",
+   "reason": "pinned by test_r13_attached_and_runner_named_shell_strings_ask"
+  },
+  {
+   "id": "P-20f47beed9",
+   "command": "script -qc'sed -i s/a/b/ ~/.claude/settings.json' /dev/null",
+   "expect": "ask",
+   "category": "settings-write",
+   "found_by": "review 13",
+   "round": 14,
+   "status": "fixed",
+   "reason": "pinned by test_r13_attached_and_runner_named_shell_strings_ask"
+  },
+  {
+   "id": "P-a72c77bfde",
+   "command": "script -q --command='rm -rf ~/.stillrunning' /dev/null",
+   "expect": "ask",
+   "category": "shell-string",
+   "found_by": "review 13",
+   "round": 14,
+   "status": "fixed",
+   "reason": "pinned by test_r13_attached_and_runner_named_shell_strings_ask"
+  },
+  {
+   "id": "P-ae3b2b324c",
+   "command": "script --command='mv ~/.claude/settings.json /tmp/s' /dev/null",
+   "expect": "ask",
+   "category": "settings-write",
+   "found_by": "review 13",
+   "round": 14,
+   "status": "fixed",
+   "reason": "pinned by test_r13_attached_and_runner_named_shell_strings_ask"
+  },
+  {
+   "id": "P-6e864e76ef",
+   "command": "env -S'rm -rf ~/.stillrunning'",
+   "expect": "ask",
+   "category": "shell-string",
+   "found_by": "review 13",
+   "round": 14,
+   "status": "fixed",
+   "reason": "pinned by test_r13_attached_and_runner_named_shell_strings_ask"
+  },
+  {
+   "id": "P-7d7638ab2c",
+   "command": "env --split-string='rm -rf ~/.stillrunning'",
+   "expect": "ask",
+   "category": "wrapper",
+   "found_by": "review 13",
+   "round": 14,
+   "status": "fixed",
+   "reason": "pinned by test_r13_attached_and_runner_named_shell_strings_ask"
+  },
+  {
+   "id": "P-a041c10dc9",
+   "command": "su -c'stillrunning allow evil'",
+   "expect": "ask",
+   "category": "shell-string",
+   "found_by": "review 13",
+   "round": 14,
+   "status": "fixed",
+   "reason": "pinned by test_r13_attached_and_runner_named_shell_strings_ask"
+  },
+  {
+   "id": "P-c793671ff6",
+   "command": "su --command='stillrunning whitelist add evil'",
+   "expect": "ask",
+   "category": "shell-string",
+   "found_by": "review 13",
+   "round": 14,
+   "status": "fixed",
+   "reason": "pinned by test_r13_attached_and_runner_named_shell_strings_ask"
+  },
+  {
+   "id": "P-3d42e9c1c7",
+   "command": "runuser -u me -c'rm -rf ~/.stillrunning'",
+   "expect": "ask",
+   "category": "quoting",
+   "found_by": "review 13",
+   "round": 14,
+   "status": "fixed",
+   "reason": "pinned by test_r13_attached_and_runner_named_shell_strings_ask"
+  },
+  {
+   "id": "P-935a411c12",
+   "command": "script -q --command='HOME=/tmp/x stillrunning blocklist --schedule' /dev/null",
+   "expect": "ask",
+   "category": "shell-string",
+   "found_by": "review 13",
+   "round": 14,
+   "status": "fixed",
+   "reason": "pinned by test_r13_attached_and_runner_named_shell_strings_ask"
+  },
+  {
+   "id": "P-04dc272072",
+   "command": "script -q --command='stillrunning blocklist --refresh --force' /dev/null",
+   "expect": "ask",
+   "category": "shell-string",
+   "found_by": "review 13",
+   "round": 14,
+   "status": "fixed",
+   "reason": "pinned by test_r13_attached_and_runner_named_shell_strings_ask"
+  },
+  {
+   "id": "P-3fdccc12b3",
+   "command": "bash -c 'rm -rf ~/.stillrunning; ls /bin/sh'",
+   "expect": "ask",
+   "category": "shell-string",
+   "found_by": "review 13",
+   "round": 14,
+   "status": "fixed",
+   "reason": "pinned by test_r13_attached_and_runner_named_shell_strings_ask"
+  },
+  {
+   "id": "P-f23127cc3d",
+   "command": "bash -c 'rm -rf ~/.stillrunning #/sh'",
+   "expect": "ask",
+   "category": "shell-string",
+   "found_by": "review 13",
+   "round": 14,
+   "status": "fixed",
+   "reason": "pinned by test_r13_attached_and_runner_named_shell_strings_ask"
+  },
+  {
+   "id": "P-10bc2ed84a",
+   "command": "bash -c 'cp /tmp/x ~/.claude/settings.json; type /usr/bin/bash'",
+   "expect": "ask",
+   "category": "settings-write",
+   "found_by": "review 13",
+   "round": 14,
+   "status": "fixed",
+   "reason": "pinned by test_r13_attached_and_runner_named_shell_strings_ask"
+  },
+  {
+   "id": "P-935db22cd2",
+   "command": "bash -c 'stillrunning allow evil; : /bin/sh'",
+   "expect": "ask",
+   "category": "shell-string",
+   "found_by": "review 13",
+   "round": 14,
+   "status": "fixed",
+   "reason": "pinned by test_r13_attached_and_runner_named_shell_strings_ask"
+  },
+  {
+   "id": "P-f90af6b582",
+   "command": "bash -c 'stillrunning blocklist --unschedule; : /bin/sh'",
+   "expect": "ask",
+   "category": "shell-string",
+   "found_by": "review 13",
+   "round": 14,
+   "status": "fixed",
+   "reason": "pinned by test_r13_attached_and_runner_named_shell_strings_ask"
+  },
+  {
+   "id": "P-c39c8ff15e",
+   "command": "bash -c 'HOME=/tmp/x stillrunning blocklist --schedule; : /bin/sh'",
+   "expect": "ask",
+   "category": "shell-string",
+   "found_by": "review 13",
+   "round": 14,
+   "status": "fixed",
+   "reason": "pinned by test_r13_attached_and_runner_named_shell_strings_ask"
+  },
+  {
+   "id": "P-d6e616215c",
+   "command": "coproc S { script -qfec'stillrunning blocklist --unschedule' /dev/null; }; read -t5 -u ${S[0]} l; echo ${l: -4} >&${S[1]}",
+   "expect": "ask",
+   "category": "terminal-code",
+   "found_by": "review 13",
+   "round": 14,
+   "status": "fixed",
+   "reason": "pinned by test_r13_attached_and_runner_named_shell_strings_ask"
+  },
+  {
+   "id": "P-7052503fcb",
+   "command": "script -qf --command='stillrunning blocklist --unschedule' /dev/null",
+   "expect": "ask",
+   "category": "terminal-code",
+   "found_by": "review 13",
+   "round": 14,
+   "status": "fixed",
+   "reason": "pinned by test_r13_attached_and_runner_named_shell_strings_ask"
+  },
+  {
+   "id": "P-0ae438618c",
+   "command": "script -qfc'stillrunning blocklist --unschedule; : /bin/sh' /tmp/t",
+   "expect": "ask",
+   "category": "terminal-code",
+   "found_by": "review 13",
+   "round": 14,
+   "status": "fixed",
+   "reason": "pinned by test_r13_attached_and_runner_named_shell_strings_ask"
+  },
+  {
+   "id": "P-95ade67bec",
+   "command": "bash -c \"bash -c \\\"bash -c 'bash -c stillrunning\\ allow\\ evil'\\\"\"",
+   "expect": "ask",
+   "category": "shell-string",
+   "found_by": "review 13",
+   "round": 14,
+   "status": "fixed",
+   "reason": "pinned by test_r13_attached_and_runner_named_shell_strings_ask"
+  },
+  {
+   "id": "P-0703d5c7b0",
+   "command": "bash -c \"bash -c \\\"bash -c 'bash -c rm\\ -rf\\ ~/.stillrunning'\\\"\"",
+   "expect": "ask",
+   "category": "shell-string",
+   "found_by": "review 13",
+   "round": 14,
+   "status": "fixed",
+   "reason": "pinned by test_r13_attached_and_runner_named_shell_strings_ask"
+  },
+  {
+   "id": "P-ae1b59effe",
+   "command": "sh -c \"sh -c \\\"sh -c 'sh -c stillrunning\\ blocklist\\ --unschedule'\\\"\"",
+   "expect": "ask",
+   "category": "shell-string",
+   "found_by": "review 13",
+   "round": 14,
+   "status": "fixed",
+   "reason": "pinned by test_r13_attached_and_runner_named_shell_strings_ask"
+  },
+  {
+   "id": "P-e90ecf2dc9",
+   "command": "bash -c 'stillrunning\tblocklist\t--unschedule'",
+   "expect": "ask",
+   "category": "shell-string",
+   "found_by": "review 13",
+   "round": 14,
+   "status": "fixed",
+   "reason": "pinned by test_r13_round_12_cases_still_ask"
+  },
+  {
+   "id": "P-aa8016019a",
+   "command": "xargs -I{} sh -c 'stillrunning {}' < f",
+   "expect": "ask",
+   "category": "shell-string",
+   "found_by": "review 13",
+   "round": 14,
+   "status": "fixed",
+   "reason": "pinned by test_r13_round_12_cases_still_ask"
+  },
+  {
+   "id": "P-746b6a76d9",
+   "command": "sort -o $HOME/.claude/settings.json $HOME/.claude/settings.json",
+   "expect": "ask",
+   "category": "settings-write",
+   "found_by": "review 12",
+   "round": 12,
+   "status": "open",
+   "reason": "§5 priority"
+  },
+  {
+   "id": "P-94a37800a7",
+   "command": "sort -o ~/.claude/setting?.json x",
+   "expect": "ask",
+   "category": "settings-write",
+   "found_by": "review 12",
+   "round": 12,
+   "status": "open",
+   "reason": "§5"
+  },
+  {
+   "id": "P-1e17e16c3a",
+   "command": "uniq -f 1 /tmp/x ~/.claude/settings.json",
+   "expect": "ask",
+   "category": "settings-write",
+   "found_by": "PR #9 review",
+   "round": 13,
+   "status": "open",
+   "reason": "A"
+  },
+  {
+   "id": "P-705b68eb51",
+   "command": "xxd -r -s 0 /tmp/x ~/.claude/settings.json",
+   "expect": "ask",
+   "category": "settings-write",
+   "found_by": "PR #9 review",
+   "round": 13,
+   "status": "open",
+   "reason": "A"
+  },
+  {
+   "id": "P-e108c960ec",
+   "command": "tree -ao ~/.claude/settings.json /tmp",
+   "expect": "ask",
+   "category": "settings-write",
+   "found_by": "PR #9 review",
+   "round": 13,
+   "status": "open",
+   "reason": "B"
+  },
+  {
+   "id": "P-1fc869ecf3",
+   "command": "yq --in-place . ~/.claude/settings.json",
+   "expect": "ask",
+   "category": "settings-write",
+   "found_by": "PR #9 review",
+   "round": 13,
+   "status": "open",
+   "reason": "C"
+  },
+  {
+   "id": "P-7a608867b7",
+   "command": "find ~/.claude -name settings.json -exec yq -i .a=1 {} \\;",
+   "expect": "ask",
+   "category": "settings-write",
+   "found_by": "PR #9 review",
+   "round": 13,
+   "status": "open",
+   "reason": "D"
+  },
+  {
+   "id": "P-d3f0fbc5ea",
+   "command": "find /etc/hostname -exec sort -o ~/.claude/settings.json {} \\;",
+   "expect": "ask",
+   "category": "settings-write",
+   "found_by": "PR #9 review",
+   "round": 13,
+   "status": "open",
+   "reason": "D"
+  },
+  {
+   "id": "P-319a3d8794",
+   "command": "echo ~/.claude/settings.json | xargs yq -i .a=1",
+   "expect": "ask",
+   "category": "settings-write",
+   "found_by": "PR #9 review",
+   "round": 13,
+   "status": "open",
+   "reason": "E"
+  },
+  {
+   "id": "P-8e3a6448c7",
+   "command": "cp -t ~/.claude /tmp/settings.json",
+   "expect": "ask",
+   "category": "settings-write",
+   "found_by": "PR #9 review",
+   "round": 13,
+   "status": "open",
+   "reason": "F"
+  },
+  {
+   "id": "P-778be5f7d8",
+   "command": "echo {} 1<> ~/.claude/settings.json",
+   "expect": "ask",
+   "category": "settings-write",
+   "found_by": "PR #9 review",
+   "round": 13,
+   "status": "open",
+   "reason": "G"
+  },
+  {
+   "id": "P-6cee7eaf46",
+   "command": "sed 's/a/b/w ~/.claude/settings.json' /tmp/x",
+   "expect": "ask",
+   "category": "settings-write",
+   "found_by": "PR #9 review",
+   "round": 13,
+   "status": "open",
+   "reason": "H"
+  },
+  {
+   "id": "P-4444d1ef2e",
+   "command": "git diff --output ~/.claude/settings.json",
+   "expect": "ask",
+   "category": "settings-write",
+   "found_by": "PR #9 review",
+   "round": 13,
+   "status": "open",
+   "reason": "I"
+  },
+  {
+   "id": "P-6dc682e30c",
+   "command": "git config -f ~/.claude/settings.json a.b c",
+   "expect": "ask",
+   "category": "settings-write",
+   "found_by": "PR #9 review",
+   "round": 13,
+   "status": "open",
+   "reason": "I"
+  },
+  {
+   "id": "P-7646c85320",
+   "command": "pgrep -f stillrunning | xargs kill",
+   "expect": "ask",
+   "category": "kill-guard",
+   "found_by": "review 10 incident",
+   "round": 10,
+   "status": "open",
+   "reason": "kill own processes"
+  },
+  {
+   "id": "P-46fe51c8ef",
+   "command": "pkill -f stillrunning_guard",
+   "expect": "ask",
+   "category": "kill-guard",
+   "found_by": "review 10 incident",
+   "round": 10,
+   "status": "open",
+   "reason": "kill own processes"
+  },
+  {
+   "id": "P-803809ef16",
+   "command": "echo 'stillrunning allow evil' | sh",
+   "expect": "ask",
+   "category": "shell-string",
+   "found_by": "review 10",
+   "round": 10,
+   "status": "open",
+   "reason": "§5: text piped to a shell"
+  },
+  {
+   "id": "P-ed3cee32a6",
+   "command": "su <<<'stillrunning allow evil'",
+   "expect": "ask",
+   "category": "here-string",
+   "found_by": "review 11",
+   "round": 11,
+   "status": "open",
+   "reason": "§5: shell not recognised"
+  },
+  {
+   "id": "P-2f6157cdcf",
+   "command": "sudo -s <<<'stillrunning allow evil'",
+   "expect": "ask",
+   "category": "here-string",
+   "found_by": "review 11",
+   "round": 11,
+   "status": "open",
+   "reason": "§5"
+  },
+  {
+   "id": "P-6d2fdd1d86",
+   "command": "ssh -o ProxyCommand='stillrunning allow evil' host",
+   "expect": "ask",
+   "category": "shell-string",
+   "found_by": "review 13",
+   "round": 13,
+   "status": "open",
+   "reason": "§5"
+  },
+  {
+   "id": "P-16f657cffa",
+   "command": "crontab -r",
+   "expect": "ask",
+   "category": "crontab",
+   "found_by": "review 9",
+   "round": 9,
+   "status": "open",
+   "reason": "§5: crontab edited directly"
+  },
+  {
+   "id": "P-f07bf2ec63",
+   "command": "eval 'stillrunning allow evil'",
+   "expect": "ask",
+   "category": "indirect",
+   "found_by": "CHANGELOG",
+   "round": 0,
+   "status": "known-limit",
+   "reason": "eval is indirect execution"
+  },
+  {
+   "id": "P-b840aa9c91",
+   "command": "chrt 1 \"stillrunning\" $X evil",
+   "expect": "ask",
+   "category": "quoting",
+   "found_by": "review 10",
+   "round": 10,
+   "status": "known-limit",
+   "reason": "program word in quotes behind an unknown wrapper"
+  },
+  {
+   "id": "P-1ac5a70f0a",
+   "command": "S=stillrunnin; ${S}g $X",
+   "expect": "ask",
+   "category": "run-time-word",
+   "found_by": "CHANGELOG",
+   "round": 0,
+   "status": "known-limit",
+   "reason": "word never spelled"
+  },
+  {
+   "id": "P-77a2923ac3",
+   "command": "export sr=stillrunning; $sr $X evil",
+   "expect": "ask",
+   "category": "run-time-word",
+   "found_by": "review 10",
+   "round": 10,
+   "status": "known-limit",
+   "reason": "export assignment"
+  },
+  {
+   "id": "P-ae4c9e9c0a",
+   "command": "find /x -name allow -exec stillrunning {} evil \\;",
+   "expect": "ask",
+   "category": "launcher",
+   "found_by": "review 7",
+   "round": 7,
+   "status": "known-limit",
+   "reason": "words supplied by find -exec (follow-up PR)"
+  },
+  {
+   "id": "P-5d7dd305e9",
+   "command": "stillrunning --allow=evil",
+   "expect": "ask",
+   "category": "prefix",
+   "found_by": "review 7",
+   "round": 7,
+   "status": "known-limit",
+   "reason": "top-level = form (follow-up PR)"
+  }
+ ]
+}
