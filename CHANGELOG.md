@@ -186,9 +186,15 @@ including known-malicious ones, instead of blocking them.
   xargs nohup`, `… | sh`: `echo` is on the allow-list);
   words that `find -exec`/`-execdir`/`-ok` supplies (`find /x -name allow
   -exec stillrunning {} evil \;`); and top-level switches spelled as argparse prefixes or
-  with `=` (`--al x`, `--allow=x`); and words that runners other than ssh join
-  into one line (`tmux`, `su -c` with extra words: not confirmed to run them).
+  with `=` (`--al x`, `--allow=x`); abbreviated long options of a runner
+  (`env --split-str='…'`); words that runners other than ssh join into one line
+  (`autossh`, `tmux`, `su -c` with extra words: not confirmed to run them);
+  positional words reached without `$0`…`$9`, `$@` or `$*` (`for w; do …`,
+  `${!#}`, a top-level `set -- stillrunning blocklist; "$@" --unschedule`).
   `find -exec` and the top-level prefixes are planned for the next pull request.
+  A shell command whose option words are thousands of characters long can take
+  longer than the hook's 25-second limit and is then blocked (on Windows, where
+  there is no such alarm, Claude Code's `onFailure` setting decides).
 - A shell string that refers to `$0`…`$9`, `$@` or `$*` while words follow it
   is judged together with those words (`bash -c '$0 $1 --unschedule'
   stillrunning blocklist` and `bash -c 'HOME=/tmp/x $0 $1 --schedule'
