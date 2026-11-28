@@ -19,23 +19,45 @@ change nothing that is checked or blocked.
 ### Writes to Claude Code's settings through "read-only" programs ask (2026-11-28)
 
 - The hook asks before a command writes `~/.claude/settings.json`,
-  `~/.claude/settings.local.json` or a project's `.claude/settings*.json`
-  through a program on its read-only list that writes a file anyway:
-  `sort -o F` / `-oF` / `-uo F` / `--output[=]F` (and its prefixes such as
-  `--outp=F`), `uniq IN OUT`, `xxd [-r] IN OUT`, `tree -o F`, and
-  `find -fprint/-fprint0/-fprintf/-fls F`; `yq -i` / `--inplace` and
-  `find -delete` / `-exec` / `-execdir` / `-ok` count as changing the files they
-  are given. Before, `sort -o $HOME/.claude/settings.json $HOME/.claude/settings.json`
+  `~/.claude/settings.local.json` or a project's `.claude/settings*.json` (and
+  stillrunning's own state and code) in these ways, which it allowed before:
+  - programs on its read-only list that write a file anyway: `sort -o F` / `-oF`
+    / `-uo F` / `--output[=]F` (and prefixes such as `--outp=F`); `uniq IN OUT`
+    and `xxd [-r] IN OUT`, with the values of their options skipped
+    (`uniq -f 1 IN OUT`, `xxd -c 16 IN OUT`); `tree -o F`, also inside a cluster
+    (`tree -ao F`); `find -fprint/-fprint0/-fprintf/-fls F`;
+  - programs that edit the files they are given: `yq -i`, `yq --inplace`,
+    `yq --in-place`; `find -delete`;
+  - `find -exec`/`-execdir`/`-ok`/`-okdir` running a program that writes:
+    any program not on the read-only list, or a read-only one given a write
+    (`-exec yq -i {} \;`, `-exec sort -o F {} \;`, `-exec uniq {} F \;`);
+  - `xargs` handing names to a read-only program that writes (`… | xargs yq -i`);
+  - `cp -t DIR` / `install -t DIR` / `--target-directory DIR` into a protected
+    folder (the other operands are only read);
+  - read-write redirections on an output descriptor: `1<> F`, `exec 3<> F`;
+  - sed's `w F` / `W F` commands and the `s///w F` flag, in the script given
+    as the first operand or with `-e`;
+  - git writing a file it is told to: `git diff --output F`, `git show --output F`,
+    `git archive -o F`, `git config -f F` / `--file F`.
+- Before, `sort -o $HOME/.claude/settings.json $HOME/.claude/settings.json`
   rewrote the file that switches the hook on without asking. Every spelling of
   the path the hook already resolved counts (`~`, `$HOME`, `${HOME}`, globs
-  such as `setting?.json` or `s*.json`, brace lists, `cd ~/.claude && … settings.json`,
-  `bash -c '…'`), and a path behind an unknown variable now also counts when its
-  last part could be a settings file (`$D/.claude/s*.json`, `$D/.claude/$F`).
-  Reading stays allowed: `cat`, `jq .`, `grep`, `sort` / `uniq` / `xxd` without
-  an output there, `sort -o /tmp/out ~/.claude/settings.json`.
-- Redirects (`>`, `>>`, `1>`, `exec 3>`), `tee`, `sed -i`, `perl -pi`, `cp`,
-  `mv`, `install`, `dd of=`, `rm`, `ln`, `curl -o`, `wget -O` and inline
-  Python that writes the file already asked; tests now pin them.
+  such as `setting?.json` or `s*.json`, brace lists inside one path part,
+  `cd ~/.claude && … settings.json`, `bash -c '…'`), and a path behind an
+  unknown variable counts when its last part could be a settings file
+  (`$D/.claude/s*.json`, `$D/.claude/$F`).
+- Reading stays allowed: `cat`, `jq .`, `grep`, `sed -n p`, `uniq -f 1 F`,
+  `xxd -l 64 F`, `yq -o json . F`, `sort -o /tmp/out F`, `cp F /tmp/backup`,
+  `find … -exec grep {} \;`.
+- Redirects (`>`, `>>`, `1>`, `exec 3>`), `tee`, `sed -i`, `perl -pi`, plain
+  `cp` and `mv`, `install`, `dd of=`, `rm`, `ln`, `curl -o`, `wget -O` and
+  inline Python that writes the file already asked; tests now pin them.
+- Known limits, still allowed: text piped or here-stringed into a shell or
+  interpreter (`echo 'rm F' | bash`, `bash <<< 'rm F'`, `python3 <<< "…"`); an
+  awk program that builds the path (`print > ENVIRON["HOME"] "/.claude/…"`);
+  braces that span a `/` (`tee ~/{.claude/settings.json,x}`); a glob in a
+  folder behind an unknown variable (`$D/.cl*/settings.json`); `less -o` (it
+  writes the log only to a terminal).
 
 ### Setup never ends silently unprotected (setup fuzz, 2026-11-24)
 

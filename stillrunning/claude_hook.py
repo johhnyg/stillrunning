@@ -125,11 +125,37 @@ _FILE_WRITERS = _DESTRUCTIVE | {"cp", "tee", "sed", "perl", "dd", "ln", "install
 _LAST_ARG_WRITERS = {"cp", "scp", "rsync", "install", "ln"}
 
 
+# Options of the read-only programs that take the next word as their value
+_UNIQ_VALUE = {"-f", "-s", "-w", "--skip-fields", "--skip-chars", "--check-chars"}
+_XXD_VALUE = {"-c", "-g", "-l", "-s", "-o", "-n", "-cols", "-len", "-seek", "-groupsize",
+              "-octets", "-name", "-C"}
+_TREE_VALUE = set("LPIHT")      # tree's options with a value; -o is the output file
+_EXEC_END = {";", "\\;", "+"}
+
+
+def _operands(args, takes_value):
+    """The operands of a command, skipping options and the values they take."""
+    out, at = [], 0
+    while at < len(args):
+        arg = args[at]
+        if arg == "--":
+            out += args[at + 1:]
+            break
+        if arg.startswith("-") and arg != "-":
+            if arg in takes_value:
+                at += 1                     # `uniq -f 1 IN OUT`: 1 is not IN
+        else:
+            out.append(arg)
+        at += 1
+    return out
+
+
 def _read_only_outputs(program, args):
     """Files a program on the read-only list writes anyway, given an output
     option or operand (`sort -o F`, `uniq IN OUT`, `xxd -r IN OUT`, `tree -o F`,
     `find -fprint F`), and whether it edits or deletes the files it is given
-    (`yq -i`, `find -delete`, `find -exec`). → (written files, not read-only)."""
+    (`yq -i`, `find -delete`, `find -exec` with a program that writes).
+    → (written files, edits its operands)."""
     written, edits = [], False
     if program == "sort":
         at = 0
@@ -148,27 +174,61 @@ def _read_only_outputs(program, args):
             elif re.match(r"^-[A-Za-z]*[ktST]$", arg):
                 at += 1                     # -k 2, -t o, -S 1G, -T dir: the value is not -o
             at += 1
-    elif program in ("tree",):
-        for at, arg in enumerate(args):
-            if arg == "-o" and at + 1 < len(args):
-                written.append(args[at + 1])
+    elif program == "tree":
+        at = 0
+        while at < len(args):
+            arg = args[at]
+            if re.match(r"^-[A-Za-z]+$", arg) and not arg.startswith("--"):
+                # getopt-style cluster: each letter that takes a value takes the next
+                # word in turn (`tree -ao F`, `tree -oJ F`, `tree -Lo 2 F`)
+                taken = at
+                for letter in arg[1:]:
+                    if letter == "o" or letter in _TREE_VALUE:
+                        taken += 1
+                        if letter == "o" and taken < len(args):
+                            written.append(args[taken])
+                at = taken
             elif arg.startswith("-o") and len(arg) > 2:
                 written.append(arg[2:])
+            at += 1
     elif program in ("uniq", "xxd"):
-        operands = [a for a in args if not a.startswith("-") or a == "-"]
+        operands = _operands(args, _UNIQ_VALUE if program == "uniq" else _XXD_VALUE)
         written += operands[1:2]            # uniq [IN [OUT]], xxd [IN [OUT]]
     elif program == "yq":
-        edits = any(re.match(r"^-[A-Za-z]*i|^--inplace", a) for a in args)
+        for arg in args:
+            if arg in ("--inplace", "--in-place") or arg.startswith(("--inplace=", "--in-place=")):
+                edits = True
+            elif re.match(r"^-[A-Za-z]+$", arg):
+                before = arg[1:].split("i", 1)[0]
+                # `-i`, `-Pi`, but not `-oini` (-o takes "ini") or `-pi` (-p takes "i")
+                if "i" in arg[1:] and not set(before) & set("opI"):
+                    edits = True
     elif program == "find":
-        for at, arg in enumerate(args):
+        at = 0
+        while at < len(args):
+            arg = args[at]
             if arg in ("-fprint", "-fprint0", "-fprintf", "-fls") and at + 1 < len(args):
                 written.append(args[at + 1])
             elif arg == "-delete":
                 edits = True
             elif arg in ("-exec", "-execdir", "-ok", "-okdir"):
-                ran = _prog_name(args[at + 1]) if at + 1 < len(args) else ""
-                edits = edits or ran not in _READ_ONLY      # `-exec grep -l foo {} \;` only reads
+                end = at + 1
+                while end < len(args) and args[end] not in _EXEC_END:
+                    end += 1
+                sub = args[at + 1:end]
+                ran = _prog_name(sub[0]) if sub else ""
+                if ran not in _READ_ONLY:
+                    edits = True
+                else:
+                    # a read-only program that writes (`-exec sort -o F {} \;`, `-exec yq -i {} +`)
+                    out, sub_edits = _read_only_outputs(ran, sub[1:])
+                    written += [w for w in out if "{}" not in w]
+                    edits = edits or sub_edits or any("{}" in w for w in out)
+                at = end
+            at += 1
     return [w for w in written if w], edits
+
+
 _CODE_RUNNERS = re.compile(r"^(python|pypy)[\d.]*$|^(py|perl|ruby|node|nodejs|php|lua|deno|bun|awk|gawk)$")
 
 
@@ -619,7 +679,11 @@ def _stdin_writer(cmd):
                 return True
     if any(_prog_name(w) in ("xargs", "parallel") for w in cmd[:4]):
         start = _program_index(cmd)
-        return start >= len(cmd) or _prog_name(cmd[start]) not in _READ_ONLY
+        if start >= len(cmd) or _prog_name(cmd[start]) not in _READ_ONLY:
+            return True
+        # `… | xargs yq -i`, `… | xargs sort -o`: a read-only program that writes
+        out, edits = _read_only_outputs(_prog_name(cmd[start]), list(cmd[start + 1:]))
+        return edits or bool(out)
     return False
 
 
@@ -753,8 +817,58 @@ def _paths_touch_protection(command, cwds, depth):
                 if (" " in arg or "(" in arg) and _code_touches(arg, cwds):
                     return True
         plain = [a for a in args if not a.startswith("-")]
+        # `cp -t DIR SRC…`, `install -t DIR …`: DIR is written to
+        target_dirs = []
+        if program in ("cp", "install"):     # (rsync's and scp's -t are other options)
+            for at, arg in enumerate(args):
+                if re.match(r"^-[A-Za-z]*t$", arg) and at + 1 < len(args):
+                    target_dirs.append(args[at + 1])
+                elif re.match(r"^-[A-Za-z]*t.", arg) and not arg.startswith("--"):
+                    target_dirs.append(arg[arg.index("t") + 1:])
+                elif arg.startswith("--target-directory"):
+                    target_dirs.append(arg.split("=", 1)[1] if "=" in arg else
+                                       (args[at + 1] if at + 1 < len(args) else ""))
+        targets_named = bool(target_dirs)
+        for folder in target_dirs:
+            if _path_kinds(folder, cwds) & {"state", "settings", "claude_dir", "pkg"}:
+                return True
+        # H: sed's `w FILE` / `W FILE` command and `s///w FILE` flag write FILE
+        if program == "sed":
+            scripts, at, named = [], 0, False
+            while at < len(args):
+                arg = args[at]
+                if (arg == "--expression" or re.match(r"^-[A-Za-z]*e$", arg)) and at + 1 < len(args):
+                    scripts.append(args[at + 1])
+                    named, at = True, at + 1
+                elif arg.startswith("--expression="):
+                    scripts.append(arg.split("=", 1)[1])
+                    named = True
+                elif re.match(r"^-[A-Za-z]*e.", arg) and not arg.startswith("--"):
+                    scripts.append(arg[arg.index("e") + 1:])
+                    named = True
+                elif arg in ("-f", "--file"):
+                    named, at = True, at + 1
+                at += 1
+            if not named:
+                scripts += [a for a in args if not a.startswith("-")][:1]
+            for script in scripts:
+                for found in re.finditer(r"[wW]\s*([^\s;}]+)", script):
+                    if _path_kinds(found.group(1), cwds) & {"state", "settings", "claude_dir", "pkg"}:
+                        return True
         if program == "git":
             verbs = [a for a in plain[:4] if a in _GIT_FILE_REWRITES]
+            outputs = []
+            for at, arg in enumerate(args):
+                if re.match(r"^--output(=|$)", arg) or arg in ("-o", "-f", "--file") or \
+                        arg.startswith("--file="):
+                    value = arg.split("=", 1)[1] if "=" in arg else (args[at + 1] if at + 1 < len(args) else "")
+                    outputs.append(value)
+                elif re.match(r"^-o.", arg):
+                    outputs.append(arg[2:])
+            # `git diff --output F`, `git archive -o F`, `git config -f F …` (-f is a path
+            # only for config, and for others a force flag: harmless to check as a path)
+            if any(_path_kinds(o, cwds) & {"state", "settings", "claude_dir", "pkg"} for o in outputs):
+                return True
             if not verbs:
                 continue        # add / status / diff / log / commit: the file itself is not written
             verb = verbs[0]
@@ -817,8 +931,12 @@ def _paths_touch_protection(command, cwds, depth):
             if not kinds:
                 continue
             # (`ln` is not exempt: a link to a protected place is a way to write through it)
-            source_only = (program in _LAST_ARG_WRITERS and program != "ln" and len(plain) > 1
-                           and word != plain[-1] and not forced)
+            if targets_named:
+                # `cp -t DIR SRC…`: every operand but DIR (checked above) is only read
+                source_only = program != "ln" and word not in target_dirs and not forced
+            else:
+                source_only = (program in _LAST_ARG_WRITERS and program != "ln" and len(plain) > 1
+                               and word != plain[-1] and not forced)
             if kinds & {"state", "settings", "claude_dir"} and not (read_only and not forced) \
                     and not source_only:
                 return True
@@ -1838,9 +1956,14 @@ def _simple_commands(tokens):
         if _is_op(token) and ("<" in token or ">" in token) and not set(token) & set(";()\n"):
             # A redirection (2>&1, >file, 2>/dev/null, &>, <file, <<<word) belongs
             # to the command: it is not a package and does not end the command.
+            fd = None
             if current and current[-1].isdigit():
-                current.pop()                # the file-descriptor number before it
-            if token == "<<<":
+                fd = current.pop()           # the file-descriptor number before it
+            if token == "<>":
+                # opened for reading and writing; on fd 1, 2 or one `exec` keeps open it is
+                # written (`echo {} 1<> F`, `exec 3<> F`)
+                pending = "read" if fd in (None, "0") else "write"
+            elif token == "<<<":
                 pending = "here"
             elif token.startswith("<<"):
                 pending, current.has_heredoc = "heredoc", True
