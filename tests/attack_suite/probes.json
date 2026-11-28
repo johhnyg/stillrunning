@@ -1432,46 +1432,6 @@
    "reason": "pinned by test_r9_a_run_time_word_with_stillrunning_asks_unless_read_only"
   },
   {
-   "id": "P-81dae43bfa",
-   "command": "pip download stillrunning -d $TMP",
-   "expect": "ask",
-   "category": "run-time-word",
-   "found_by": "review 9",
-   "round": 10,
-   "status": "fixed",
-   "reason": "pinned by test_r9_a_run_time_word_with_stillrunning_asks_unless_read_only"
-  },
-  {
-   "id": "P-b4bd40e575",
-   "command": "docker run --name stillrunning img $CMD",
-   "expect": "ask",
-   "category": "run-time-word",
-   "found_by": "review 9",
-   "round": 10,
-   "status": "fixed",
-   "reason": "pinned by test_r9_a_run_time_word_with_stillrunning_asks_unless_read_only"
-  },
-  {
-   "id": "P-bd27c15a9a",
-   "command": "python3 script.py stillrunning $X",
-   "expect": "ask",
-   "category": "shell-string",
-   "found_by": "review 9",
-   "round": 10,
-   "status": "fixed",
-   "reason": "pinned by test_r9_a_run_time_word_with_stillrunning_asks_unless_read_only"
-  },
-  {
-   "id": "P-99a49ba058",
-   "command": "uv run grep stillrunning $X",
-   "expect": "ask",
-   "category": "launcher",
-   "found_by": "review 9",
-   "round": 10,
-   "status": "fixed",
-   "reason": "pinned by test_r9_a_run_time_word_with_stillrunning_asks_unless_read_only"
-  },
-  {
    "id": "P-49347a3d25",
    "command": "find . -name stillrunning -exec rm {} $X",
    "expect": "ask",
@@ -2007,19 +1967,59 @@
    "expect": "ask",
    "category": "shell-string",
    "found_by": "review 13",
-   "round": 13,
-   "status": "open",
-   "reason": "F1: value attached to -c"
+   "round": 14,
+   "status": "fixed",
+   "reason": "pinned by test_r13_attached_and_runner_named_shell_strings_ask"
+  },
+  {
+   "id": "P-7f6d754d7b",
+   "command": "script -qc'cp /tmp/x ~/.claude/settings.json' /dev/null",
+   "expect": "ask",
+   "category": "settings-write",
+   "found_by": "review 13",
+   "round": 14,
+   "status": "fixed",
+   "reason": "pinned by test_r13_attached_and_runner_named_shell_strings_ask"
+  },
+  {
+   "id": "P-100469889f",
+   "command": "script -qc'echo {} > ~/.claude/settings.json' /dev/null",
+   "expect": "ask",
+   "category": "settings-write",
+   "found_by": "review 13",
+   "round": 14,
+   "status": "fixed",
+   "reason": "pinned by test_r13_attached_and_runner_named_shell_strings_ask"
+  },
+  {
+   "id": "P-20f47beed9",
+   "command": "script -qc'sed -i s/a/b/ ~/.claude/settings.json' /dev/null",
+   "expect": "ask",
+   "category": "settings-write",
+   "found_by": "review 13",
+   "round": 14,
+   "status": "fixed",
+   "reason": "pinned by test_r13_attached_and_runner_named_shell_strings_ask"
+  },
+  {
+   "id": "P-a72c77bfde",
+   "command": "script -q --command='rm -rf ~/.stillrunning' /dev/null",
+   "expect": "ask",
+   "category": "shell-string",
+   "found_by": "review 13",
+   "round": 14,
+   "status": "fixed",
+   "reason": "pinned by test_r13_attached_and_runner_named_shell_strings_ask"
   },
   {
    "id": "P-ae3b2b324c",
    "command": "script --command='mv ~/.claude/settings.json /tmp/s' /dev/null",
    "expect": "ask",
-   "category": "shell-string",
+   "category": "settings-write",
    "found_by": "review 13",
-   "round": 13,
-   "status": "open",
-   "reason": "F1: --command="
+   "round": 14,
+   "status": "fixed",
+   "reason": "pinned by test_r13_attached_and_runner_named_shell_strings_ask"
   },
   {
    "id": "P-6e864e76ef",
@@ -2027,69 +2027,19 @@
    "expect": "ask",
    "category": "shell-string",
    "found_by": "review 13",
-   "round": 13,
-   "status": "open",
-   "reason": "F1: env -S attached"
+   "round": 14,
+   "status": "fixed",
+   "reason": "pinned by test_r13_attached_and_runner_named_shell_strings_ask"
   },
   {
-   "id": "P-3fdccc12b3",
-   "command": "bash -c 'rm -rf ~/.stillrunning; ls /bin/sh'",
+   "id": "P-7d7638ab2c",
+   "command": "env --split-string='rm -rf ~/.stillrunning'",
    "expect": "ask",
-   "category": "shell-string",
+   "category": "wrapper",
    "found_by": "review 13",
-   "round": 13,
-   "status": "open",
-   "reason": "F1: string ending in a runner name"
-  },
-  {
-   "id": "P-935db22cd2",
-   "command": "bash -c 'stillrunning allow evil; : /bin/sh'",
-   "expect": "ask",
-   "category": "shell-string",
-   "found_by": "review 13",
-   "round": 13,
-   "status": "open",
-   "reason": "F1: string ending in a runner name"
-  },
-  {
-   "id": "P-c39c8ff15e",
-   "command": "bash -c 'HOME=/tmp/x stillrunning blocklist --schedule; : /bin/sh'",
-   "expect": "ask",
-   "category": "shell-string",
-   "found_by": "review 13",
-   "round": 13,
-   "status": "open",
-   "reason": "F1"
-  },
-  {
-   "id": "P-d6e616215c",
-   "command": "coproc S { script -qfec'stillrunning blocklist --unschedule' /dev/null; }; read -t5 -u ${S[0]} l; echo ${l: -4} >&${S[1]}",
-   "expect": "ask",
-   "category": "terminal-code",
-   "found_by": "review 13",
-   "round": 13,
-   "status": "open",
-   "reason": "F2: the hook part of the coproc line that passed the terminal code"
-  },
-  {
-   "id": "P-7052503fcb",
-   "command": "script -qf --command='stillrunning blocklist --unschedule' /dev/null",
-   "expect": "ask",
-   "category": "shell-string",
-   "found_by": "review 13",
-   "round": 13,
-   "status": "open",
-   "reason": "F2"
-  },
-  {
-   "id": "P-95ade67bec",
-   "command": "bash -c \"bash -c \\\"bash -c 'bash -c stillrunning\\ allow\\ evil'\\\"\"",
-   "expect": "ask",
-   "category": "shell-string",
-   "found_by": "review 13",
-   "round": 13,
-   "status": "open",
-   "reason": "§5: four shells deep"
+   "round": 14,
+   "status": "fixed",
+   "reason": "pinned by test_r13_attached_and_runner_named_shell_strings_ask"
   },
   {
    "id": "P-a041c10dc9",
@@ -2097,9 +2047,189 @@
    "expect": "ask",
    "category": "shell-string",
    "found_by": "review 13",
-   "round": 13,
-   "status": "open",
-   "reason": "§5: attached su -c"
+   "round": 14,
+   "status": "fixed",
+   "reason": "pinned by test_r13_attached_and_runner_named_shell_strings_ask"
+  },
+  {
+   "id": "P-c793671ff6",
+   "command": "su --command='stillrunning whitelist add evil'",
+   "expect": "ask",
+   "category": "shell-string",
+   "found_by": "review 13",
+   "round": 14,
+   "status": "fixed",
+   "reason": "pinned by test_r13_attached_and_runner_named_shell_strings_ask"
+  },
+  {
+   "id": "P-3d42e9c1c7",
+   "command": "runuser -u me -c'rm -rf ~/.stillrunning'",
+   "expect": "ask",
+   "category": "quoting",
+   "found_by": "review 13",
+   "round": 14,
+   "status": "fixed",
+   "reason": "pinned by test_r13_attached_and_runner_named_shell_strings_ask"
+  },
+  {
+   "id": "P-935a411c12",
+   "command": "script -q --command='HOME=/tmp/x stillrunning blocklist --schedule' /dev/null",
+   "expect": "ask",
+   "category": "shell-string",
+   "found_by": "review 13",
+   "round": 14,
+   "status": "fixed",
+   "reason": "pinned by test_r13_attached_and_runner_named_shell_strings_ask"
+  },
+  {
+   "id": "P-04dc272072",
+   "command": "script -q --command='stillrunning blocklist --refresh --force' /dev/null",
+   "expect": "ask",
+   "category": "shell-string",
+   "found_by": "review 13",
+   "round": 14,
+   "status": "fixed",
+   "reason": "pinned by test_r13_attached_and_runner_named_shell_strings_ask"
+  },
+  {
+   "id": "P-3fdccc12b3",
+   "command": "bash -c 'rm -rf ~/.stillrunning; ls /bin/sh'",
+   "expect": "ask",
+   "category": "shell-string",
+   "found_by": "review 13",
+   "round": 14,
+   "status": "fixed",
+   "reason": "pinned by test_r13_attached_and_runner_named_shell_strings_ask"
+  },
+  {
+   "id": "P-f23127cc3d",
+   "command": "bash -c 'rm -rf ~/.stillrunning #/sh'",
+   "expect": "ask",
+   "category": "shell-string",
+   "found_by": "review 13",
+   "round": 14,
+   "status": "fixed",
+   "reason": "pinned by test_r13_attached_and_runner_named_shell_strings_ask"
+  },
+  {
+   "id": "P-10bc2ed84a",
+   "command": "bash -c 'cp /tmp/x ~/.claude/settings.json; type /usr/bin/bash'",
+   "expect": "ask",
+   "category": "settings-write",
+   "found_by": "review 13",
+   "round": 14,
+   "status": "fixed",
+   "reason": "pinned by test_r13_attached_and_runner_named_shell_strings_ask"
+  },
+  {
+   "id": "P-935db22cd2",
+   "command": "bash -c 'stillrunning allow evil; : /bin/sh'",
+   "expect": "ask",
+   "category": "shell-string",
+   "found_by": "review 13",
+   "round": 14,
+   "status": "fixed",
+   "reason": "pinned by test_r13_attached_and_runner_named_shell_strings_ask"
+  },
+  {
+   "id": "P-f90af6b582",
+   "command": "bash -c 'stillrunning blocklist --unschedule; : /bin/sh'",
+   "expect": "ask",
+   "category": "shell-string",
+   "found_by": "review 13",
+   "round": 14,
+   "status": "fixed",
+   "reason": "pinned by test_r13_attached_and_runner_named_shell_strings_ask"
+  },
+  {
+   "id": "P-c39c8ff15e",
+   "command": "bash -c 'HOME=/tmp/x stillrunning blocklist --schedule; : /bin/sh'",
+   "expect": "ask",
+   "category": "shell-string",
+   "found_by": "review 13",
+   "round": 14,
+   "status": "fixed",
+   "reason": "pinned by test_r13_attached_and_runner_named_shell_strings_ask"
+  },
+  {
+   "id": "P-d6e616215c",
+   "command": "coproc S { script -qfec'stillrunning blocklist --unschedule' /dev/null; }; read -t5 -u ${S[0]} l; echo ${l: -4} >&${S[1]}",
+   "expect": "ask",
+   "category": "terminal-code",
+   "found_by": "review 13",
+   "round": 14,
+   "status": "fixed",
+   "reason": "pinned by test_r13_attached_and_runner_named_shell_strings_ask"
+  },
+  {
+   "id": "P-7052503fcb",
+   "command": "script -qf --command='stillrunning blocklist --unschedule' /dev/null",
+   "expect": "ask",
+   "category": "terminal-code",
+   "found_by": "review 13",
+   "round": 14,
+   "status": "fixed",
+   "reason": "pinned by test_r13_attached_and_runner_named_shell_strings_ask"
+  },
+  {
+   "id": "P-0ae438618c",
+   "command": "script -qfc'stillrunning blocklist --unschedule; : /bin/sh' /tmp/t",
+   "expect": "ask",
+   "category": "terminal-code",
+   "found_by": "review 13",
+   "round": 14,
+   "status": "fixed",
+   "reason": "pinned by test_r13_attached_and_runner_named_shell_strings_ask"
+  },
+  {
+   "id": "P-95ade67bec",
+   "command": "bash -c \"bash -c \\\"bash -c 'bash -c stillrunning\\ allow\\ evil'\\\"\"",
+   "expect": "ask",
+   "category": "shell-string",
+   "found_by": "review 13",
+   "round": 14,
+   "status": "fixed",
+   "reason": "pinned by test_r13_attached_and_runner_named_shell_strings_ask"
+  },
+  {
+   "id": "P-0703d5c7b0",
+   "command": "bash -c \"bash -c \\\"bash -c 'bash -c rm\\ -rf\\ ~/.stillrunning'\\\"\"",
+   "expect": "ask",
+   "category": "shell-string",
+   "found_by": "review 13",
+   "round": 14,
+   "status": "fixed",
+   "reason": "pinned by test_r13_attached_and_runner_named_shell_strings_ask"
+  },
+  {
+   "id": "P-ae1b59effe",
+   "command": "sh -c \"sh -c \\\"sh -c 'sh -c stillrunning\\ blocklist\\ --unschedule'\\\"\"",
+   "expect": "ask",
+   "category": "shell-string",
+   "found_by": "review 13",
+   "round": 14,
+   "status": "fixed",
+   "reason": "pinned by test_r13_attached_and_runner_named_shell_strings_ask"
+  },
+  {
+   "id": "P-e90ecf2dc9",
+   "command": "bash -c 'stillrunning\tblocklist\t--unschedule'",
+   "expect": "ask",
+   "category": "shell-string",
+   "found_by": "review 13",
+   "round": 14,
+   "status": "fixed",
+   "reason": "pinned by test_r13_round_12_cases_still_ask"
+  },
+  {
+   "id": "P-aa8016019a",
+   "command": "xargs -I{} sh -c 'stillrunning {}' < f",
+   "expect": "ask",
+   "category": "shell-string",
+   "found_by": "review 13",
+   "round": 14,
+   "status": "fixed",
+   "reason": "pinned by test_r13_round_12_cases_still_ask"
   },
   {
    "id": "P-746b6a76d9",

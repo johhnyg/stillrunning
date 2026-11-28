@@ -513,6 +513,104 @@
    "reason": "pinned by test_r12_controls_still_allow"
   },
   {
+   "id": "C-951f806480",
+   "command": "bash -c 'stillrunning scan .; echo $?'",
+   "kind": "must-allow",
+   "found_by": "review 13",
+   "reason": "pinned by test_r13_shell_strings_without_a_run_time_stillrunning_command_do_not_ask"
+  },
+  {
+   "id": "C-65bf6da2a5",
+   "command": "ssh host 'stillrunning scan . && echo done: $?'",
+   "kind": "must-allow",
+   "found_by": "review 13",
+   "reason": "pinned by test_r13_shell_strings_without_a_run_time_stillrunning_command_do_not_ask"
+  },
+  {
+   "id": "C-c1591ea7a1",
+   "command": "bash -lc 'stillrunning cve --list; echo $SHELL'",
+   "kind": "must-allow",
+   "found_by": "review 13",
+   "reason": "pinned by test_r13_shell_strings_without_a_run_time_stillrunning_command_do_not_ask"
+  },
+  {
+   "id": "C-b5b0d9f8a9",
+   "command": "bash -c 'stillrunning --version; ls ~/*.txt'",
+   "kind": "must-allow",
+   "found_by": "review 13",
+   "reason": "pinned by test_r13_shell_strings_without_a_run_time_stillrunning_command_do_not_ask"
+  },
+  {
+   "id": "C-ecd008a757",
+   "command": "bash -c 'ls *.py; stillrunning scan .'",
+   "kind": "must-allow",
+   "found_by": "review 13",
+   "reason": "pinned by test_r13_shell_strings_without_a_run_time_stillrunning_command_do_not_ask"
+  },
+  {
+   "id": "C-db88266ed8",
+   "command": "ssh host 'cd $HOME/app && stillrunning scan .'",
+   "kind": "must-allow",
+   "found_by": "review 13",
+   "reason": "pinned by test_r13_shell_strings_without_a_run_time_stillrunning_command_do_not_ask"
+  },
+  {
+   "id": "C-33014ed7e9",
+   "command": "watch -n 5 'ls -la ~/.stillrunning/*.db'",
+   "kind": "must-allow",
+   "found_by": "review 13",
+   "reason": "pinned by test_r13_shell_strings_without_a_run_time_stillrunning_command_do_not_ask"
+  },
+  {
+   "id": "C-cf375fd996",
+   "command": "bash -c 'cd ~/stillrunning && python -m pytest tests -k $K'",
+   "kind": "must-allow",
+   "found_by": "review 13",
+   "reason": "pinned by test_r13_shell_strings_without_a_run_time_stillrunning_command_do_not_ask"
+  },
+  {
+   "id": "C-04ac63b4d4",
+   "command": "bash -c 'cd ~/stillrunning-x && make test JOBS=$(nproc)'",
+   "kind": "must-allow",
+   "found_by": "review 13",
+   "reason": "pinned by test_r13_shell_strings_without_a_run_time_stillrunning_command_do_not_ask"
+  },
+  {
+   "id": "C-44715b6184",
+   "command": "bash -c \"awk '{print \\$1}' ~/stillrunning/x.txt\"",
+   "kind": "must-allow",
+   "found_by": "review 13",
+   "reason": "pinned by test_r13_shell_strings_without_a_run_time_stillrunning_command_do_not_ask"
+  },
+  {
+   "id": "C-9c665f9d30",
+   "command": "bash -lc ls",
+   "kind": "must-allow",
+   "found_by": "review 13",
+   "reason": "pinned by test_r13_shell_strings_without_a_run_time_stillrunning_command_do_not_ask"
+  },
+  {
+   "id": "C-9b82273069",
+   "command": "script -q /tmp/log",
+   "kind": "must-allow",
+   "found_by": "review 13",
+   "reason": "pinned by test_r13_shell_strings_without_a_run_time_stillrunning_command_do_not_ask"
+  },
+  {
+   "id": "C-19b8b017d9",
+   "command": "env -i PATH=/bin ls",
+   "kind": "must-allow",
+   "found_by": "review 13",
+   "reason": "pinned by test_r13_shell_strings_without_a_run_time_stillrunning_command_do_not_ask"
+  },
+  {
+   "id": "C-b84b3d1e55",
+   "command": "su -l me",
+   "kind": "must-allow",
+   "found_by": "review 13",
+   "reason": "pinned by test_r13_shell_strings_without_a_run_time_stillrunning_command_do_not_ask"
+  },
+  {
    "id": "C-81dae43bfa",
    "command": "pip download stillrunning -d $TMP",
    "kind": "false-ask-debt",
@@ -669,34 +767,6 @@
   {
    "id": "C-dfccb523c0",
    "command": "awk '{print $(NF)}' ~/stillrunning/x.txt",
-   "kind": "false-ask-debt",
-   "found_by": "CHANGELOG / reviews",
-   "reason": "asks today; should not"
-  },
-  {
-   "id": "C-951f806480",
-   "command": "bash -c 'stillrunning scan .; echo $?'",
-   "kind": "false-ask-debt",
-   "found_by": "CHANGELOG / reviews",
-   "reason": "asks today; should not"
-  },
-  {
-   "id": "C-db88266ed8",
-   "command": "ssh host 'cd $HOME/app && stillrunning scan .'",
-   "kind": "false-ask-debt",
-   "found_by": "CHANGELOG / reviews",
-   "reason": "asks today; should not"
-  },
-  {
-   "id": "C-33014ed7e9",
-   "command": "watch -n 5 'ls -la ~/.stillrunning/*.db'",
-   "kind": "false-ask-debt",
-   "found_by": "CHANGELOG / reviews",
-   "reason": "asks today; should not"
-  },
-  {
-   "id": "C-04ac63b4d4",
-   "command": "bash -c 'cd ~/stillrunning-x && make test JOBS=$(nproc)'",
    "kind": "false-ask-debt",
    "found_by": "CHANGELOG / reviews",
    "reason": "asks today; should not"

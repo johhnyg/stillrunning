@@ -160,7 +160,8 @@ def main():
     probes, controls = from_tests()
     seen, out = set(), []
     for p in probes:
-        if p["command"] in seen:
+        # a documented false ask that a test pins (the fail-closed rule's cost) is debt, not a bypass
+        if p["command"] in seen or p["command"] in DEBT:
             continue
         seen.add(p["command"])
         out.append({"id": stable_id("P", p["command"]), "command": p["command"], "expect": "ask",
