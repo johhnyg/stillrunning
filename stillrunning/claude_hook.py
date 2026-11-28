@@ -977,10 +977,46 @@ def _shell_string_parts(word):
         if not re.search(r"[^A-Za-z0-9_.-]", word):
             return []                       # `-qc`, `-lc`: options only
         letters = re.match(r"^-[A-Za-z0-9]*", word).group(0)
-        return [word[i:] for i in range(2, len(letters) + 1) if word[i:]]
+        # a value attached after any of the first letters, or after the whole cluster
+        # (capped: a cluster of thousands of letters made this quadratic)
+        cuts = list(range(2, min(len(letters), 12) + 1)) + [len(letters)]
+        return [word[i:] for i in sorted(set(cuts)) if word[i:]]
     if word in _STRING_RUNNERS:
         return []
     return [word]
+
+
+_POSITIONAL = re.compile(r"\$\{?[0-9@*]")
+# ssh options that take a value (OpenSSH ssh(1))
+_SSH_VALUE = set("BbcDEeFIiJLlmOoPpQRSWw")
+_SSH_FLAGS = set("46AaCfGgKkMNnqsTtVvXxYy")
+
+
+def _positional_handoff(tokens):
+    """Does a shell string refer to `$0`…`$9`, `$@` or `$*` while words follow it
+    (`bash -c '$0 $1 --unschedule' stillrunning blocklist`)? Then the string and
+    those words are one command, and neither can be judged without the other."""
+    return any(_POSITIONAL.search(word) for word in tokens[:-1])
+
+
+def _ssh_remote_line(tokens):
+    """ssh joins every word after the host into one line for the remote shell
+    (`ssh host stillrunning 'blocklist${IFS}--unschedule'`): that line, or None."""
+    names = [_prog_name(t) for t in tokens]
+    if "ssh" not in names:
+        return None
+    at = names.index("ssh") + 1
+    while at < len(tokens) and tokens[at].startswith("-") and tokens[at] != "-":
+        word = tokens[at]
+        if word == "--":
+            at += 1
+            break
+        # `-p 22`, `-o Opt=x`, `-vp 22`: a cluster of flags ending in a letter that takes a value
+        if word[-1] in _SSH_VALUE and all(ch in _SSH_FLAGS for ch in word[1:-1]):
+            at += 1
+        at += 1
+    rest = tokens[at + 1:]                  # after the host
+    return " ".join(rest) if rest else None
 
 
 def _own_fail_closed(command, inner, commands, depth=0):
@@ -1018,7 +1054,10 @@ def _own_fail_closed(command, inner, commands, depth=0):
         # left to it (`ssh host 'cd $HOME/app && stillrunning scan .'` does not
         # ask; `bash -c 'stillrunning${IFS}…'` asks there). One it does not reach
         # (too deep, a code runner) is read here, `$` in single quotes included.
-        unread = _is_shell_text(words) and not _shell_text_recursed(words, depth)
+        # …unless the string hands over to the words after it (`bash -c '$0 $1 …' stillrunning
+        # blocklist`): judged one by one, neither half is the command that runs
+        unread = _is_shell_text(words) and (not _shell_text_recursed(words, depth)
+                                            or _positional_handoff(words))
         seen = words if unread else expanding[n]
         # (a `$(…)` lifted out of such a string is judged there and as a body of its own,
         # unless what it prints is the word itself: `bash -c '$(echo stillrunning) $X'`;
@@ -1218,6 +1257,9 @@ def _paths_touch_protection(command, cwds, depth):
             # a string with no space still runs (`bash -c 'stillrunning<TAB>…'`,
             # `'{a,b,c}'`, `'a${IFS}b'`), and so does `script -qc'…'` or `env -S'…'`
             parts = [part for word in cmd for part in _shell_string_parts(word)]
+            remote = _ssh_remote_line(cmd)
+            if remote:
+                parts.append(remote)        # ssh runs the words after the host as one line
             if depth >= 3:
                 # too deep to follow: a string that names the protection asks
                 if any(_SELF_PROTECT_TEXT.search(_squash(part)) for part in parts):

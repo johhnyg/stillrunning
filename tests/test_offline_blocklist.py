@@ -1876,3 +1876,59 @@ def test_r13_shell_strings_without_a_run_time_stillrunning_command_do_not_ask(ho
 ])
 def test_r13_round_12_cases_still_ask(home, command):
     assert ch.touches_protection(command, cwd=str(home)), command
+
+
+# ── review 14: words split between a shell string and its positional arguments; ssh joins words ──
+
+R14_ASK = [
+    # 5.1: the string refers to $0…$9 / $@ / $*, and stillrunning's words follow it
+    "bash -c '$0 $1 --unschedule' stillrunning blocklist",
+    "bash -c '$0 blocklist $1' stillrunning --unschedule",
+    "bash -c '$0 $1 --refresh --force' stillrunning blocklist",
+    "bash -c '$0 blocklist --refresh $1' stillrunning --force",
+    "bash -c '$0 $1 --schedule' stillrunning blocklist",
+    "bash -c 'HOME=/tmp/x $0 $1 --schedule' stillrunning blocklist",
+    "bash -c '$0 $1 --uns' stillrunning blocklist",
+    "bash -c '\"$0\" \"$1\" --unschedule' stillrunning blocklist",
+    "sh -c '$0 $1 --unschedule' stillrunning blocklist",
+    "bash -c '\"$@\" --unschedule' stillrunning blocklist",
+    "bash -c '${0} ${1} --unschedule' stillrunning blocklist",
+    "nohup bash -c '$0 $1 --unschedule' stillrunning blocklist",
+    "timeout 5 bash -c '$0 $1 --unschedule' stillrunning blocklist",
+    "coproc S { bash -c 'script -qfec \"$0 $1 --unschedule\" /dev/null' stillrunning blocklist; }; "
+    "read -t5 -u ${S[0]} l; echo ${l: -4} >&${S[1]}",
+    # §6, same mechanism, switches that exist on base
+    "bash -c '$0 $1 add evil' stillrunning whitelist", "bash -c '$0 whitelist $1 evil' stillrunning add",
+    "bash -c '$0 -m $1 allow evil' python3 stillrunning", "bash -c 'rm -rf $0/$1' ~ .stillrunning",
+    # 5.2: ssh joins the words after the host into one remote line
+    "ssh host stillrunning 'blocklist${IFS}--unschedule'", "ssh host stillrunning 'blocklist --uns{c,c}hedule'",
+    "ssh host stillrunning '$X' --unschedule", "ssh host stillrunning 'whitelist${IFS}add${IFS}evil'",
+    "ssh host stillrunning '$(echo allow)' evil", "ssh -p 22 -o BatchMode=yes host stillrunning '$X' --unschedule",
+    "ssh localhost stillrunning blocklist '--unschedule'",
+]
+
+
+@pytest.mark.parametrize("command", R14_ASK)
+def test_r14_positional_and_joined_words_ask(home, command):
+    """IMPORTANT (review 14 5.1/5.2): round 14 judged each word of a shell-text command on its own,
+    losing $0/$1 binding and ssh's joining; `HOME=/tmp/x $0 $1 --schedule` wrote a dead line."""
+    assert ch.touches_protection(command, cwd=str(home)), command
+    assert ch.decide(command, env={})["action"] == "ask", command
+
+
+@pytest.mark.parametrize("command", [
+    # round 14's removed false asks stay removed
+    "bash -c 'stillrunning scan .; echo $?'", "ssh host 'cd $HOME/app && stillrunning scan .'",
+    "bash -c 'echo $1' _ hello", "ssh host uptime", "ssh host 'ls -la'", "ssh -p 2222 host df -h",
+    "bash -c 'stillrunning --version'", "ssh host stillrunning scan .",
+])
+def test_r14_ordinary_shell_strings_still_do_not_ask(home, command):
+    assert not ch.touches_protection(command, cwd=str(home)), command
+
+
+def test_r14_a_long_option_cluster_is_judged_quickly(home):
+    import time as _time
+    command = "bash -c x -" + "a" * 4000 + ","
+    started = _time.monotonic()
+    ch.touches_protection(command, cwd=str(home))
+    assert _time.monotonic() - started < 5

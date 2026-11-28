@@ -83,8 +83,7 @@ including known-malicious ones, instead of blocking them.
   back) all pass. No check made on the machine itself can tell those apart. The
   real guard is the Claude Code hook, which asks a person before an agent runs
   the spellings of these commands it can read (the known limits below list the
-  ones it cannot, such as words split between a shell string and its
-  positional arguments); a script file or a decoded payload that does it is
+  ones it cannot); a script file or a decoded payload that does it is
   indirect execution (below). A `--schedule` the hook does not see can put a
   refresh line built from another HOME in place when none exists yet; the
   offline list then ages, and `stillrunning blocklist --status` shows how old
@@ -187,16 +186,17 @@ including known-malicious ones, instead of blocking them.
   xargs nohup`, `… | sh`: `echo` is on the allow-list);
   words that `find -exec`/`-execdir`/`-ok` supplies (`find /x -name allow
   -exec stillrunning {} evil \;`); and top-level switches spelled as argparse prefixes or
-  with `=` (`--al x`, `--allow=x`); stillrunning's words split between a shell
-  string and the positional arguments after it (`bash -c '$0 $1 --unschedule'
-  stillrunning blocklist`, `bash -c 'HOME=/tmp/x $0 $1 --schedule' stillrunning
-  blocklist`; the words on one side, `bash -c '$0 $1 $2' stillrunning blocklist
-  --unschedule`, do ask); and words a runner joins into one shell line, which
-  are judged one by one (`ssh host stillrunning 'blocklist${IFS}--unschedule'`).
-  `find -exec`, the top-level prefixes, positional arguments and joined words
-  are planned for the next pull request. A very long option cluster in a shell
-  command (thousands of letters with a symbol) can take longer than the hook's
-  25-second limit, and is then blocked.
+  with `=` (`--al x`, `--allow=x`); and words that runners other than ssh join
+  into one line (`tmux`, `su -c` with extra words: not confirmed to run them).
+  `find -exec` and the top-level prefixes are planned for the next pull request.
+- A shell string that refers to `$0`…`$9`, `$@` or `$*` while words follow it
+  is judged together with those words (`bash -c '$0 $1 --unschedule'
+  stillrunning blocklist` and `bash -c 'HOME=/tmp/x $0 $1 --schedule'
+  stillrunning blocklist` ask), and the words ssh sends after the host are
+  judged as the one line the remote shell runs (`ssh host stillrunning
+  'blocklist${IFS}--unschedule'` asks). A shell string with `$1` and words after
+  it that name stillrunning therefore asks even when it only prints them
+  (`bash -c 'echo $1' _ stillrunning`), a false ask.
 - A refresh that fails or is interrupted (Ctrl-C) anywhere between creating
   the key and writing the manifest takes back what it added (its database, a
   key it created, its temporary manifest), so nothing is left that reads as
