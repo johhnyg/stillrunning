@@ -73,13 +73,17 @@ including known-malicious ones, instead of blocking them.
   refresh line that differs from the one it would write. "A person at a
   terminal" means stdin is a terminal **and** a random 4-character code,
   printed on the controlling terminal (`/dev/tty`), is typed back there within
-  two minutes. Piped input (`echo … |`, `printf … |`, `yes |`), no terminal at
-  all, and `script -qc '…' /dev/null` with stdin from `/dev/null` or a pipe all
-  refuse: the code is new each time and only shown on the terminal. Known
-  limit: a program that drives a pseudo-terminal and reads its screen
-  (`expect`, Python's `pty` module) can read the code and type it back; the
-  hook asks for the direct spellings of these commands, and a script that does
-  this is indirect execution (below). Adding the first refresh line, finding
+  two minutes. This stops blind input only: piped input (`echo … |`,
+  `printf … |`, `yes |`), no terminal at all, a typed-ahead guess, and
+  `script -qc '…' /dev/null` with stdin from `/dev/null` all refuse, because
+  the code is new each time and shown only on the terminal. It cannot tell a
+  person from a program that runs the command on a pseudo-terminal and reads
+  what it prints: `expect`, Python's `pty` module, or plain bash (a `coproc`
+  around `script -qf`, reading the code from script's output and writing it
+  back) all pass. No check made on the machine itself can tell those apart. The
+  real guard is the Claude Code hook, which asks a person before an agent runs
+  any spelling of these commands it can read; a script file or a decoded
+  payload that does it is indirect execution (below). Adding the first refresh line, finding
   the identical line, and `--unschedule` with nothing scheduled need no
   terminal. Which prefixes argparse passes on to the subcommand depends on the
   Python release, not only on the minor version: `blocklist --u` and `--un`
@@ -123,9 +127,14 @@ including known-malicious ones, instead of blocking them.
     `script -qc '…'`, `xargs -I{} sh -c '… {}'`) or as a here-document or
     here-string to a shell (`bash <<EOF`, `bash <<<'…'`, `sh -s <<<'…'`,
     `at now <<<'…'`), which is judged as a command of its own whatever its
-    spacing (tabs, `{a,b,c}`, `a${IFS}b`, a single word); inside such a string a
-    `$` counts even in single quotes, because that shell expands it
-    (`bash -c 'stillrunning${IFS}…'` asks); so is the inside of `$(…)`, and a
+    spacing (tabs, `{a,b,c}`, `a${IFS}b`, a single word) and however it is
+    attached (`script -qc'…'`, `script --command='…'`, `env -S'…'`, `su -c'…'`;
+    a word ending in a shell's name, `…; : /bin/sh`, is still read). Inside the
+    string each command is judged on its own, so `bash -c 'stillrunning${IFS}…'`
+    asks while `ssh host 'cd $HOME/app && stillrunning scan .'` and
+    `bash -c 'stillrunning scan .; echo $?'` do not. Shell strings nested more
+    than three deep are not followed; at that depth any string that names
+    stillrunning's switches or protected files asks; so is the inside of `$(…)`, and a
     `$(…)` that prints the word counts for the command around it
     (`$(echo stillrunning) $X evil` asks). The `$(…)` and backtick spans are
     found before quotes are read, so a `$(` or backtick inside single quotes

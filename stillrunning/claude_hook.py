@@ -956,7 +956,34 @@ def _is_glob(word):
     return True
 
 
-def _own_fail_closed(command, inner, commands):
+def _shell_text_recursed(tokens, depth):
+    """Will `_paths_touch_protection` judge this command's shell strings as
+    commands of their own (so its outer words need not be read for them)?"""
+    if depth >= 3 or not _is_shell_text(tokens):
+        return False
+    start = _program_index(tokens)
+    program = _prog_name(tokens[start]) if start < len(tokens) else ""
+    return not _CODE_RUNNERS.match(program) and program not in _DATA_COMMANDS
+
+
+def _shell_string_parts(word):
+    """The texts in one word of a shell-text command that may be run: the word,
+    or the value of an option it carries (`-qc'…'`, `-S'…'`, `--command=…`;
+    getopt takes an attached value after any letter of a cluster). A word that
+    is only a runner's name (`bash`, `sh`) holds no command."""
+    if word.startswith("--"):
+        return [word.split("=", 1)[1]] if "=" in word else []
+    if word.startswith("-") and len(word) > 1:
+        if not re.search(r"[^A-Za-z0-9_.-]", word):
+            return []                       # `-qc`, `-lc`: options only
+        letters = re.match(r"^-[A-Za-z0-9]*", word).group(0)
+        return [word[i:] for i in range(2, len(letters) + 1) if word[i:]]
+    if word in _STRING_RUNNERS:
+        return []
+    return [word]
+
+
+def _own_fail_closed(command, inner, commands, depth=0):
     """The fail-closed own-command rule above, for one parsed level of the
     command (substitution bodies, shell strings and here-documents a shell runs
     are judged by the same rule when they are parsed in turn)."""
@@ -973,9 +1000,11 @@ def _own_fail_closed(command, inner, commands):
     receivers = {n for n, words in enumerate(masked) if _names_stillrunning(words)
                  or (_is_shell_text(commands[n]) and _names_stillrunning(commands[n]))}
     from_subst = any(_names_stillrunning([_mask_quotes(piece)]) for piece in inner)
+    subst_receivers = set()
     if from_subst:
         # `$(echo stillrunning) $X`: the outer command receives what it prints
-        receivers |= {n for n, words in enumerate(commands) if any(_SUBST_MARK in w for w in words)}
+        subst_receivers = {n for n, words in enumerate(commands) if any(_SUBST_MARK in w for w in words)}
+        receivers |= subst_receivers
     if not receivers:
         return False
 
@@ -985,9 +1014,18 @@ def _own_fail_closed(command, inner, commands):
         # Text handed to a shell is expanded there, single quotes or not
         # (`bash -c 'stillrunning${IFS}…'`), and a `$(…)` placeholder counts wherever
         # it stands: lifting is quote-blind, so `'$(' … $X … ')'` can hide a word in it.
-        seen = words if _is_shell_text(words) else expanding[n]
-        return any("$" in w or "`" in w for w in seen) or any(_SUBST_MARK in w for w in words) \
-            or any(_has_brace(w) or _is_glob(w) for w in (words if seen is words else plain)) \
+        # A shell string the recursion below judges as a command of its own is
+        # left to it (`ssh host 'cd $HOME/app && stillrunning scan .'` does not
+        # ask; `bash -c 'stillrunning${IFS}…'` asks there). One it does not reach
+        # (too deep, a code runner) is read here, `$` in single quotes included.
+        unread = _is_shell_text(words) and not _shell_text_recursed(words, depth)
+        seen = words if unread else expanding[n]
+        # (a `$(…)` lifted out of such a string is judged there and as a body of its own,
+        # unless what it prints is the word itself: `bash -c '$(echo stillrunning) $X'`;
+        # the recursion sees only the placeholder, so it counts here)
+        lifted = plain if _is_shell_text(words) and not unread and n not in subst_receivers else words
+        return any("$" in w or "`" in w for w in seen) or any(_SUBST_MARK in w for w in lifted) \
+            or any(_has_brace(w) or _is_glob(w) for w in (words if unread else plain)) \
             or any(_prog_name(w) in _ARG_FEEDERS for w in words) \
             or bool(_PIPE.search(words.op) or words.stdin_file or words.here is not None or words.has_heredoc)
 
@@ -1017,7 +1055,7 @@ def _paths_touch_protection(command, cwds, depth):
         if depth < 3 and _paths_touch_protection(piece, cwds, depth + 1):
             return True
     commands = _simple_commands(_tokenize(command))
-    if _own_fail_closed(command, inner, commands):
+    if _own_fail_closed(command, inner, commands, depth):
         return True
     by_stdin = any(_stdin_writer(c) for c in commands)
     fed = _shell_fed(commands)
@@ -1174,14 +1212,19 @@ def _paths_touch_protection(command, cwds, depth):
                 cwds = [target] if os.path.isabs(target) else \
                     [os.path.normpath(os.path.join(c, target)) for c in cwds]
             cwds = cwds[:8]
-        if depth < 3 and not _CODE_RUNNERS.match(program) and program not in _DATA_COMMANDS \
+        if not _CODE_RUNNERS.match(program) and program not in _DATA_COMMANDS \
                 and _is_shell_text(cmd):
-            # every word but the runners and their options: a string with no space
-            # still runs (`bash -c 'stillrunning<TAB>…'`, `'{a,b,c}'`, `'a${IFS}b'`)
-            for word in cmd:
-                if word.startswith("-") or _prog_name(word) in _STRING_RUNNERS:
-                    continue
-                if _paths_touch_protection(word, cwds, depth + 1):
+            # every word, and every attached option value, is judged as a command:
+            # a string with no space still runs (`bash -c 'stillrunning<TAB>…'`,
+            # `'{a,b,c}'`, `'a${IFS}b'`), and so does `script -qc'…'` or `env -S'…'`
+            parts = [part for word in cmd for part in _shell_string_parts(word)]
+            if depth >= 3:
+                # too deep to follow: a string that names the protection asks
+                if any(_SELF_PROTECT_TEXT.search(_squash(part)) for part in parts):
+                    return True
+                continue
+            for part in parts:
+                if _paths_touch_protection(part, cwds, depth + 1):
                     return True
     return False
 

@@ -1808,3 +1808,71 @@ def test_r12_the_right_code_on_a_real_terminal_passes_this_is_also_the_known_lim
     rc, screen = _in_a_pty(env, [sys.executable, "-m", "stillrunning", "blocklist", "--unschedule"],
                            lambda s: _re.search(r"press Enter: (\w{4})", s).group(1))
     assert rc == 0 and written.read_text() == "17 * * * * other job\n", screen
+
+
+# ── review 13: attached option values, runner-named words, the depth limit, false asks ──
+
+R13_ASK = [
+    # F1 (a): the string attached to an option
+    "script -qc'rm -rf ~/.stillrunning' /dev/null",
+    "script -qc'cp /tmp/x ~/.claude/settings.json' /dev/null",
+    "script -qc'echo {} > ~/.claude/settings.json' /dev/null",
+    "script -qc'sed -i s/a/b/ ~/.claude/settings.json' /dev/null",
+    "script -q --command='rm -rf ~/.stillrunning' /dev/null",
+    "script --command='mv ~/.claude/settings.json /tmp/s' /dev/null",
+    "env -S'rm -rf ~/.stillrunning'", "env --split-string='rm -rf ~/.stillrunning'",
+    "su -c'stillrunning allow evil'", "su --command='stillrunning whitelist add evil'",
+    "runuser -u me -c'rm -rf ~/.stillrunning'",
+    "script -q --command='HOME=/tmp/x stillrunning blocklist --schedule' /dev/null",
+    "script -q --command='stillrunning blocklist --refresh --force' /dev/null",
+    # F1 (b): a string whose last word is a runner's name
+    "bash -c 'rm -rf ~/.stillrunning; ls /bin/sh'", "bash -c 'rm -rf ~/.stillrunning #/sh'",
+    "bash -c 'cp /tmp/x ~/.claude/settings.json; type /usr/bin/bash'",
+    "bash -c 'stillrunning allow evil; : /bin/sh'",
+    "bash -c 'stillrunning blocklist --unschedule; : /bin/sh'",
+    "bash -c 'HOME=/tmp/x stillrunning blocklist --schedule; : /bin/sh'",
+    # F2: the hook part of the coproc line, and attached script forms
+    "coproc S { script -qfec'stillrunning blocklist --unschedule' /dev/null; }; "
+    "read -t5 -u ${S[0]} l; echo ${l: -4} >&${S[1]}",
+    "script -qf --command='stillrunning blocklist --unschedule' /dev/null",
+    "script -qfc'stillrunning blocklist --unschedule; : /bin/sh' /tmp/t",
+    # past the depth the hook follows: a string that names the protection asks
+    "bash -c \"bash -c \\\"bash -c 'bash -c stillrunning\\ allow\\ evil'\\\"\"",
+    "bash -c \"bash -c \\\"bash -c 'bash -c rm\\ -rf\\ ~/.stillrunning'\\\"\"",
+    "sh -c \"sh -c \\\"sh -c 'sh -c stillrunning\\ blocklist\\ --unschedule'\\\"\"",
+]
+
+
+@pytest.mark.parametrize("command", R13_ASK)
+def test_r13_attached_and_runner_named_shell_strings_ask(home, command):
+    """IMPORTANT (review 13 F1/F2): round 13 skipped words starting with `-` and words
+    whose basename is a runner; these deleted the state or rewrote settings unasked."""
+    assert ch.touches_protection(command, cwd=str(home)), command
+    assert ch.decide(command, env={})["action"] == "ask", command
+
+
+@pytest.mark.parametrize("command", [
+    # review 13 §6: round 13's false asks (a `$` anywhere in a shell string)
+    "bash -c 'stillrunning scan .; echo $?'", "ssh host 'stillrunning scan . && echo done: $?'",
+    "bash -lc 'stillrunning cve --list; echo $SHELL'", "bash -c 'stillrunning --version; ls ~/*.txt'",
+    "bash -c 'ls *.py; stillrunning scan .'", "ssh host 'cd $HOME/app && stillrunning scan .'",
+    "watch -n 5 'ls -la ~/.stillrunning/*.db'",
+    "bash -c 'cd ~/stillrunning && python -m pytest tests -k $K'",
+    "bash -c 'cd ~/stillrunning-x && make test JOBS=$(nproc)'",
+    "bash -c \"awk '{print \\$1}' ~/stillrunning/x.txt\"",
+    # options with no command in them
+    "bash -lc ls", "script -q /tmp/log", "env -i PATH=/bin ls", "su -l me",
+])
+def test_r13_shell_strings_without_a_run_time_stillrunning_command_do_not_ask(home, command):
+    assert not ch.touches_protection(command, cwd=str(home)), command
+
+
+@pytest.mark.parametrize("command", [
+    # what round 13 fixed must stay fixed
+    "bash -c 'stillrunning${IFS}blocklist${IFS}--unschedule'", "bash -c '{stillrunning,blocklist,--unschedule}'",
+    "bash -c 'stillrunning\tblocklist\t--unschedule'", "nohup sh -c 'stillrunning blocklist $1' _ --unschedule",
+    "bash -c 'stillrunning blocklist $X'", "xargs -I{} sh -c 'stillrunning {}' < f",
+    "ssh host 'stillrunning${IFS}$X'", "bash -c '$(echo stillrunning) $X evil'",
+])
+def test_r13_round_12_cases_still_ask(home, command):
+    assert ch.touches_protection(command, cwd=str(home)), command
