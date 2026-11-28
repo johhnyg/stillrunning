@@ -6,10 +6,12 @@ Stdlib only. The hook runs THIS FILE BY PATH (`python -I -S claude_hook.py`),
 never through the `stillrunning` package, so a command that installs nothing
 costs one interpreter start and no network call.
 """
+import fnmatch
 import json
 import os
 import re
 import sys
+import threading
 import time
 
 def _load_apibase():
@@ -579,6 +581,219 @@ _SELF_ARGS = {"allow", "--allow", "--block", "--untrust", "--trust", "remember",
               "shell-uninstall", "venv-uninstall", "--uninstall-hook",
               "--uninstall-hook-claude-code"}
 _ENV_WORDS = {"export", "declare", "typeset", "readonly", "local", "unset", "set", "setenv"}
+_ARG_FEEDERS = {"xargs", "parallel"}
+# `stillrunning blocklist --force` (accept a list that drops or halves part of the
+# blocklist), `--unschedule` (stop refreshing it) and `--schedule` (which writes the
+# refresh line from this HOME and this Python: `HOME=/tmp/x … --schedule` would put a
+# line in place that never runs) change the protection itself.
+# Every prefix from `--f` / `--u` up, with or without `=value`: which prefixes
+# argparse accepts depends on the Python version (3.15 passes `--u` and `--un` on
+# to the subcommand; 3.8 and 3.12 reject them as ambiguous with --uninstall-hook*).
+def _blocklist_switch(word):
+    head = word.split("=", 1)[0]
+    return len(head) >= 3 and any(full.startswith(head) for full in ("--force", "--unschedule", "--schedule"))
+
+
+# The own words a glob could expand to (`stillrunning blocklist --unsched*`).
+_OWN_WORDS = sorted(_SELF_ARGS | {"blocklist", "whitelist", "add", "remove", "--force", "--unschedule",
+                                  "uninstall", "shell-uninstall", "venv-uninstall"})
+_GLOB_CHARS = re.compile(r"[*?\[]")
+_BRACE = re.compile(r"\{([^{}]*)\}")
+
+
+def _brace_forms(word, limit=64):
+    """The words bash's brace expansion makes of `word` (`ad{d,x}` → add, adx;
+    `{a..c}`), at most `limit`. A word without a list or range is itself."""
+    for match in _BRACE.finditer(word):
+        inner = match.group(1)
+        if "," in inner:
+            alternatives = inner.split(",")
+        else:
+            seq = re.match(r"^(-?\d+|[A-Za-z])\.\.(-?\d+|[A-Za-z])(?:\.\.-?\d+)?$", inner)
+            if not seq:
+                continue
+            a, b = seq.group(1), seq.group(2)
+            if a.lstrip("-").isdigit() and b.lstrip("-").isdigit():
+                lo, hi = sorted((int(a), int(b)))
+                alternatives = [str(n) for n in range(lo, min(hi, lo + limit) + 1)]
+            elif a.isalpha() and b.isalpha():
+                lo, hi = sorted((ord(a), ord(b)))
+                alternatives = [chr(n) for n in range(lo, hi + 1)][:limit]
+            else:
+                continue
+        out = []
+        for alternative in alternatives:
+            out.extend(_brace_forms(word[:match.start()] + alternative + word[match.end():], limit))
+            if len(out) >= limit:
+                break
+        return out[:limit]
+    return [word]
+
+
+def _has_brace(word):
+    return "{" in word and _brace_forms(word, 2) != [word]
+
+
+def _runtime_word(word):
+    """A word whose final form the shell decides at run time: an expansion
+    (`$X`, `$(…)`, backticks, "$@"), a brace list or range, or a glob."""
+    return "$" in word or "`" in word or _has_brace(word) or _is_glob(word)
+
+
+def _expanded(words):
+    """The words as the shell could hand them over: brace lists expanded, and a
+    glob replaced by every own word it could match (`--unsched*` → --unschedule)."""
+    out = []
+    for word in words:
+        for form in _brace_forms(word):
+            if _GLOB_CHARS.search(form):
+                matches = [own for own in _OWN_WORDS if fnmatch.fnmatchcase(own, form)]
+                out.extend(matches or [form])
+            else:
+                out.append(form)
+    return out
+
+
+def _names_us(word):
+    """Does this program, module or package word name stillrunning? Also with a
+    version or extras (`stillrunning@latest`, `stillrunning==2.14.3`,
+    `stillrunning[cli]`), a path, a brace list or a glob that could be it."""
+    for form in _brace_forms(word):
+        name = _prog_name(form)
+        if re.match(r"^stillrunning(\[[^\]]*\])?\s*(@|[=<>~!]=?|$)", name):
+            return True
+        if _GLOB_CHARS.search(name) and fnmatch.fnmatchcase("stillrunning", name):
+            return True
+    return False
+
+
+def _own_subcommand(rest):
+    """`stillrunning … blocklist … --force/--unschedule` or `… whitelist … add/remove …`.
+    Matched among ALL the plain words, wherever they stand: an option that takes
+    a value (`--token x`, `--name x`) puts that value first, so "the first plain
+    word" is not the subcommand."""
+    rest = _expanded(rest)
+    plain = [a for a in rest if not a.startswith("-")]
+    if "blocklist" in plain and any(_blocklist_switch(a) for a in rest):
+        return True
+    if "whitelist" in plain:
+        after = plain[plain.index("whitelist") + 1:]
+        if "add" in after or "remove" in after:
+            return True
+    return False
+
+
+# Python's own options that take a value (`-W ignore` / `-Wignore`, `-X dev`).
+_PY_VALUED = "WXQ"
+_PY_LONG_VALUED = {"--check-hash-based-pycs"}
+# Launchers that run a package's command: uvx = uv tool run; pipx run; uv run.
+# Their options that take a value (an unknown option is taken to be a flag; see
+# _launched_at for the one-word look-ahead that covers a valued one).
+_UV_VALUED = {
+    "--python", "-p", "--from", "--with", "-w", "--with-editable", "--with-requirements", "--index",
+    "--index-url", "-i", "--extra-index-url", "--default-index", "--find-links", "-f", "--directory",
+    "--project", "--config-file", "--cache-dir", "--color", "--env-file", "--extra", "--group",
+    "--only-group", "--no-group", "--package", "--constraints", "-c", "--constraint", "--overrides",
+    "--override", "--build-constraints", "--build-constraint", "-b", "--resolution", "--prerelease",
+    "--fork-strategy", "--exclude-newer", "--exclude-newer-package", "--link-mode", "--index-strategy",
+    "--keyring-provider", "--python-preference", "--python-platform", "--refresh-package",
+    "--reinstall-package", "--upgrade-package", "-P", "--no-binary-package", "--no-build-package",
+    "--no-build-isolation-package", "--config-setting", "-C", "--allow-insecure-host", "--trusted-host",
+    "--torch-backend", "--env", "--with-executables-from", "--no-sources-package",
+}
+_PIPX_VALUED = {"--spec", "--python", "--pip-args", "--index-url", "-i", "--backend", "--suffix"}
+
+
+def _python_module_at(cmd, i):
+    """After `python`: the index of the word naming the module of `-m stillrunning`
+    (attached or not, in a cluster such as `-IBm`), past options that take a
+    value (`-W ignore`, `-Wignore`, `-X dev`); None for a script, `-c` or another module."""
+    while i < len(cmd):
+        word = cmd[i]
+        if word in ("-", "--") or not word.startswith("-"):
+            return None                      # stdin, or a script file: not us
+        if word.startswith("--"):
+            i += 2 if word in _PY_LONG_VALUED else 1
+            continue
+        for j in range(1, len(word)):
+            letter = word[j]
+            if letter == "m":
+                if j + 1 < len(word):
+                    return i if _names_us(word[j + 1:]) else None
+                return i + 1 if i + 1 < len(cmd) and _names_us(cmd[i + 1]) else None
+            if letter == "c":
+                return None                  # `-c code`: judged by _code_touches
+            if letter in _PY_VALUED:
+                if j + 1 == len(word):
+                    i += 1                   # the value is the next word
+                break
+        i += 1
+    return None
+
+
+def _skip_options(cmd, i, valued):
+    """Past a launcher's options. → (index of the first other word, whether the
+    last option skipped was unknown and could have taken that word as its value)."""
+    unknown = False
+    while i < len(cmd) and cmd[i].startswith("-") and cmd[i] != "-":
+        word = cmd[i]
+        if word == "--":
+            return i + 1, False
+        name = word.split("=", 1)[0]
+        if "=" in word or name not in valued:
+            unknown = "=" not in word and name not in valued and name.startswith("--")
+            i += 1
+        else:
+            unknown = False
+            i += 2
+    return i, unknown
+
+
+def _launched_at(cmd, i, valued, depth):
+    i, unknown = _skip_options(cmd, i, valued)
+    for at in ([i, i + 1] if unknown else [i]):
+        found = _runs_stillrunning_at(cmd, at, depth=depth + 1)
+        if found is not None:
+            return found
+    return None
+
+
+def _runs_stillrunning_at(cmd, start, program=None, lowered=None, depth=0):
+    """Index of the word that runs stillrunning in this command (the program
+    itself, the module of `python -m stillrunning`, or the command a launcher
+    such as uvx / pipx run / uv run / uv tool run starts), or None."""
+    if start >= len(cmd) or depth > 4:
+        return None
+    word = cmd[start]
+    name = _prog_name(word)
+    if _names_us(word):
+        return start
+    if re.match(r"^(python|pypy)[\d.]*$", name):
+        return _python_module_at(cmd, start + 1)
+    if name == "uvx":
+        return _launched_at(cmd, start + 1, _UV_VALUED, depth)
+    if name == "pipx":
+        at, _ = _skip_options(cmd, start + 1, _PIPX_VALUED)
+        if at < len(cmd) and cmd[at] == "run":
+            return _launched_at(cmd, at + 1, _PIPX_VALUED, depth)
+        return None
+    if name == "uv":
+        at, _ = _skip_options(cmd, start + 1, _UV_VALUED)
+        if at < len(cmd) and cmd[at] == "tool":
+            at, _ = _skip_options(cmd, at + 1, _UV_VALUED)
+            if at < len(cmd) and cmd[at] in ("run",):
+                return _launched_at(cmd, at + 1, _UV_VALUED, depth)
+            return None
+        if at < len(cmd) and cmd[at] == "run":
+            at += 1
+            while at < len(cmd) and cmd[at].startswith("-") and cmd[at] not in ("-", "--"):
+                if cmd[at] in ("-m", "--module"):       # `uv run -m stillrunning`
+                    return at + 1 if at + 1 < len(cmd) and _names_us(cmd[at + 1]) else None
+                if cmd[at].startswith("--module="):
+                    return at if _names_us(cmd[at].split("=", 1)[1]) else None
+                at += 2 if cmd[at] in _UV_VALUED else 1
+            return _launched_at(cmd, at, _UV_VALUED, depth)
+    return None
 
 
 def _own_switch(cmd, start, program, args):
@@ -595,9 +810,8 @@ def _own_switch(cmd, start, program, args):
     lowered = [t.lower() for t in cmd]
 
     def switches(rest):
-        plain = [a for a in rest if not a.startswith("-")]
-        return any(a in _SELF_ARGS or "uninstall" in a for a in rest) or \
-            plain[:2] == ["whitelist", "add"] or plain[:2] == ["whitelist", "remove"]
+        rest = _expanded(rest)
+        return any(a in _SELF_ARGS or "uninstall" in a for a in rest) or _own_subcommand(rest)
 
     for index, name in enumerate(names):
         module = None
@@ -610,15 +824,33 @@ def _own_switch(cmd, start, program, args):
         if name == "stillrunning" or module == "stillrunning":
             if switches(lowered[index + 1:]):
                 return True
+    # Only for the program this command actually runs (wrappers such as nice, env,
+    # sudo, xargs are already skipped: `start`/`program`), never for a word that
+    # merely is "stillrunning" (`grep -r stillrunning $DIR`):
+    run_at = _runs_stillrunning_at(cmd, start, program, lowered)
+    if run_at is not None:
+        # The switches above behind a launcher or a version suffix
+        # (`uvx stillrunning@latest allow evil`).
+        if switches(lowered[run_at + 1:]):
+            return True
+        # A word only known at run time (`$X`, `${X:-…}`, `$(…)`, `` `…` ``, "$@",
+        # a brace list, a glob) could be any of the switches above:
+        # `X=allow; stillrunning $X evil`, `stillrunning blocklist --unschedul{e,e}`.
+        if any(_runtime_word(t) for t in cmd[run_at + 1:]):
+            return True
+        # Words handed over by another program (`… | xargs stillrunning`,
+        # `parallel stillrunning ::: …`) are not on the command line at all.
+        if any(n in _ARG_FEEDERS for n in names[:start]):
+            return True
     # `$sr remember last`, `$(which stillrunning) allow x`: the program is
     # only known at run time and the words after it are our own switches.
     if start < len(cmd) and cmd[start].startswith(("$", "`")):
-        rest = lowered[start + 1:]
+        rest = _expanded(lowered[start + 1:])
         plain = [a for a in rest if not a.startswith("-")]
         if plain[:1] and plain[0] in ("remember", "forget", "allow", "shell-uninstall",
                                       "venv-uninstall") \
-                or any(a in _SELF_ARGS and a.startswith("--") for a in rest) \
-                or plain[:2] == ["whitelist", "add"]:
+                or _own_subcommand(rest) \
+                or any(a in _SELF_ARGS and a.startswith("--") for a in rest):
             return True
     if "stillrunning" in lowered[start + 1:] and any(a in ("uninstall", "remove") for a in lowered) \
             and any(_is_installer(n) for n in names):
@@ -632,6 +864,223 @@ def _own_switch(cmd, start, program, args):
             t in ("--force-reinstall", "--ignore-installed", "-I", "--no-deps", "--reinstall")
             for t in cmd)
         if pinned or forced:
+            return True
+    return False
+
+
+# ── own commands: fail closed, with a read-only allow-list ──
+# A command line with a word only known at run time ($X, ${…}, $(…), backticks,
+# a brace list, a glob, words fed by xargs / parallel / stdin) in which the word
+# "stillrunning" stands outside quotes is asked about, unless every program that
+# receives that word is one of these read-only tools. Unknown programs,
+# wrappers, interpreters and launchers ask: matching each of them (uv run -m,
+# parallel, flock, setsid, python3.13t, …) one by one always left one out.
+_READ_ONLY_RECEIVERS = {"grep", "rg", "ls", "cat", "head", "tail", "echo", "printf", "wc"}
+_FIND_ACTIONS = {"-exec", "-execdir", "-ok", "-okdir", "-delete", "-fprint", "-fprint0", "-fprintf", "-fls"}
+_GIT_READ_ONLY = {"log", "diff", "show", "status"}
+_GIT_VALUED = {"-C", "--git-dir", "--work-tree", "--namespace"}
+_PIPE = re.compile(r"(?<!\|)\|(?!\|)")
+
+
+def _mask_quotes(text, keep_expansions=False):
+    """The text with everything inside quotes replaced by `q` (quotes, word
+    boundaries and operators outside them kept), so a word found in it stood
+    outside any quoted string. `keep_expansions`: keep `$` and backticks inside
+    double quotes, where the shell still expands them (never inside single quotes)."""
+    out, quote, i = [], None, 0
+    while i < len(text):
+        ch = text[i]
+        if quote is None:
+            if ch == "\\" and i + 1 < len(text):
+                out.append(text[i:i + 2])
+                i += 2
+                continue
+            if ch in "'\"":
+                quote = ch
+            out.append(ch)
+        elif ch == quote:
+            quote = None
+            out.append(ch)
+        elif quote == '"' and ch == "\\" and i + 1 < len(text):
+            out.append("qq")
+            i += 2
+            continue
+        elif quote == '"' and keep_expansions and ch in "$`":
+            out.append(ch)
+        else:
+            out.append("q")
+        i += 1
+    return "".join(out)
+
+
+def _names_stillrunning(tokens):
+    return any("stillrunning" in t.lower() for t in tokens)
+
+
+def _read_only_receiver(cmd):
+    """Is the program of this simple command a read-only tool (past `VAR=x`, and
+    past `xargs` and its options, which hand it words)?"""
+    i = 0
+    while i < len(cmd) and _ASSIGN.match(cmd[i]):
+        i += 1
+    if i < len(cmd) and _prog_name(cmd[i]) == "xargs":
+        i += 1
+        while i < len(cmd) and cmd[i].startswith("-"):
+            i += 2 if cmd[i] in _WRAPPER_FLAGS["xargs"] and i + 1 < len(cmd) else 1
+    if i >= len(cmd):
+        return False                     # only assignments (`sr=stillrunning`): not a reader
+    name, rest = _prog_name(cmd[i]), list(cmd[i + 1:])
+    if name in _READ_ONLY_RECEIVERS:
+        return not (name == "rg" and any(a == "--pre" or a.startswith("--pre=") for a in rest))
+    if name == "find":
+        return not any(a in _FIND_ACTIONS for a in rest)
+    if name == "git":
+        j = 0
+        while j < len(rest) and rest[j].startswith("-"):
+            if rest[j] == "-c" or rest[j].startswith("--config-env") or rest[j].startswith("--exec-path"):
+                return False             # `git -c core.pager=…` runs a program
+            j += 2 if rest[j] in _GIT_VALUED else 1
+        return j < len(rest) and rest[j] in _GIT_READ_ONLY and not any(
+            a.startswith(("--output", "--ext-diff", "--textconv")) for a in rest[j + 1:])
+    return False
+
+
+def _is_glob(word):
+    """A glob the shell would expand; `name[extras]` (with an optional version)
+    is a package name, not a glob."""
+    if not _GLOB_CHARS.search(word):
+        return False
+    if "*" not in word and "?" not in word and \
+            re.match(r"^[A-Za-z0-9][A-Za-z0-9._-]*\[[A-Za-z0-9._, -]*\]\s*(([=<>~!]=?|@|;).*)?$", word):
+        return False
+    return True
+
+
+def _shell_text_recursed(tokens, depth):
+    """Will `_paths_touch_protection` judge this command's shell strings as
+    commands of their own (so its outer words need not be read for them)?"""
+    if depth >= 3 or not _is_shell_text(tokens):
+        return False
+    start = _program_index(tokens)
+    program = _prog_name(tokens[start]) if start < len(tokens) else ""
+    return not _CODE_RUNNERS.match(program) and program not in _DATA_COMMANDS
+
+
+def _shell_string_parts(word):
+    """The texts in one word of a shell-text command that may be run: the word,
+    or the value of an option it carries (`-qc'…'`, `-S'…'`, `--command=…`;
+    getopt takes an attached value after any letter of a cluster). A word that
+    is only a runner's name (`bash`, `sh`) holds no command."""
+    if word.startswith("--"):
+        return [word.split("=", 1)[1]] if "=" in word else []
+    if word.startswith("-") and len(word) > 1:
+        if not re.search(r"[^A-Za-z0-9_.-]", word):
+            return []                       # `-qc`, `-lc`: options only
+        letters = re.match(r"^-[A-Za-z0-9]*", word).group(0)
+        # getopt ends a cluster at its first letter that takes a value, so a cut right
+        # after the first occurrence of each distinct letter finds every value that can
+        # be attached (`-qqqqqqqqqqqqqqqc'…'`), at most 62 cuts however long the cluster
+        cuts, seen = [len(letters)], set()
+        for at in range(1, len(letters)):
+            if letters[at] not in seen:
+                seen.add(letters[at])
+                cuts.append(at + 1)
+        return [word[i:] for i in sorted(set(cuts)) if word[i:]]
+    if word in _STRING_RUNNERS:
+        return []
+    return [word]
+
+
+_POSITIONAL = re.compile(r"\$\{?[0-9@*]")
+# ssh options that take a value (OpenSSH ssh(1))
+_SSH_VALUE = set("BbcDEeFIiJLlmOoPpQRSWw")
+_SSH_FLAGS = set("46AaCfGgKkMNnqsTtVvXxYy")
+
+
+def _positional_handoff(tokens):
+    """Does a shell string refer to `$0`…`$9`, `$@` or `$*` while words follow it
+    (`bash -c '$0 $1 --unschedule' stillrunning blocklist`)? Then the string and
+    those words are one command, and neither can be judged without the other."""
+    return any(_POSITIONAL.search(word) for word in tokens[:-1])
+
+
+def _ssh_remote_line(tokens):
+    """ssh joins every word after the host into one line for the remote shell
+    (`ssh host stillrunning 'blocklist${IFS}--unschedule'`): that line, or None."""
+    names = [_prog_name(t) for t in tokens]
+    if "ssh" not in names:
+        return None
+    at = names.index("ssh") + 1
+    while at < len(tokens) and tokens[at].startswith("-") and tokens[at] != "-":
+        word = tokens[at]
+        if word == "--":
+            at += 1
+            break
+        # `-p 22`, `-o Opt=x`, `-vp 22`: a cluster of flags ending in a letter that takes a value
+        if word[-1] in _SSH_VALUE and all(ch in _SSH_FLAGS for ch in word[1:-1]):
+            at += 1
+        at += 1
+    rest = tokens[at + 1:]                  # after the host
+    return " ".join(rest) if rest else None
+
+
+def _own_fail_closed(command, inner, commands, depth=0):
+    """The fail-closed own-command rule above, for one parsed level of the
+    command (substitution bodies, shell strings and here-documents a shell runs
+    are judged by the same rule when they are parsed in turn)."""
+    masked = _simple_commands(_tokenize(_mask_quotes(command)))
+    if len(masked) != len(commands) or any(len(a) != len(b) for a, b in zip(masked, commands)):
+        masked = commands                # could not line the two up: count every word
+    # the same, but with `$` and backticks kept where the shell expands them (unquoted
+    # and inside double quotes; `awk '{print $1}'` holds no run-time word)
+    expanding = _simple_commands(_tokenize(_mask_quotes(command, keep_expansions=True)))
+    if len(expanding) != len(commands) or any(len(a) != len(b) for a, b in zip(expanding, commands)):
+        expanding = commands
+    # Quoted text is data (a commit message, a search pattern), except when the
+    # command hands it to a shell to run (`xargs -I{} sh -c 'stillrunning {}'`).
+    receivers = {n for n, words in enumerate(masked) if _names_stillrunning(words)
+                 or (_is_shell_text(commands[n]) and _names_stillrunning(commands[n]))}
+    from_subst = any(_names_stillrunning([_mask_quotes(piece)]) for piece in inner)
+    subst_receivers = set()
+    if from_subst:
+        # `$(echo stillrunning) $X`: the outer command receives what it prints
+        subst_receivers = {n for n, words in enumerate(commands) if any(_SUBST_MARK in w for w in words)}
+        receivers |= subst_receivers
+    if not receivers:
+        return False
+
+    def run_time(n):
+        """A run-time word in the command that receives the word `stillrunning`."""
+        words, plain = commands[n], masked[n]
+        # Text handed to a shell is expanded there, single quotes or not
+        # (`bash -c 'stillrunning${IFS}…'`), and a `$(…)` placeholder counts wherever
+        # it stands: lifting is quote-blind, so `'$(' … $X … ')'` can hide a word in it.
+        # A shell string the recursion below judges as a command of its own is
+        # left to it (`ssh host 'cd $HOME/app && stillrunning scan .'` does not
+        # ask; `bash -c 'stillrunning${IFS}…'` asks there). One it does not reach
+        # (too deep, a code runner) is read here, `$` in single quotes included.
+        # …unless the string hands over to the words after it (`bash -c '$0 $1 …' stillrunning
+        # blocklist`): judged one by one, neither half is the command that runs
+        unread = _is_shell_text(words) and (not _shell_text_recursed(words, depth)
+                                            or _positional_handoff(words))
+        seen = words if unread else expanding[n]
+        # (a `$(…)` lifted out of such a string is judged there and as a body of its own,
+        # unless what it prints is the word itself: `bash -c '$(echo stillrunning) $X'`;
+        # the recursion sees only the placeholder, so it counts here)
+        lifted = plain if _is_shell_text(words) and not unread and n not in subst_receivers else words
+        return any("$" in w or "`" in w for w in seen) or any(_SUBST_MARK in w for w in lifted) \
+            or any(_has_brace(w) or _is_glob(w) for w in (words if unread else plain)) \
+            or any(_prog_name(w) in _ARG_FEEDERS for w in words) \
+            or bool(_PIPE.search(words.op) or words.stdin_file or words.here is not None or words.has_heredoc)
+
+    for n in receivers:
+        if _read_only_receiver(commands[n]):
+            continue
+        if run_time(n):
+            return True
+        # `sr=stillrunning; $sr $X evil`: a variable that holds the word, and a
+        # run-time word anywhere in the line
+        if all(_ASSIGN.match(w) for w in commands[n]) and any(run_time(m) for m in range(len(commands))):
             return True
     return False
 
@@ -650,6 +1099,8 @@ def _paths_touch_protection(command, cwds, depth):
         if depth < 3 and _paths_touch_protection(piece, cwds, depth + 1):
             return True
     commands = _simple_commands(_tokenize(command))
+    if _own_fail_closed(command, inner, commands, depth):
+        return True
     by_stdin = any(_stdin_writer(c) for c in commands)
     fed = _shell_fed(commands)
     cwds = list(cwds)
@@ -672,6 +1123,10 @@ def _paths_touch_protection(command, cwds, depth):
             return True
         if body and depth < 3 and (fed[number] or _reads_stdin_as_shell(cmd)) and \
                 _paths_touch_protection(body, cwds, depth + 1):
+            return True
+        # `bash <<<'…'`: a here-string a shell runs is judged like a here-document
+        if cmd.here is not None and depth < 3 and _reads_stdin_as_shell(cmd) and \
+                _paths_touch_protection(cmd.here, cwds, depth + 1):
             return True
         if body and _CODE_RUNNERS.match(program) and _runs_stdin_as_code(cmd) and \
                 _code_touches(body, cwds):
@@ -801,18 +1256,32 @@ def _paths_touch_protection(command, cwds, depth):
                 cwds = [target] if os.path.isabs(target) else \
                     [os.path.normpath(os.path.join(c, target)) for c in cwds]
             cwds = cwds[:8]
-        if depth < 3 and not _CODE_RUNNERS.match(program) and program not in _DATA_COMMANDS \
+        if not _CODE_RUNNERS.match(program) and program not in _DATA_COMMANDS \
                 and _is_shell_text(cmd):
-            for word in cmd:
-                if (" " in word or "\n" in word or ";" in word) and \
-                        _paths_touch_protection(word, cwds, depth + 1):
+            # every word, and every attached option value, is judged as a command:
+            # a string with no space still runs (`bash -c 'stillrunning<TAB>…'`,
+            # `'{a,b,c}'`, `'a${IFS}b'`), and so does `script -qc'…'` or `env -S'…'`
+            parts = [part for word in cmd for part in _shell_string_parts(word)]
+            remote = _ssh_remote_line(cmd)
+            if remote:
+                parts.append(remote)        # ssh runs the words after the host as one line
+            if depth >= 3:
+                # too deep to follow: a string that names the protection asks
+                if any(_SELF_PROTECT_TEXT.search(_squash(part)) for part in parts):
+                    return True
+                continue
+            for part in parts:
+                if _paths_touch_protection(part, cwds, depth + 1):
                     return True
     return False
 
 
 _SELF_PROTECT_TEXT = re.compile(
     r"stillrunning\b[^|;&\n]*(\ballow\b|uninstall|--block\b|--untrust\b|--trust\b|\bremember\b"
-    r"|\bforget\b)|uninstall\s+(-\S+\s+)*stillrunning\b|\.stillrunning|\.claude/sett"
+    r"|\bforget\b|\bblocklist\b[^|;&\n]*--(force|unschedule|schedule|f\b|fo|for|forc|uns|sc)"
+    r"|\bwhitelist\b[^|;&\n]*\b(add|remove)\b|\s[^|;&\n]*[$`])"
+    r"|\b(xargs|parallel)\b[^|;&\n]*\bstillrunning\b"
+    r"|uninstall\s+(-\S+\s+)*stillrunning\b|\.stillrunning|\.claude/sett"
     r"|(?<![A-Za-z0-9_])STILLRUNNING_[A-Z]", re.I)
 
 
@@ -946,6 +1415,22 @@ EXPLANATIONS = {
         "and a local override on this machine says to allow it anyway. If you did not add that "
         "override yourself, do not approve: something else added it. Overrides are kept in "
         "the file overrides.json in the .stillrunning folder in your home directory."),
+    "version_unresolved": (
+        "Blocked `{name}`. Some versions of it are reported as malicious ({affected}), and the "
+        "version this command would install could not be worked out (the registry or "
+        "stillrunning.io did not answer), so stillrunning assumes the worst. Name an exact "
+        "version that is not on that list, or try again when the lookup can complete."),
+    "offline_error": (
+        "Blocked `{name}`: stillrunning's offline blocklist could not be checked for this package "
+        "(an error, not a verdict on it), so it was not let through unchecked. Check the "
+        "command's version spelling; `stillrunning blocklist --status` shows the list's state, "
+        "and `stillrunning blocklist --refresh` rebuilds a list that cannot be read."),
+    "offline_tampered": (
+        "Blocked `{name}`: stillrunning's offline blocklist (the blocklist files in the "
+        ".stillrunning folder in your home directory) failed its integrity check, so it may "
+        "have been changed by something other than stillrunning. No install is trusted until "
+        "it is rebuilt: run `stillrunning blocklist --refresh`. If you did not change those "
+        "files yourself, find out what did."),
     "version_range": (
         "Some versions of `{name}` are reported as malicious ({affected}), and this command "
         "does not name one exact version, so stillrunning cannot tell which version it would "
@@ -3672,6 +4157,21 @@ def consume_override(eco, name):
         return False
 
 
+def _has_override(eco, name):
+    """Like consume_override, but read-only (a one-time override is not used up)."""
+    path = os.path.join(_state_dir(), "overrides.json")
+    if not os.path.exists(path):
+        return False
+    try:
+        with open(path, encoding="utf-8") as handle:
+            data = json.load(handle) or {}
+        want = normalize(eco, name)
+        return any(normalize(eco, p) == want for p in list(data.get("once", [])) + list(data.get("allow", [])))
+    except (OSError, ValueError, AttributeError, TypeError) as exc:
+        _warn(f"overrides.json unreadable ({type(exc).__name__}) — no override applied")
+        return False
+
+
 def _locally_blocked(eco, name):
     want = normalize(eco, name)
     if want in {normalize(eco, k) for k in KNOWN_BAD}:
@@ -3685,6 +4185,307 @@ def _locally_blocked(eco, name):
     except (OSError, ValueError, AttributeError) as exc:
         _warn(f"local blocklist unreadable ({type(exc).__name__}) — relying on the API")
     return False
+
+
+# ── offline blocklist (built by `stillrunning blocklist --refresh`) ──
+# One manifest is the only pointer: {"v", "db", "sha256", "size", "built", "counts", "mac"}.
+# "mac" is HMAC-SHA256 over the rest with a per-machine key (blocklist.key, 0600):
+# it catches corruption, half-written files and tampering by anything that
+# cannot read the key; same-user code that can read the key could re-sign.
+OFFLINE_MANIFEST = "blocklist.manifest.json"
+OFFLINE_KEY = "blocklist.key"
+_OFFLINE_DB_NAME = re.compile(r"^blocklist-[0-9a-f]{16}\.sqlite$")
+_OFFLINE_STATE = {}
+_OFFLINE_LOCK = threading.Lock()
+
+
+def offline_manifest_mac(key, manifest):
+    import hmac
+    body = json.dumps({k: v for k, v in manifest.items() if k != "mac"}, sort_keys=True,
+                      separators=(",", ":")).encode("utf-8")
+    return hmac.new(key, body, "sha256").hexdigest()
+
+
+OFFLINE_STALE_HOURS = 72          # refreshed daily: three missed refreshes in a row
+
+
+def offline_age_hours(now=None):
+    """Age of the verified offline list in hours (its MAC-covered build time),
+    or None when there is no verified list. A build time in the future counts
+    as stale too (a wrong clock, or a manifest from elsewhere), and so does a
+    list with no build time at all (its age cannot be known)."""
+    if _offline_db()[0] != "ok":
+        return None
+    if _OFFLINE_STATE.get("built") is None:
+        return float("nan")
+    age = ((time.time() if now is None else now) - _OFFLINE_STATE["built"]) / 3600.0
+    return age if age >= -1 else float("inf")
+
+
+def offline_stale_note(now=None):
+    """The warning a stale list earns, or None."""
+    age = offline_age_hours(now)
+    if age is None or age <= OFFLINE_STALE_HOURS:
+        return None
+    if age != age:                       # NaN: no build time
+        when = "has no build time, so its age is unknown"
+    elif age == float("inf"):
+        when = "has a build time in the future"
+    else:
+        when = "is %d days old" % int(age // 24)
+    return ("the offline blocklist %s, so packages reported since then are not on it; "
+            "refresh it: stillrunning blocklist --refresh" % when)
+
+
+def _offline_db():
+    """→ ("missing", None) | ("ok", db path) | ("tampered", reason). Verified once
+    per process and state folder (a long-lived caller that changes HOME re-checks)."""
+    folder = _state_dir()
+    with _OFFLINE_LOCK:
+        if _OFFLINE_STATE.get("folder") != folder:
+            _OFFLINE_STATE.clear()
+            _OFFLINE_STATE["folder"] = folder
+            try:
+                _OFFLINE_STATE["state"] = _verify_offline_db()
+            except Exception as exc:     # anything malformed that slipped past the checks: never trusted
+                _OFFLINE_STATE["state"] = ("tampered", f"its check failed ({type(exc).__name__})")
+        return _OFFLINE_STATE["state"]
+
+
+def _verify_offline_db():
+    import hashlib
+    import hmac
+    folder = _state_dir()
+    manifest_path = os.path.join(folder, OFFLINE_MANIFEST)
+    if not os.path.lexists(manifest_path):
+        try:
+            leftovers = os.path.lexists(os.path.join(folder, OFFLINE_KEY)) or any(
+                _OFFLINE_DB_NAME.match(f) for f in os.listdir(folder))
+        except OSError:
+            leftovers = False
+        if leftovers:          # a list was installed here and its manifest is gone: not "no list"
+            return "tampered", "the manifest is missing while the list's key or database is still there"
+        return "missing", None
+    try:
+        if os.path.islink(manifest_path) or os.path.getsize(manifest_path) > 65536:
+            return "tampered", "the manifest is a link or too large"
+        with open(manifest_path, encoding="utf-8") as handle:
+            manifest = json.load(handle)
+        with open(os.path.join(folder, OFFLINE_KEY), "rb") as handle:
+            key = handle.read(4096).strip()
+    except (OSError, ValueError, UnicodeDecodeError) as exc:
+        return "tampered", f"the manifest or its key could not be read ({type(exc).__name__})"
+    if not isinstance(manifest, dict) or not key or not isinstance(manifest.get("mac"), str):
+        return "tampered", "the manifest is malformed"
+    if not hmac.compare_digest(manifest["mac"].encode("utf-8"), offline_manifest_mac(key, manifest).encode("ascii")):
+        return "tampered", "the manifest's MAC does not match"
+    built = manifest.get("built")
+    _OFFLINE_STATE["built"] = built if isinstance(built, (int, float)) and not isinstance(built, bool) else None
+    name = manifest.get("db")
+    if not isinstance(name, str) or not _OFFLINE_DB_NAME.match(name):
+        return "tampered", "the manifest names an unexpected file"
+    db_path = os.path.join(folder, name)
+    try:
+        if os.path.islink(db_path) or os.path.getsize(db_path) != manifest.get("size"):
+            return "tampered", "the database is a link or has the wrong size"
+        seen = _offline_stat_mark(key, manifest, db_path)
+        if seen is not None and _offline_seen_ok(folder, seen):
+            return "ok", db_path        # the same file, unchanged since its full check
+        digest = hashlib.sha256()
+        with open(db_path, "rb") as handle:
+            for chunk in iter(lambda: handle.read(1 << 20), b""):
+                digest.update(chunk)
+    except OSError as exc:
+        return "tampered", f"the database could not be read ({type(exc).__name__})"
+    if not hmac.compare_digest(digest.hexdigest(), str(manifest.get("sha256"))):
+        return "tampered", "the database does not match its manifest"
+    if seen is not None:
+        _offline_remember(folder, seen)
+    return "ok", db_path
+
+
+_OFFLINE_SEEN = "blocklist.verified"
+
+
+def _offline_stat_mark(key, manifest, db_path):
+    """A MAC over the manifest and the database file's identity (inode, size,
+    mtime, ctime). Any write to the file changes its ctime, which an ordinary
+    user cannot set back, so a match means: the file whose hash was checked."""
+    import hmac
+    try:
+        st = os.stat(db_path)
+    except OSError:
+        return None
+    if os.name == "nt" or not st.st_ino:
+        return None                     # no stable inode/ctime there: hash every time
+    ident = "%s:%s:%d:%d:%d:%d" % (manifest.get("mac"), manifest.get("db"), st.st_ino, st.st_size,
+                                   st.st_mtime_ns, st.st_ctime_ns)
+    return hmac.new(key, ident.encode("utf-8"), "sha256").hexdigest()
+
+
+def _offline_seen_ok(folder, mark):
+    import hmac
+    try:
+        with open(os.path.join(folder, _OFFLINE_SEEN), "rb") as handle:
+            return hmac.compare_digest(handle.read(200).strip(), mark.encode("ascii"))
+    except Exception:  # lint: allowed-silent(no note, or a damaged one: the full hash check runs)
+        return False
+
+
+def _offline_remember(folder, mark):
+    path = os.path.join(folder, _OFFLINE_SEEN)
+    try:
+        tmp = "%s.%d.tmp" % (path, os.getpid())
+        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            handle.write(mark)
+        os.replace(tmp, path)
+    except OSError as exc:
+        _warn(f"offline blocklist check not remembered ({type(exc).__name__}) — it is re-run each time")
+
+
+def _offline_lookup(eco, name, version):
+    """The offline blocklist's answer, before any network call:
+    None (no list, or not on it) | {"status": "blocked", ...} |
+    {"status": "listed_some", "affected": [...]} (some versions listed; the
+    hosted lookup decides, and blocks if it cannot)."""
+    state, detail = _offline_db()
+    if state == "missing":
+        return None
+    if state == "tampered":
+        return {"status": "blocked", "why": "offline_tampered", "detail": detail, "local": True}
+    try:
+        import pathlib
+        import sqlite3
+        uri = pathlib.Path(detail).as_uri() + "?mode=ro&immutable=1"
+        conn = sqlite3.connect(uri, uri=True)
+        try:
+            conn.execute("PRAGMA mmap_size=268435456")
+            row = conn.execute("SELECT versions, advisory FROM entries WHERE eco = ? AND name = ?",
+                               (eco, normalize(eco, name))).fetchone()
+        finally:
+            conn.close()
+    except Exception as exc:       # a verified list that cannot be read (no sqlite3, a broken file): never "not listed"
+        _warn(f"offline blocklist could not be read ({type(exc).__name__}) — blocking, not guessing")
+        return {"status": "blocked", "why": "offline_error", "local": True}
+    if row is None:
+        return None
+    versions, advisory = row
+    advisory = advisory if isinstance(advisory, str) and _SAFE_ADVISORY.match(advisory) else None
+    if versions == "*":
+        return {"status": "blocked", "advisory": advisory, "local": True, "offline": True}
+    specs = [v for v in str(versions).split("\n") if v]
+    if version and _offline_version_listed(version, specs, eco):
+        return {"status": "blocked", "advisory": advisory, "local": True, "offline": True}
+    return {"status": "listed_some", "advisory": advisory, "affected": specs[:8], "specs": specs}
+
+
+def _offline_after_hosted(eco, name, version, result, offline):
+    """Some versions are on the offline list. Whatever the hosted lookup said,
+    the version that would install is checked against it too (the hosted list
+    can lag the offline one); if that version cannot be worked out, block."""
+    target = version or result.get("resolved_version")
+    if not target and result["status"] == "ok":
+        target = _latest_version(eco, name, 6.0)
+    blocked = {"status": "blocked", "advisory": result.get("advisory") or offline.get("advisory"),
+               "affected": offline.get("affected") or result.get("affected") or [],
+               "registry": result.get("registry")}
+    if target:
+        listed = _offline_version_listed(target, offline.get("specs") or [], eco)
+        if listed:
+            return dict(blocked, local=True, offline=True, resolved_version=target)
+        if listed is False or result["status"] == "ok":
+            return dict(result, resolved_version=result.get("resolved_version") or (target if not version else None))
+        return result if version else dict(blocked, why="version_unresolved")
+    if version:
+        return result
+    return dict(blocked, why="version_unresolved")     # unpinned and the version is unknown
+
+
+_PEP440 = re.compile(
+    r"^\s*v?(?:(?P<epoch>[0-9]+)!)?(?P<release>[0-9]+(?:\.[0-9]+)*)"
+    r"(?P<pre>[-_.]?(?P<pre_l>alpha|beta|preview|pre|rc|a|b|c)[-_.]?(?P<pre_n>[0-9]+)?)?"
+    r"(?P<post>-(?P<post_n1>[0-9]+)|[-_.]?(?P<post_l>post|rev|r)[-_.]?(?P<post_n2>[0-9]+)?)?"
+    r"(?P<dev>[-_.]?dev[-_.]?(?P<dev_n>[0-9]+)?)?"
+    r"(?:\+[a-z0-9]+(?:[-_.][a-z0-9]+)*)?\s*$", re.I)
+_PRE_NAMES = {"alpha": "a", "beta": "b", "c": "rc", "pre": "rc", "preview": "rc"}
+
+
+def _pep440(version):
+    """pip's standard (PEP 440) form of a version, or None if it is not one:
+    `1.0.0-rc1`, `1.0.0.rc1`, `1.0c1` and `1.0.0rc1` all → `1rc1`; trailing
+    `.0`s, a `v` prefix, a zero epoch and a `+local` part do not count."""
+    if not isinstance(version, str) or not version.isascii() or len(version) > 256:
+        return None
+    match = _PEP440.match(version)
+    if not match:
+        return None
+    release = [int(part) for part in match.group("release").split(".")]
+    while len(release) > 1 and release[-1] == 0:
+        release.pop()
+    out = ".".join(str(part) for part in release)
+    if int(match.group("epoch") or 0):
+        out = "%d!%s" % (int(match.group("epoch")), out)
+    if match.group("pre_l"):
+        label = match.group("pre_l").lower()
+        out += "%s%d" % (_PRE_NAMES.get(label, label), int(match.group("pre_n") or 0))
+    if match.group("post"):
+        out += ".post%d" % int(match.group("post_n1") or match.group("post_n2") or 0)
+    if match.group("dev"):
+        out += ".dev%d" % int(match.group("dev_n") or 0)
+    return out
+
+
+def _same_version(eco, a, b):
+    """Do two version strings name the same release? pip compares PEP 440
+    forms; npm (and anything not PEP 440) the hook's plain canonical form."""
+    a, b = str(a).strip().lstrip("="), str(b).strip().lstrip("=")      # `==1.0` as listed
+    if eco == "pip":
+        pa, pb = _pep440(a), _pep440(b)
+        if pa is not None and pb is not None:
+            return pa == pb
+    return _canon_version(a) == _canon_version(b)
+
+
+def _numeric_version(text):
+    """`1.2.3` → (1, 2, 3); anything not purely numeric → None (not compared)."""
+    canon = _canon_version(text)
+    parts = canon.split(".")
+    if canon and all(p.isascii() and p.isdigit() and len(p) <= 64 for p in parts):
+        return tuple(int(p) for p in parts)
+    return None
+
+
+def _offline_version_listed(version, specs, eco="pip"):
+    """True when `version` is on the offline list's specs (`==x`, `<x`,
+    `>=x`, `>=x,<y`), False when it is not, None when a range could not be
+    compared (a non-numeric version on either side)."""
+    unknown = False
+    want = _numeric_version(version)
+    for spec in specs:
+        if spec.startswith("=="):
+            if _same_version(eco, spec[2:], version):
+                return True
+            continue
+        bounds = [b.strip() for b in spec.split(",") if b.strip()]
+        if want is None or not bounds:
+            unknown = True
+            continue
+        inside = True
+        for bound in bounds:
+            op = next((o for o in ("<=", ">=", "<") if bound.startswith(o)), None)
+            other = _numeric_version(bound[len(op):]) if op else None
+            if other is None:
+                inside = None
+                break
+            if (op == ">=" and want < other) or (op == "<" and not want < other) \
+                    or (op == "<=" and want > other):
+                inside = False
+        if inside is None:
+            unknown = True
+        elif inside:
+            return True
+    return None if unknown else False
 
 
 def _local_list_unreadable():
@@ -3861,14 +4662,16 @@ def _canon_version(version):
     text = str(version or "").strip().lower().lstrip("=v").split("+", 1)[0]
     if "!" in text and text.split("!", 1)[0].strip("0") == "":
         text = text.split("!", 1)[1]                      # epoch 0 is the default
-    parts = [str(int(p)) if p.isdigit() else p for p in text.split(".")]
+    parts = [str(int(p)) if p.isascii() and p.isdigit() and len(p) <= 64 else p for p in text.split(".")]
     while len(parts) > 1 and parts[-1] == "0":
         parts.pop()
     return ".".join(parts)
 
 
-def _odd_pin(version):
+def _odd_pin(version, eco=None):
     """A pin that could be another spelling of a listed version."""
+    if eco == "pip" and _pep440(str(version)) not in (None, str(version)):
+        return True                     # `1.0.0-rc1`, `1.0.0.rc1`, `1.0c1` for a listed 1.0.0rc1
     return _canon_version(version) != str(version) or str(version).count(".") < 2
 
 
@@ -3910,7 +4713,10 @@ def _resolve_version_needed(eco, name, first, token, timeout):
     affected = first.get("affected") or []
     latest = _latest_version(eco, name, min(timeout, 6.0))
     if latest is None:
-        return {"status": "unverified", "why": "version", "affected": affected}
+        # Listed for some versions, and the one that would install cannot be
+        # worked out: assume the worst (the MCP server blocks here too).
+        return {"status": "blocked", "why": "version_unresolved", "affected": affected,
+                "advisory": first.get("advisory")}
     second = _query(eco, name, latest, token, timeout)
     if second["status"] == "version_needed":      # a server that ignored the version
         second = dict(second, status="blocked")
@@ -3923,6 +4729,12 @@ def _override_outcome(eco, name, version, timeout):
     that case is put to a person. Uses the unmetered route (no quota cost)."""
     if _locally_blocked(eco, name):
         return {"status": "override_blocked", "advisory": None, "local": True}
+    offline = _offline_lookup(eco, name, version)
+    if offline and offline.get("why") == "offline_tampered":
+        return offline                    # a list that fails its check blocks every install, overrides too
+    if offline and offline["status"] in ("blocked", "listed_some"):
+        return {"status": "override_blocked", "advisory": offline.get("advisory"), "local": True,
+                "affected": offline.get("affected") or []}
     probe = _blocklist_only_lookup(eco, name, version, timeout)
     if probe is None:
         # No answer at all (offline, rate-limited, garbage): the override cannot
@@ -3947,6 +4759,9 @@ def lookup(pkg, token=None, timeout=8.0):
         return _override_outcome(eco, name, version, timeout)
     if _locally_blocked(eco, name):
         return {"status": "blocked", "advisory": None, "local": True}
+    offline = _offline_lookup(eco, name, version)
+    if offline and offline["status"] == "blocked":
+        return dict(offline, registry=None)            # no network call at all
     from concurrent.futures import ThreadPoolExecutor
     with ThreadPoolExecutor(max_workers=2) as pool:
         api = pool.submit(_query, eco, name, version, token, timeout)
@@ -3964,15 +4779,26 @@ def lookup(pkg, token=None, timeout=8.0):
         else:
             result = _resolve_version_needed(eco, name, result, token, timeout)
             result = dict(result, affected=(result.get("affected") or [])[:8])
-    elif version and result["status"] == "ok" and _odd_pin(version):
+    elif version and result["status"] == "ok" and _odd_pin(version, eco):
         # `==1.14.1.0`, `==1.14` or `v1.14.1` can be another spelling of a
         # listed version that a plain text match on the server would miss.
         probe = _blocklist_only_lookup(eco, name, None, timeout)
         if probe and probe.get("status") == "version_needed" and any(
-                _canon_version(version) == _canon_version(bad)
+                _same_version(eco, version, bad)
                 for bad in probe.get("affected") or []):
             result = dict(result, status="blocked", advisory=probe.get("advisory"))
     result = dict(result, registry=exists)
+    if offline and offline["status"] == "listed_some" and result["status"] in ("ok", "unverified"):
+        if pkg.get("spec") or pkg.get("uncertain"):
+            if not version:
+                # A range, a wildcard, --pre or a constraints file: which version
+                # resolves is not "latest", and some are listed offline. The hosted
+                # list may lag, so its "ok" is not enough: a person decides.
+                result = dict(result, status="unverified", why="version_range",
+                              advisory=result.get("advisory") or offline.get("advisory"),
+                              affected=offline.get("affected") or [])
+        else:
+            result = _offline_after_hosted(eco, name, version, result, offline)
     if result["status"] == "ok" and exists is False:
         result["status"] = "not_found"
     return result
@@ -4306,6 +5132,8 @@ def _cache_serve(packages, results, cve_results, cve_ran, unverifiable, protect,
     if _local_list_unreadable():
         _warn("local blocklist unreadable — verdict cache not used")
         return {}
+    if _offline_db()[0] == "tampered":
+        return {}                       # nothing is answered from memory while the list fails its check
     served, ttl = {}, None
     for index, pkg in enumerate(packages):
         if not vc.cacheable(pkg):
@@ -4321,6 +5149,8 @@ def _cache_serve(packages, results, cve_results, cve_ran, unverifiable, protect,
             continue
         if (eco, name) in blocked or _locally_blocked(eco, name) or _local_cve_held(eco, name, version):
             continue
+        if _offline_lookup(eco, name, version):
+            continue                    # on the offline list (any version): never served from memory
         ttl = vc.ttl_seconds(warn=_warn) if ttl is None else ttl
         entry = vc.find(_state_dir(), eco, name, version, pkg["hash"], now, ttl, _warn)
         if entry:
@@ -4476,8 +5306,26 @@ def decide(command, cwd=None, env=None, lookup_fn=None, deadline=CHECK_DEADLINE_
                 outcome = {"status": "unverified", "why": "server"}
             return outcome, (time.monotonic() - begin) * 1000
 
+        # The offline list is asked first, for every package and in this thread:
+        # a listed package (or a list that fails its check) is decided here, so it
+        # can never end up as a pool timeout that the verdict cache then answers.
+        offline_first = {}
+        if lookup_fn is None:
+            for index, pkg in enumerate(packages):
+                try:
+                    off = _offline_lookup(pkg["eco"], pkg["name"], pkg.get("version"))
+                except Exception as exc:    # never a crash of the whole decision: this package is blocked
+                    _warn(f"offline blocklist check for {pkg['name']} failed ({type(exc).__name__}) — blocking it")
+                    off = {"status": "blocked", "why": "offline_error", "local": True}
+                if not off:
+                    continue
+                offline_first[index] = off
+                if off.get("why") in ("offline_tampered", "offline_error") or (
+                        off["status"] == "blocked" and not _has_override(pkg["eco"], pkg["name"])):
+                    results[index] = (dict(off, registry=None), 0.0)
         pool = ThreadPoolExecutor(max_workers=min(8, len(packages) + len(shadow)))
-        futures = [pool.submit(timed, pkg) for pkg in packages]
+        futures = [None if index in results else pool.submit(timed, pkg)
+                   for index, pkg in enumerate(packages)]
         shadow_futures = [pool.submit(timed, pkg, shadow_fn) for pkg in shadow]
         cve_pool, cve_futures = None, []
         if run_cve:
@@ -4493,11 +5341,20 @@ def decide(command, cwd=None, env=None, lookup_fn=None, deadline=CHECK_DEADLINE_
             cve_pool = ThreadPoolExecutor(max_workers=min(8, len(packages)))
             cve_futures = [cve_pool.submit(cve_timed, pkg) for pkg in packages]
         for index, future in enumerate(futures):
+            if future is None:
+                continue                                  # decided by the offline list above
             left = max(0.05, deadline - (time.monotonic() - started))
             try:
                 results[index] = future.result(timeout=left)
             except FutureTimeout:
                 results[index] = ({"status": "unverified", "why": "timeout"}, deadline * 1000)
+            off, pkg = offline_first.get(index), packages[index]
+            if off and off["status"] == "listed_some" and results[index][0].get("status") == "unverified" \
+                    and not pkg.get("version") and not pkg.get("spec") and not pkg.get("uncertain"):
+                # some versions listed offline, and the lookup never said which one installs
+                results[index] = ({"status": "blocked", "why": "version_unresolved",
+                                   "advisory": off.get("advisory"), "affected": off.get("affected") or []},
+                                  results[index][1])
         for index, future in enumerate(shadow_futures):
             left = max(0.05, deadline - (time.monotonic() - started))
             try:
@@ -4549,15 +5406,37 @@ def decide(command, cwd=None, env=None, lookup_fn=None, deadline=CHECK_DEADLINE_
                    evidence + [_cache_evidence(served[index], now)], None, pkg, ms)
         elif status == "ok":
             stats["ok"] += 1
-            lines.append(status_line("ok", _label(pkg), "no known threat", ms, color))
+            detail = "no known threat"
+            if outcome.get("registry") is None:
+                detail += f" · existence on {REGISTRY_NAME[eco]} NOT verified"
+            lines.append(status_line("ok", _label(pkg), detail, ms, color))
             record("no_known_threat", _label(pkg), evidence, None, pkg, ms)
         elif status == "override":
             lines.append(status_line("note", _label(pkg),
                                      "allowed by your own override, not looked up", ms, color))
             record("override", _label(pkg), evidence, None, pkg, ms)
+        elif status == "blocked" and outcome.get("why") in ("offline_tampered", "offline_error"):
+            tampered = outcome.get("why") == "offline_tampered"
+            lines.append(status_line("blocked", _label(pkg),
+                                     "the offline blocklist failed its integrity check" if tampered
+                                     else "the offline blocklist check failed on this package", ms, color))
+            record("blocked", _label(pkg), evidence, explain(outcome["why"], name=name), pkg, ms)
+            stats["blocked"] += 1
+            escalate("deny")
+        elif status == "blocked" and outcome.get("why") == "version_unresolved":
+            bad = [a for a in outcome.get("affected") or [] if isinstance(a, str)]
+            lines.append(status_line("blocked", _label(pkg),
+                                     "some versions are reported as malicious and the version "
+                                     "that would install could not be worked out", ms, color))
+            record("blocked", _label(pkg), evidence,
+                   explain("version_unresolved", name=name, affected=", ".join(bad)), pkg, ms)
+            stats["blocked"] += 1
+            escalate("deny")
         elif status == "blocked":
             advisory = outcome.get("advisory")
             detail = "known malicious package" + (f" · {advisory}" if advisory else "")
+            if outcome.get("offline"):
+                detail += " · offline list"
             lines.append(status_line("blocked", _label(pkg), detail, ms, color))
             if twin:
                 text = explain("blocked_typosquat", name=name, lookalike=twin)
@@ -4728,6 +5607,11 @@ def decide(command, cwd=None, env=None, lookup_fn=None, deadline=CHECK_DEADLINE_
     for note in parsed["notes"]:
         lines.append(status_line("note", "note", note, color=color))
         record("note", note, no_name)
+    if packages:
+        stale = offline_stale_note()
+        if stale:
+            lines.append(status_line("note", "note", stale, color=color))
+            record("note", stale, no_name)
 
     if packages or shadow:
         try:

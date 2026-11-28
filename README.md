@@ -97,6 +97,92 @@ Lockfile installs (`npm ci`, `uv sync`, `poetry install`) are not asked about;
 the hook adds a note that the lockfile's packages were not looked up.
 `STILLRUNNING_HOOK_STRICT=1` refuses instead of asking.
 
+## Offline blocklist
+
+The Claude Code hook can block known-malicious packages with no network call:
+when stillrunning.io is down, rate-limited or unreachable, or the registry is
+slow, a package on the offline list is still blocked.
+
+```bash
+stillrunning blocklist --refresh    # download OSV.dev's malicious-package data (~250 MB) and build it
+stillrunning blocklist --schedule   # refresh daily at 04:41, lowest priority (adds one crontab line)
+stillrunning blocklist --status     # what is installed, and whether it passed its integrity check
+```
+
+The list is a small SQLite file (about 11 MB for every malicious pip and npm
+package OSV.dev knows) in `~/.stillrunning`. The hook opens it read-only and
+does one indexed lookup; it never downloads or rebuilds it. Its manifest
+carries an HMAC with a per-machine key, so corruption, a half-written file or
+a change by anything that cannot read the key is caught. If the check fails,
+every install is blocked until `stillrunning blocklist --refresh` rebuilds it.
+Without the list, the hook works as before (the hosted lookup).
+
+A list more than 3 days old (three missed daily refreshes), with no build
+time, or with a build time in the future is **stale**: it
+still blocks everything on it, but every install check then carries a warning
+that packages reported since its build are not on it, with the refresh
+command, and `stillrunning blocklist --status` exits 3 and says STALE.
+
+`stillrunning blocklist --refresh --force` accepts a refresh that would drop an
+ecosystem or shrink one by more than half; it is accepted only from a person at
+a terminal, and the Claude Code hook asks a person before an agent may run it
+(or `--unschedule`). What a forced refresh dropped is printed, appended to
+`~/.stillrunning/blocklist_force.log` and kept in the manifest's history.
+A `stillrunning` command run through Claude Code whose words are only known at
+run time (a variable such as `$X`, `$(…)`, backticks, `"$@"`) or that is fed
+by `xargs` or `parallel` is asked about, because it could be any of
+stillrunning's own switches (`allow`, `remember`, uninstall, `blocklist
+--force`…): `stillrunning scan $PKG` asks too. Write the value out, or run it
+yourself in a terminal.
+**What the hook's command matching covers.** It recognises stillrunning's own
+commands (`allow`, `remember`, uninstall, `whitelist add/remove`, `blocklist
+--force/--unschedule`) when they are spelled out on the command line, in any
+literal spelling, and when part of them is only known at run time (a variable,
+`$(…)`, backticks, `"$@"`, or words fed by `xargs`/`parallel`), which asks.
+Indirect execution is outside what command matching can see: `eval` of a
+built-up string, shell aliases or functions defined elsewhere, script files,
+other interpreters (`python -c`, `node -e`, …) and decoded payloads (base64
+and similar). Those are a known limit of command matching. A separate layer does
+not depend on it: commands and Write/Edit calls that name stillrunning's
+settings, state files (`~/.stillrunning`), its own code or Claude Code's
+settings are checked by path, and asked about. That path layer has known gaps
+of its own (tracked in the issue tracker), but they are not about how a
+stillrunning command is spelled.
+To switch the offline list off, remove all the `blocklist*` files in
+`~/.stillrunning` (removing only the manifest while the database or key is
+still there counts as tampering and blocks every install).
+
+Known limits (tracked, not yet addressed):
+
+- The force log file (`blocklist_force.log`) is not covered by the MAC; the
+  manifest's forced-refresh history is.
+- A refresh over a list that fails its integrity check starts afresh: the
+  forced-refresh history and the "shrank by more than half" comparison come
+  from the list in place, so they are lost with it. (Damaging the list needs a
+  write in `~/.stillrunning`, which the hook already asks about.)
+- `--unschedule` is recognised in full and in the abbreviations argparse
+  accepts today (`--uns…`); shorter ones (`--un`, `--u`) are rejected by
+  argparse as ambiguous with `--uninstall-hook*`. Renaming those options would
+  make them valid and they would then also need asking about.
+
+- The HMAC is a per-machine MAC, not a third-party signature: code running as
+  your user can read the key and re-sign a changed list, and can put back an
+  older list that was valid when it was built (its build time is then old, so
+  the stale warning shows).
+- A package with some versions listed, installed with no exact version, is
+  blocked when the version that would install cannot be worked out. Installed
+  with a version range or wildcard (`pkg>=1`, `pkg@^1`, `pkg==1.0.*`), with
+  `--pre` or with a constraints file, it is asked about instead (never
+  allowed on the hosted lookup's word alone): a person decides.
+- Words a command only names indirectly (inside `npx -c '…'`, `npm exec -c`,
+  `sh -c`, a written-then-run script and similar "shadow" words the hook
+  cannot place for certain) are looked up on the hosted service only, not
+  offline.
+- On Windows the database's hash is checked on every hook call (no stable
+  inode/ctime to remember it by): about 0.1 s more per call.
+- Version ranges are compared offline only for plain numeric versions;
+  anything else (`1.0rc1`) is left to the hosted lookup.
+
 ## Known vulnerabilities (CVEs)
 
 Separate from the blocklist: this checks the packages you already use against

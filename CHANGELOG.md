@@ -9,11 +9,212 @@
 
 ## Unreleased (not published)
 
-Five batches since 2.14.3, newest first below. Two change behaviour: the
-hook failing closed changes what is blocked (a crash or timeout of the hook
-now blocks, and a command over the 128K-character limit is asked about), and
-setup changes the exit code of `--setup` (BREAKING, below). The other three
-change nothing that is checked or blocked.
+Six batches since 2.14.3, newest first below. Three change behaviour: the
+offline blocklist changes what is blocked (below), the hook failing closed
+changes what is blocked (a crash or timeout of the hook now blocks, and a
+command over the 128K-character limit is asked about), and setup changes the
+exit code of `--setup` (BREAKING, below). The other three change nothing that
+is checked or blocked.
+
+### Offline blocklist; no downgrade when the lookup cannot complete (2026-11-25)
+
+A contract test of the hook against the hosted MCP server found that when an
+anonymous user's free lookups are used up, a burst of installs is
+rate-limited at the edge, and the hook then asked about every package,
+including known-malicious ones, instead of blocking them.
+
+- **`stillrunning blocklist --refresh / --schedule / --status`**: builds an
+  offline list of every malicious pip and npm package OSV.dev knows (about
+  11 MB of SQLite; the build downloads ~250 MB, uses ~180 MB of memory for about
+  a minute, single-threaded at the lowest priority). A package on it is
+  **blocked with no network call**, whatever the state of stillrunning.io or
+  the registry. Names are normalized as the hook does (PEP 503 for pip; npm
+  lower case), so case and separator spellings match.
+- The list's manifest carries an HMAC with a per-machine key. If it, the key
+  or the database does not check out, **every install is blocked** with a
+  message naming the rebuild command. Without a list the hook works as before.
+- **Stricter (BREAKING):** a package with some versions reported as
+  malicious, installed with no exact version, is now **blocked** when the
+  version that would install cannot be worked out (it used to ask). When the
+  latest version can be worked out it is checked as before, so `npm install
+  axios` or `chalk` still installs a release that is not listed. That version
+  is checked against the offline list too (the hosted list can lag it), and a
+  pinned version inside a listed numeric range is blocked offline.
+  Installed with a version range or wildcard, `--pre` or a constraints file,
+  such a package is asked about, never allowed on the hosted lookup's word
+  alone (the hosted list can lag the offline one).
+- A list more than 3 days old (or with no build time, or a build time in the
+  future) warns on every install check (it still blocks everything on it);
+  `stillrunning blocklist --status` exits 3 and says STALE.
+- A refresh that would drop an ecosystem, or shrink one by more than half, is
+  refused and the current list stays.
+- The offline list is asked first, for every package, before any network
+  lookup starts, so a listed package is never left to a lookup that times out;
+  and the verdict cache never answers for a package on the offline list (or for
+  anything while the list fails its check).
+- `stillrunning blocklist --refresh --force` accepts a refresh that was
+  refused for dropping an ecosystem or shrinking by more than half (an empty
+  list is still refused).
+- An error while asking the offline list about one package blocks that
+  package (it could make the whole decision fall back to "ask"); a verified
+  list that SQLite cannot read (no `sqlite3` module, a broken file) blocks
+  instead of falling back to the hosted lookup. With no list at all the hosted
+  lookup runs as before.
+- The Claude Code hook asks a person before an agent may run
+  `stillrunning blocklist --force`, `--unschedule` or `--schedule`, spelled out
+  or as any prefix argparse could accept (`--f`, `--u`, `--uns`, `--sch`, …,
+  with or without `=value`). `--schedule` always asks because the line it
+  writes is built from the current `HOME` and Python: `HOME=/tmp/x stillrunning
+  blocklist --schedule`, or a run from a throwaway venv, would put a refresh
+  line in place that never runs. Three commands now refuse (exit 2, nothing
+  changed) unless a person is at a terminal: `blocklist --refresh --force`,
+  `blocklist --unschedule` (removing the line leaves the offline list to age
+  silently), and `blocklist --schedule` when it would replace an existing
+  refresh line that differs from the one it would write. "A person at a
+  terminal" means stdin is a terminal **and** a random 4-character code,
+  printed on the controlling terminal (`/dev/tty`), is typed back there within
+  two minutes. This stops blind input only: piped input (`echo … |`,
+  `printf … |`, `yes |`), no terminal at all, a typed-ahead guess, and
+  `script -qc '…' /dev/null` with stdin from `/dev/null` all refuse, because
+  the code is new each time and shown only on the terminal. It cannot tell a
+  person from a program that runs the command on a pseudo-terminal and reads
+  what it prints: `expect`, Python's `pty` module, or plain bash (a `coproc`
+  around `script -qf`, reading the code from script's output and writing it
+  back) all pass. No check made on the machine itself can tell those apart. The
+  real guard is the Claude Code hook, which asks a person before an agent runs
+  the spellings of these commands it can read (the known limits below list the
+  ones it cannot); a script file or a decoded payload that does it is
+  indirect execution (below). A `--schedule` the hook does not see can put a
+  refresh line built from another HOME in place when none exists yet; the
+  offline list then ages, and `stillrunning blocklist --status` shows how old
+  it is. Adding the first refresh line, finding
+  the identical line, and `--unschedule` with nothing scheduled need no
+  terminal. Which prefixes argparse passes on to the subcommand depends on the
+  Python release, not only on the minor version: `blocklist --u` and `--un`
+  reach `--unschedule` on 3.15.2 and 3.12.14, and are rejected as ambiguous
+  (with `--uninstall-hook*`) on 3.8 and 3.12.3, so the hook asks for all of
+  them; the next items say which spellings of the command are covered. Forced refreshes stay on
+  record in the manifest's history; a manifest removed while the database or
+  key is still there counts as tampering; `introduced: "0.0.0"` (any all-zero
+  spelling) means every version.
+- The hook's own-command rules find `blocklist … --force/--unschedule` and
+  `whitelist … add/remove` wherever they stand among the command's words, so an
+  option with a value (`--token x`, `--name x`) before, between or after them
+  no longer hides them (the whitelist rule had the same gap before this
+  release). A failed first build no longer leaves a database without a
+  manifest (read as tampering), and any 0.0.0 pre-release (`0.0.0-0`,
+  `0.0.0-alpha`, `0.0.0a0`) as an `introduced` version means every version.
+- **Own commands: fail-closed with a read-only allow-list.** A simple
+  command in which the word `stillrunning` stands outside quotes (in any word:
+  the program, a module, a package spec, a path) and which carries a run-time
+  word is asked about, unless its program is one of these read-only tools:
+  `grep`, `rg` (not with `--pre`), `ls`, `cat`, `head`, `tail`, `echo`,
+  `printf`, `wc`, `find` (not with `-exec`, `-execdir`, `-ok`, `-okdir`,
+  `-delete`, `-fprint*`, `-fls`), and `git log` / `diff` / `show` / `status`
+  (not with `git -c`, `--output`, `--ext-diff`, `--textconv`); `xargs` handing
+  words to one of these is read-only too. Every other program asks: unknown
+  programs, wrappers (`nohup`, `stdbuf`, `sudo -u`, `env -i`, `flock`,
+  `setsid`, `chrt`, `taskset`, `ssh host`, …), interpreters (`python3.13t`, …)
+  and launchers (`uvx`, `uv run -m`, `pipx run`, `parallel`, …). Matching them
+  one by one always left one out (reviews 8 and 9).
+  - **run-time words:** `$X`, `${…}`, `$(…)`, backticks, `"$@"` (unquoted or inside
+    double quotes; a `$` inside single quotes, `awk '{print $1}'`, is not one), brace lists and
+    ranges (`--unschedul{e,e}`), globs (`*`, `?`, `[…]`; `name[extras]` is a
+    package name, not a glob), and input given to that command by `xargs`,
+    `parallel`, a pipe, `<`, a here-string (`<<<`) or a here-document. They count in the command that holds
+    the word `stillrunning` (`stillrunning scan x && echo $?` does not ask), and
+    for a variable that holds it (`sr=stillrunning; $sr $X evil`) anywhere in the
+    line.
+  - **quotes:** text in quotes is data (`git commit -m "stillrunning: fix $X"`,
+    `pytest -k "stillrunning and $X"` do not ask), except text handed to a shell
+    to run as a quoted argument (`bash -c '…'`, `sh -c "…"`, `ssh host '…'`,
+    `script -qc '…'`, `xargs -I{} sh -c '… {}'`) or as a here-document or
+    here-string to a shell (`bash <<EOF`, `bash <<<'…'`, `sh -s <<<'…'`,
+    `at now <<<'…'`), which is judged as a command of its own whatever its
+    spacing (tabs, `{a,b,c}`, `a${IFS}b`, a single word) and however it is
+    attached (`script -qc'…'`, `script --command='…'`, `env -S'…'`, `su -c'…'`;
+    a word ending in a shell's name, `…; : /bin/sh`, is still read). Inside the
+    string each command is judged on its own, so `bash -c 'stillrunning${IFS}…'`
+    asks while `ssh host 'cd $HOME/app && stillrunning scan .'` and
+    `bash -c 'stillrunning scan .; echo $?'` do not. Shell strings nested more
+    than three deep are not followed; at that depth any string that names
+    stillrunning's switches or protected files asks; so is the inside of `$(…)`, and a
+    `$(…)` that prints the word counts for the command around it
+    (`$(echo stillrunning) $X evil` asks). The `$(…)` and backtick spans are
+    found before quotes are read, so a `$(` or backtick inside single quotes
+    still counts as a run-time word in a command that names stillrunning
+    (`chrt 1 stillrunning --token '$(' … ')'` asks; so does
+    `awk '{print $(NF)}' ~/stillrunning/x.txt`, a false ask).
+  - The literal own-switch rules are unchanged and still apply without any
+    run-time word (`stillrunning allow evil`, `uvx stillrunning@latest allow
+    evil`, `stillrunnin{g,g} allow evil`, `$sr blocklist --unsched*`).
+  - **New false asks (the cost of the rule):** commands that name stillrunning
+    and carry a run-time word but are not read-only now ask, for example
+    `pip download stillrunning -d $TMP`, `docker run --name stillrunning img
+    $CMD`, `python3 script.py stillrunning $X`, `uv run grep stillrunning $X`,
+    `stillrunning scan $PKG`, `stillrunning scan $HOME/project`,
+    `stillrunning cve --refresh --cwd "$PWD"`, `stillrunning scan-manifest
+    req*.txt`, `cat pkgs.txt | xargs stillrunning check-package`, and
+    `HOME=$(mktemp -d) python3 -m pytest ~/stillrunning/tests` (a path naming
+    stillrunning, and an assignment from `$(…)`). Working in a `stillrunning*`
+    checkout asks often: `du -sh ~/stillrunning-*`, `tar czf x.tgz
+    ~/stillrunning-dist-*`, `sha256sum ~/stillrunning-dist-2.14.3/*`, `twine
+    check ~/stillrunning-dist-*/*`, `cp ~/stillrunning/README.md $TMP/`, `sed -n
+    1,20p ~/stillrunning/stillrunning/*.py`, `diff ~/stillrunning/*.py /tmp`,
+    `for f in ~/stillrunning/tests/*.py; do …`, `export
+    PYTHONPATH=~/stillrunning:$PYTHONPATH`, `journalctl -u stillrunning --since
+    "$T"`, `git -C ~/stillrunning-x archive $A | tar -x -C $D`, `pipx upgrade
+    stillrunning $X`, `stat ~/stillrunning/*`, `file ~/stillrunning-dist-2.14.3/*`,
+    `sort ~/stillrunning/*.txt`, `docker logs stillrunning --tail $N`, `python3 -m
+    pytest ~/stillrunning/tests -k $K`. `cd ~/stillrunning-x` is not
+    on the list either: `cd ~/stillrunning-x $X` would ask, `cd ~/stillrunning-x
+    && make $X` does not (the run-time word is in another command).
+- Known limits of the own-command matching: indirect execution is not
+  followed (`eval`, aliases and functions defined elsewhere, script files,
+  other interpreters such as `python -c` and `node -e`, judged only by what
+  their code imports or writes, and decoded payloads); a command that never
+  spells the word `stillrunning` outside quotes or a shell string
+  (`X=allow; $sr $X evil` with `sr` set elsewhere, `S=stillrunnin; ${S}g $X`,
+  and the program word in quotes behind a wrapper the hook does not skip:
+  `chrt 1 "stillrunning" $X evil`, `foo $'stillrunning' $X evil`); a variable
+  set through `export`, `declare`, `typeset`, `readonly` or `local`
+  (`export sr=stillrunning; $sr $X evil`; the bare `sr=stillrunning; …` asks);
+  quoted text that reaches a shell other than as a quoted argument, a
+  here-document or a here-string (`echo '…' | sh`, `printf '%s' '…' | xargs -0
+  sh -c`, `… | xargs -0 script -qc`, `C='…'; sh -c "$C"`); the output of a
+  read-only program that is then run (`X=allow; echo stillrunning $X evil |
+  xargs nohup`, `… | sh`: `echo` is on the allow-list);
+  words that `find -exec`/`-execdir`/`-ok` supplies (`find /x -name allow
+  -exec stillrunning {} evil \;`); and top-level switches spelled as argparse prefixes or
+  with `=` (`--al x`, `--allow=x`); abbreviated long options of a runner
+  (`env --split-str='…'`); words that runners other than ssh join into one line
+  (`autossh`, `tmux`, `su -c` with extra words: not confirmed to run them);
+  positional words reached without `$0`…`$9`, `$@` or `$*` (`for w; do …`,
+  `${!#}`, a top-level `set -- stillrunning blocklist; "$@" --unschedule`).
+  `find -exec` and the top-level prefixes are planned for the next pull request.
+  A shell command whose option words are thousands of characters long can take
+  longer than the hook's 25-second limit and is then blocked (on Windows, where
+  there is no such alarm, Claude Code's `onFailure` setting decides).
+- A shell string that refers to `$0`…`$9`, `$@` or `$*` while words follow it
+  is judged together with those words (`bash -c '$0 $1 --unschedule'
+  stillrunning blocklist` and `bash -c 'HOME=/tmp/x $0 $1 --schedule'
+  stillrunning blocklist` ask), and the words ssh sends after the host are
+  judged as the one line the remote shell runs (`ssh host stillrunning
+  'blocklist${IFS}--unschedule'` asks). A shell string with `$1` and words after
+  it that name stillrunning therefore asks even when it only prints them
+  (`bash -c 'echo $1' _ stillrunning`), a false ask.
+- A refresh that fails or is interrupted (Ctrl-C) anywhere between creating
+  the key and writing the manifest takes back what it added (its database, a
+  key it created, its temporary manifest), so nothing is left that reads as
+  tampering; the list in place before is never touched, and once the new
+  manifest is in place the refresh counts as done.
+- pip pins are compared in their standard form (PEP 440): `1.0.0-rc1`,
+  `1.0.0.rc1` and `1.0c1` all match a listed `1.0.0rc1` (also post, dev,
+  alpha/beta spellings), offline and on the hosted path.
+- Known limits are listed in the README (Offline blocklist).
+- A package the hook lets through without having been able to check that it
+  exists on the registry now says so: `no known threat · existence on PyPI
+  NOT verified`.
 
 ### Setup never ends silently unprotected (setup fuzz, 2026-11-24)
 
