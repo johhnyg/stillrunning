@@ -982,8 +982,12 @@ def _own_fail_closed(command, inner, commands):
     def run_time(n):
         """A run-time word in the command that receives the word `stillrunning`."""
         words, plain = commands[n], masked[n]
-        return any("$" in w or "`" in w for w in expanding[n]) \
-            or any(_has_brace(w) or _is_glob(w) for w in plain) \
+        # Text handed to a shell is expanded there, single quotes or not
+        # (`bash -c 'stillrunning${IFS}…'`), and a `$(…)` placeholder counts wherever
+        # it stands: lifting is quote-blind, so `'$(' … $X … ')'` can hide a word in it.
+        seen = words if _is_shell_text(words) else expanding[n]
+        return any("$" in w or "`" in w for w in seen) or any(_SUBST_MARK in w for w in words) \
+            or any(_has_brace(w) or _is_glob(w) for w in (words if seen is words else plain)) \
             or any(_prog_name(w) in _ARG_FEEDERS for w in words) \
             or bool(_PIPE.search(words.op) or words.stdin_file or words.here is not None or words.has_heredoc)
 
@@ -1172,9 +1176,12 @@ def _paths_touch_protection(command, cwds, depth):
             cwds = cwds[:8]
         if depth < 3 and not _CODE_RUNNERS.match(program) and program not in _DATA_COMMANDS \
                 and _is_shell_text(cmd):
+            # every word but the runners and their options: a string with no space
+            # still runs (`bash -c 'stillrunning<TAB>…'`, `'{a,b,c}'`, `'a${IFS}b'`)
             for word in cmd:
-                if (" " in word or "\n" in word or ";" in word) and \
-                        _paths_touch_protection(word, cwds, depth + 1):
+                if word.startswith("-") or _prog_name(word) in _STRING_RUNNERS:
+                    continue
+                if _paths_touch_protection(word, cwds, depth + 1):
                     return True
     return False
 

@@ -1620,3 +1620,191 @@ def test_r11_a_dollar_inside_single_quotes_is_not_a_run_time_word(home, command)
 ])
 def test_r11_a_dollar_inside_double_quotes_still_counts(home, command):
     assert ch.touches_protection(command, cwd=str(home)), command
+
+
+# ── review 12: shell strings with no space, ${IFS} and '$(' ; a code typed back on the terminal ──
+
+T = "\t"
+R12_ASK = [
+    # A: no space in the string handed to the shell
+    "bash -c 'stillrunning" + T + "blocklist" + T + "--unschedule'",
+    "bash -c $'stillrunning\\tblocklist\\t--unschedule'",
+    "bash -c 'true&&stillrunning" + T + "blocklist" + T + "--unschedule'",
+    "bash -c '{stillrunning,blocklist,--unschedule}'",
+    "sh -c 'stillrunning" + T + "allow" + T + "evil'",
+    # B: ${IFS} and other expansions inside single quotes handed to a shell
+    "bash -c 'stillrunning${IFS}blocklist${IFS}--unschedule'",
+    "sh -c 'stillrunning${IFS}blocklist${IFS}--unschedule'",
+    "script -qc 'stillrunning${IFS}blocklist${IFS}--unschedule' /dev/null",
+    "bash -c 'stillrunning$IFS\"blocklist\"$IFS--unschedule'",
+    "bash -c 'stillrunning${IFS}blocklist${IFS}--schedule'",
+    "bash -c 'stillrunning${IFS}allow${IFS}evil'",
+    "X=allow bash -c 'stillrunning${IFS}$X${IFS}evil'",
+    "bash -c \"stillrunning\\${IFS}\\$X\"",
+    "bash -c 'stillrunning$(echo \" allow evil\")'",
+    "bash -c 'stillrunning`echo \" allow evil\"`'",
+    "su -c 'stillrunning${IFS}$X'", "watch 'stillrunning${IFS}$X'", "flock /tmp/l -c 'stillrunning${IFS}$X'",
+    "ssh host 'stillrunning${IFS}$X'",
+    "bash -c 'stillrunning${IFS}--uninstall-hook-claude-code'",
+    "bash -c '$(echo stillrunning) $X evil'", "bash -c '`echo stillrunning` $X evil'",
+    # C: a quoted '$(' … ')' pair around an unquoted word
+    "X=--unschedule; chrt 1 stillrunning --token '$(' blocklist $X; echo ')'",
+    "X=--unschedule; chrt 1 stillrunning --token '`' blocklist $X; echo '`'",
+    "chrt 1 stillrunning --token '$(' $X evil ')'",
+]
+
+
+@pytest.mark.parametrize("command", R12_ASK)
+def test_r12_shell_strings_and_lifted_quotes_ask(home, command):
+    """IMPORTANT (review 12): these removed the refresh line or flipped a switch without asking."""
+    assert ch.touches_protection(command, cwd=str(home)), command
+    assert ch.decide(command, env={})["action"] == "ask", command
+
+
+@pytest.mark.parametrize("command", [
+    "awk '{print $1}' ~/stillrunning/x.txt", "sed -n 's/$/x/p' ~/stillrunning/x.txt",
+    "bash -c 'stillrunning blocklist --status'", "bash -c 'ls" + T + "-la'", "bash -c ls",
+    "git commit -m 'stillrunning${IFS}x'", "stillrunning scan x && echo $?",
+    "grep -r 'stillrunning${IFS}' ~/notes", "ssh host uptime",
+])
+def test_r12_controls_still_allow(home, command):
+    assert not ch.touches_protection(command, cwd=str(home)), command
+
+
+@pytest.mark.skipif(os.name == "nt", reason="crontab")
+def test_r12_unschedule_needs_a_person(home, monkeypatch, capsys):
+    """IMPORTANT (review 12): --unschedule removed the refresh line with no terminal check."""
+    line = "41 4 * * * /usr/bin/python3 -m stillrunning blocklist --refresh " + ob.CRON_MARK
+    written = _fake_crontab(monkeypatch, ["17 * * * * other job", line])
+    monkeypatch.setattr(ob, "_a_person_is_typing", lambda: False)
+    assert ob.main(["--unschedule"]) == 2 and written == []
+    assert "person" in capsys.readouterr().out
+    monkeypatch.setattr(ob, "_a_person_is_typing", lambda: True)
+    assert ob.main(["--unschedule"]) == 0 and written == ["17 * * * * other job\n"]
+
+
+@pytest.mark.skipif(os.name == "nt", reason="crontab")
+def test_r12_unschedule_with_nothing_scheduled_asks_nobody(home, monkeypatch):
+    _fake_crontab(monkeypatch, ["17 * * * * other job"])
+    monkeypatch.setattr(ob, "_a_person_is_typing", lambda: pytest.fail("asked for a code"))
+    assert ob.main(["--unschedule"]) == 0
+
+
+def test_r12_a_terminal_on_stdin_is_not_enough(monkeypatch):
+    """isatty alone passed `script -qc`; the code must also be typed back on /dev/tty."""
+    monkeypatch.setattr(ob.sys, "stdin", type("Tty", (), {"isatty": lambda self: True})())
+    monkeypatch.setattr(ob, "_code_typed_back", lambda: False)
+    assert ob._a_person_is_typing() is False
+    monkeypatch.setattr(ob, "_code_typed_back", lambda: True)
+    assert ob._a_person_is_typing() is True
+
+
+def test_r12_the_code_is_random_and_unambiguous():
+    import inspect
+    assert "secrets.choice" in inspect.getsource(ob._code_typed_back)
+    assert not set("0O1I5S8B") & set(ob._CODE_LETTERS) and ob._CODE_WAIT <= 300
+
+
+# Real processes: a fake `crontab` first on PATH records any write; nothing touches the real one.
+CRON_LINE = "41 4 * * * /usr/bin/python3 -m stillrunning blocklist --refresh "
+
+
+def _fake_cron_env(tmp_path, home):
+    bindir = tmp_path / "bin"
+    bindir.mkdir()
+    tab = tmp_path / "crontab.txt"
+    tab.write_text("17 * * * * other job\n" + CRON_LINE + ob.CRON_MARK + "\n")
+    fake = bindir / "crontab"
+    fake.write_text('#!/bin/sh\nif [ "$1" = "-l" ]; then cat "%s"; exit 0; fi\n'
+                    'cat > "%s"; exit 0\n' % (tab, tmp_path / "WRITTEN"))
+    fake.chmod(0o755)
+    env = dict(os.environ, HOME=str(home), PATH=str(bindir) + os.pathsep + os.environ.get("PATH", ""),
+               PYTHONPATH=os.pathsep.join(p for p in (ROOT, os.environ.get("PYTHONPATH")) if p),
+               STILLRUNNING_CVE_CHECK="0", STILLRUNNING_NO_TELEMETRY="1")
+    return env, tmp_path / "WRITTEN"
+
+
+SR = "%s -m stillrunning blocklist " % sys.executable
+
+
+@pytest.mark.skipif(os.name == "nt", reason="crontab and /dev/tty")
+@pytest.mark.parametrize("feed", ["echo AAAA |", "printf 'AAAA\\n' |", "printf 'y\\ny\\n' |", "", "yes |"])
+@pytest.mark.parametrize("args", ["--unschedule", "--refresh --force"])
+def test_r12_piped_input_never_passes(home, tmp_path, feed, args):
+    env, written = _fake_cron_env(tmp_path, home)
+    line = "%s %s%s" % (feed, SR, args) if feed else "%s%s </dev/null" % (SR, args)
+    ran = subprocess.run(line,
+                         shell=True, env=env, capture_output=True, text=True, timeout=60,
+                         start_new_session=True)          # no controlling terminal either
+    assert ran.returncode == 2, ran.stdout + ran.stderr
+    assert not written.exists()
+
+
+def _script_ok():
+    import shutil
+    return sys.platform.startswith("linux") and shutil.which("script") is not None
+
+
+@pytest.mark.skipif(not _script_ok(), reason="util-linux script")
+@pytest.mark.parametrize("feed", ["", "printf 'AAAA\\n' |", "echo y |"])
+def test_r12_script_qc_does_not_pass(home, tmp_path, feed):
+    """`script -qc` gives the command a terminal; with stdin from /dev/null or a pipe nobody can
+    see the code it prints, so a guess fails and end of input refuses."""
+    env, written = _fake_cron_env(tmp_path, home)
+    inner = "%s--unschedule" % SR
+    cmd = "%s script -qec '%s' /dev/null%s" % (feed, inner, "" if feed else " </dev/null")
+    ran = subprocess.run(cmd, shell=True, env=env, capture_output=True, text=True, timeout=200,
+                         start_new_session=True)
+    assert not written.exists(), ran.stdout
+    assert "Removed" not in ran.stdout and "Nothing was changed" in ran.stdout
+
+
+def _in_a_pty(env, argv, answer):
+    """Run argv with a new pseudo-terminal as its controlling terminal; `answer(screen)` returns
+    what to type once the prompt shows (or None to type nothing)."""
+    import pty
+    import select as sel
+    pid, fd = pty.fork()
+    if pid == 0:                                   # child
+        try:
+            os.execve(argv[0], argv, env)
+        finally:
+            os._exit(127)
+    screen, typed, deadline = b"", False, time.monotonic() + 60
+    while time.monotonic() < deadline:
+        ready, _, _ = sel.select([fd], [], [], 0.5)
+        if ready:
+            try:
+                chunk = os.read(fd, 1024)
+            except OSError:
+                break
+            if not chunk:
+                break
+            screen += chunk
+        if not typed and b"> " in screen:
+            reply = answer(screen.decode("utf-8", "replace"))
+            typed = True
+            if reply is not None:
+                os.write(fd, reply.encode() + b"\r")
+    _, status = os.waitpid(pid, 0)
+    os.close(fd)
+    return os.WEXITSTATUS(status), screen.decode("utf-8", "replace")
+
+
+@pytest.mark.skipif(not sys.platform.startswith("linux"), reason="pty")
+def test_r12_a_wrong_code_on_a_real_terminal_refuses(home, tmp_path):
+    env, written = _fake_cron_env(tmp_path, home)
+    rc, screen = _in_a_pty(env, [sys.executable, "-m", "stillrunning", "blocklist", "--unschedule"],
+                           lambda s: "AAAA")
+    assert rc == 2 and not written.exists(), screen
+
+
+@pytest.mark.skipif(not sys.platform.startswith("linux"), reason="pty")
+def test_r12_the_right_code_on_a_real_terminal_passes_this_is_also_the_known_limit(home, tmp_path):
+    """A person reads the code and types it. So can a program that drives a pseudo-terminal and
+    reads the screen (this test is one): that is the documented limit of the check."""
+    import re as _re
+    env, written = _fake_cron_env(tmp_path, home)
+    rc, screen = _in_a_pty(env, [sys.executable, "-m", "stillrunning", "blocklist", "--unschedule"],
+                           lambda s: _re.search(r"press Enter: (\w{4})", s).group(1))
+    assert rc == 0 and written.read_text() == "17 * * * * other job\n", screen

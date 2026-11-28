@@ -66,11 +66,22 @@ including known-malicious ones, instead of blocking them.
   with or without `=value`). `--schedule` always asks because the line it
   writes is built from the current `HOME` and Python: `HOME=/tmp/x stillrunning
   blocklist --schedule`, or a run from a throwaway venv, would put a refresh
-  line in place that never runs. `stillrunning blocklist --schedule` itself now
-  refuses (exit 2, crontab unchanged) to replace an existing refresh line that
-  differs from the one it would write unless a person runs it at a terminal,
-  the same rule as `--force`; adding the first line, or finding the identical
-  line, needs no terminal. Which prefixes argparse passes on to the subcommand depends on the
+  line in place that never runs. Three commands now refuse (exit 2, nothing
+  changed) unless a person is at a terminal: `blocklist --refresh --force`,
+  `blocklist --unschedule` (removing the line leaves the offline list to age
+  silently), and `blocklist --schedule` when it would replace an existing
+  refresh line that differs from the one it would write. "A person at a
+  terminal" means stdin is a terminal **and** a random 4-character code,
+  printed on the controlling terminal (`/dev/tty`), is typed back there within
+  two minutes. Piped input (`echo … |`, `printf … |`, `yes |`), no terminal at
+  all, and `script -qc '…' /dev/null` with stdin from `/dev/null` or a pipe all
+  refuse: the code is new each time and only shown on the terminal. Known
+  limit: a program that drives a pseudo-terminal and reads its screen
+  (`expect`, Python's `pty` module) can read the code and type it back; the
+  hook asks for the direct spellings of these commands, and a script that does
+  this is indirect execution (below). Adding the first refresh line, finding
+  the identical line, and `--unschedule` with nothing scheduled need no
+  terminal. Which prefixes argparse passes on to the subcommand depends on the
   Python release, not only on the minor version: `blocklist --u` and `--un`
   reach `--unschedule` on 3.15.2 and 3.12.14, and are rejected as ambiguous
   (with `--uninstall-hook*`) on 3.8 and 3.12.3, so the hook asks for all of
@@ -111,9 +122,16 @@ including known-malicious ones, instead of blocking them.
     to run as a quoted argument (`bash -c '…'`, `sh -c "…"`, `ssh host '…'`,
     `script -qc '…'`, `xargs -I{} sh -c '… {}'`) or as a here-document or
     here-string to a shell (`bash <<EOF`, `bash <<<'…'`, `sh -s <<<'…'`,
-    `at now <<<'…'`), which is judged as a command of its own; so is the inside of `$(…)`, and a
+    `at now <<<'…'`), which is judged as a command of its own whatever its
+    spacing (tabs, `{a,b,c}`, `a${IFS}b`, a single word); inside such a string a
+    `$` counts even in single quotes, because that shell expands it
+    (`bash -c 'stillrunning${IFS}…'` asks); so is the inside of `$(…)`, and a
     `$(…)` that prints the word counts for the command around it
-    (`$(echo stillrunning) $X evil` asks).
+    (`$(echo stillrunning) $X evil` asks). The `$(…)` and backtick spans are
+    found before quotes are read, so a `$(` or backtick inside single quotes
+    still counts as a run-time word in a command that names stillrunning
+    (`chrt 1 stillrunning --token '$(' … ')'` asks; so does
+    `awk '{print $(NF)}' ~/stillrunning/x.txt`, a false ask).
   - The literal own-switch rules are unchanged and still apply without any
     run-time word (`stillrunning allow evil`, `uvx stillrunning@latest allow
     evil`, `stillrunnin{g,g} allow evil`, `$sr blocklist --unsched*`).

@@ -493,6 +493,12 @@ def schedule(remove=False):
         if not ours:
             print("No offline-blocklist refresh is scheduled; crontab unchanged.")
             return 0
+        if not _a_person_is_typing():
+            # without the line no refresh runs, and the offline list silently ages
+            print("The offline-blocklist refresh line is only removed when a person runs this at "
+                  "a terminal and types the code shown. Nothing was changed.\n  in place: "
+                  + "\n  in place: ".join(ours))
+            return 2
         new, said = rest, "Removed the offline-blocklist refresh line from your crontab."
     else:
         want = cron_line()
@@ -503,7 +509,8 @@ def schedule(remove=False):
             # The line is built from this HOME and this Python: from another HOME or a
             # throwaway venv it would replace a working refresh with one that never runs.
             print("A different offline-blocklist refresh line is already scheduled; it is only "
-                  "replaced when a person runs this at a terminal. Nothing was changed.\n"
+                  "replaced when a person runs this at a terminal and types the code shown. "
+                  "Nothing was changed.\n"
                   "  in place: " + "\n  in place: ".join(ours) + "\n  would be: " + want)
             return 2
         new = rest + [want]
@@ -516,13 +523,58 @@ def schedule(remove=False):
     return 0
 
 
+_CODE_LETTERS = "ACDEFHJKLMNPRTUVWXY3479"       # no look-alikes (0/O, 1/I, 5/S, 8/B)
+_CODE_WAIT = 120                                  # seconds to type the code back
+
+
 def _a_person_is_typing():
-    """--force must come from a person: a terminal on stdin. Cron, scripts, pipes
-    and the Claude Code hook (stdin is the tool-call JSON) have none."""
+    """--force, --unschedule and replacing a different refresh line must come from
+    a person: a terminal on stdin, and a random code printed on the controlling
+    terminal (/dev/tty) that is typed back there. Cron, scripts, pipes, the Claude
+    Code hook (stdin is the tool-call JSON), `script -qc … </dev/null` and a piped
+    guess all fail: the code is new each time and only shown on the terminal.
+    Known limit: a program that drives a pseudo-terminal and reads the screen
+    (expect, python's pty module) can read the code and type it back."""
     try:
-        return sys.stdin is not None and sys.stdin.isatty()
+        if sys.stdin is None or not sys.stdin.isatty():
+            return False
     except (AttributeError, ValueError, OSError):
         return False
+    return _code_typed_back()
+
+
+def _code_typed_back():
+    code = "".join(secrets.choice(_CODE_LETTERS) for _ in range(4))
+    names = ("CONIN$", "CONOUT$") if os.name == "nt" else ("/dev/tty", "/dev/tty")
+    try:
+        with open(names[0], "rb", buffering=0) as tty_in, open(names[1], "w") as tty_out:
+            tty_out.write("To confirm, type this code and press Enter: %s\n> " % code)
+            tty_out.flush()
+            line = _read_line(tty_in, _CODE_WAIT)
+    except (OSError, ValueError):
+        return False                       # no controlling terminal
+    typed = line.decode("utf-8", "replace").strip().upper() if line else ""
+    return typed == code
+
+
+def _read_line(stream, seconds):
+    """One line from the terminal, or None after `seconds` or at end of input."""
+    if os.name == "nt":
+        return stream.readline(64)
+    import select
+    deadline, got = time.monotonic() + seconds, b""
+    while b"\n" not in got and len(got) < 64:
+        left = deadline - time.monotonic()
+        if left <= 0:
+            return None
+        ready, _, _ = select.select([stream], [], [], left)
+        if not ready:
+            return None
+        chunk = os.read(stream.fileno(), 64)
+        if not chunk:
+            return None                    # end of input: nobody is there
+        got += chunk
+    return got
 
 
 def main(argv=None):
@@ -541,8 +593,8 @@ def main(argv=None):
         print("--force only goes with --refresh.", file=sys.stderr)
         return 2
     if args.force and not _a_person_is_typing():
-        print("--force is only accepted from a person at a terminal (it accepts a list that drops "
-              "or shrinks part of the blocklist). Nothing was changed.", file=sys.stderr)
+        print("--force is only accepted from a person at a terminal who types the code shown (it "
+              "accepts a list that drops or shrinks part of the blocklist). Nothing was changed.", file=sys.stderr)
         return 2
     if args.refresh:
         _low_priority()
