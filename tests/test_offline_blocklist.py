@@ -1932,3 +1932,28 @@ def test_r14_a_long_option_cluster_is_judged_quickly(home):
     started = _time.monotonic()
     ch.touches_protection(command, cwd=str(home))
     assert _time.monotonic() - started < 5
+
+
+# ── review 15: the cluster cut at 12 letters lost values attached after a long cluster ──
+
+_PAYLOADS = ["stillrunning allow evil", "stillrunning blocklist --unschedule", "stillrunning blocklist --schedule",
+             "stillrunning blocklist --refresh --force", "stillrunning whitelist add evil",
+             "stillrunning --trust evil", "pip uninstall -y stillrunning"]
+
+
+@pytest.mark.parametrize("payload", _PAYLOADS)
+@pytest.mark.parametrize("cluster", ["-qqqqqqqqqqqc", "-qqqqqqqqqqqqqqqc", "-" + "q" * 30 + "c", "-qfqfqfqfqfqfqfc"])
+def test_r15_a_value_after_a_long_option_cluster_is_judged(home, cluster, payload):
+    """IMPORTANT (review 15): getopt takes `-qqqqqqqqqqqqqqqc'…'`; round 15 cut only at 12 letters."""
+    for command in ("script %s'%s' /dev/null" % (cluster, payload),
+                    "env -%sS'%s'" % ("i" * (len(cluster) - 2), payload),
+                    "su -%sc'%s'" % ("l" * (len(cluster) - 2), payload)):
+        assert ch.touches_protection(command, cwd=str(home)), command
+
+
+def test_r15_a_long_cluster_with_a_symbol_is_still_quick(home):
+    import time as _time
+    command = "bash -c x -" + "a" * 16000 + "c'stillrunning allow evil'"
+    started = _time.monotonic()
+    assert ch.touches_protection(command, cwd=str(home))
+    assert _time.monotonic() - started < 5

@@ -977,9 +977,14 @@ def _shell_string_parts(word):
         if not re.search(r"[^A-Za-z0-9_.-]", word):
             return []                       # `-qc`, `-lc`: options only
         letters = re.match(r"^-[A-Za-z0-9]*", word).group(0)
-        # a value attached after any of the first letters, or after the whole cluster
-        # (capped: a cluster of thousands of letters made this quadratic)
-        cuts = list(range(2, min(len(letters), 12) + 1)) + [len(letters)]
+        # getopt ends a cluster at its first letter that takes a value, so a cut right
+        # after the first occurrence of each distinct letter finds every value that can
+        # be attached (`-qqqqqqqqqqqqqqqc'…'`), at most 62 cuts however long the cluster
+        cuts, seen = [len(letters)], set()
+        for at in range(1, len(letters)):
+            if letters[at] not in seen:
+                seen.add(letters[at])
+                cuts.append(at + 1)
         return [word[i:] for i in sorted(set(cuts)) if word[i:]]
     if word in _STRING_RUNNERS:
         return []
